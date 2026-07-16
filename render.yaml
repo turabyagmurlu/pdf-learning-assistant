@@ -34,5 +34,5 @@ services:
       - key: S3_SECRET_KEY
         sync: false
       - key: CORS_ORIGINS
-        sync: false
+        value: "*"
     startCommand: uvicorn app.main:app --host 0.0.0.0 --port $PORT
