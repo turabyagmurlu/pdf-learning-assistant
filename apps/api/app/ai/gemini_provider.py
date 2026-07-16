@@ -25,8 +25,8 @@ def _to_gemini(messages: list[dict]):
 class GeminiEmbeddings(EmbeddingProvider):
     def __init__(self):
         self.dim = settings.embedding_dim
-        self.model = settings.gemini_embed_model
-        self.key = settings.gemini_api_key
+        self.model = settings.gemini_embed_model.strip()
+        self.key = settings.gemini_api_key.strip()
 
     def embed(self, texts: Sequence[str]) -> list[list[float]]:
         if not texts:
@@ -46,7 +46,7 @@ class GeminiEmbeddings(EmbeddingProvider):
 
 class GeminiLLM(LLMProvider):
     def __init__(self):
-        self.key = settings.gemini_api_key
+        self.key = settings.gemini_api_key.strip()
 
     def _gen_url(self, model: str, stream: bool) -> str:
         method = "streamGenerateContent" if stream else "generateContent"
