@@ -1,0 +1,18 @@
+# Python
+__pycache__/
+*.pyc
+.venv/
+.pytest_cache/
+# Node
+node_modules/
+.next/
+out/
+# Env & secrets
+.env
+.env.local
+# OS
+.DS_Store
+# Data
+dbdata/
+miniodata/
+*.log

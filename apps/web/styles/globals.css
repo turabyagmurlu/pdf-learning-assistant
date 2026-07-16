@@ -1,0 +1,20 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root{
+  --bg:#FAF8F4; --surface:#FFFFFF; --surface-muted:#F3F1EC; --border:#E7E3DA;
+  --text-primary:#1B2233; --text-secondary:#5B6172;
+  --accent-purple:#7C6BF0; --accent-teal:#2FB4A6; --accent-amber:#E0A233;
+  --accent-coral:#E5735B; --success:#3FA96A; --warning:#D9962B; --danger:#D4553F;
+  --font-heading:"Georgia"; --font-body:system-ui; --font-mono:ui-monospace;
+}
+.dark{
+  --bg:#0F1420; --surface:#161C2B; --surface-muted:#1E2637; --border:#293246;
+  --text-primary:#EDEFF5; --text-secondary:#A5AEC2;
+  --accent-purple:#9C8CFF; --accent-teal:#48C9BA; --accent-amber:#EDB652;
+  --accent-coral:#F08A72; --success:#4FB877; --warning:#E7AC4C; --danger:#EA6A52;
+}
+html,body{background:var(--bg);color:var(--text-primary);font-family:var(--font-body);}
+* { border-color: var(--border); }
+@media (prefers-reduced-motion: reduce){ *{animation:none!important;transition:none!important;} }
