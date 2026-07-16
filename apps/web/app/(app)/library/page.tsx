@@ -16,7 +16,7 @@ export default function LibraryPage() {
   const inputRef = useRef<HTMLInputElement>(null);
 
   async function load() {
-    try { setDocs(await api("/documents")); } catch (e: any) { setErr(e.message); }
+    try { setDocs(await api("/documents")); setErr(""); } catch (e: any) { setErr(e.message); }
   }
   useEffect(() => {
     load();
