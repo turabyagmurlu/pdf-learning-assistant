@@ -33,7 +33,9 @@ class GeminiEmbeddings(EmbeddingProvider):
             return []
         url = f"{BASE}/models/{self.model}:batchEmbedContents?key={self.key}"
         payload = {"requests": [
-            {"model": f"models/{self.model}", "content": {"parts": [{"text": t[:8000]}]}}
+            {"model": f"models/{self.model}",
+             "content": {"parts": [{"text": t[:8000]}]},
+             "outputDimensionality": self.dim}
             for t in texts
         ]}
         try:
