@@ -1,6 +1,5 @@
-# Render Blueprint — backend API + worker + Redis
-# DB (pgvector) -> Supabase/Neon; Storage -> Cloudflare R2/S3; AI -> OpenAI
-# Bu dosya Render'da "New + Blueprint" ile repoyu bağlayınca otomatik okunur.
+# Render Blueprint — tek ücretsiz web servisi (backend + arka plan ingest)
+# DB (pgvector) -> Supabase | Storage -> Supabase S3 | AI -> Gemini (ücretsiz)
 services:
   - type: web
     name: pdf-api
@@ -14,62 +13,26 @@ services:
         value: gemini
       - key: GEMINI_API_KEY
         sync: false
+      - key: GEMINI_MODEL
+        value: gemini-1.5-flash
+      - key: EMBEDDING_DIM
+        value: "768"
       - key: JWT_SECRET
         generateValue: true
       - key: DATABASE_URL
-        sync: false          # Supabase/Neon bağlantı dizesi
-      - key: REDIS_URL
-        fromService: { name: pdf-redis, type: redis, property: connectionString }
+        sync: false
       - key: S3_ENDPOINT
-        sync: false
+        value: https://wjkifrkhuidevmyhtnio.storage.supabase.co/storage/v1/s3
       - key: S3_PUBLIC_ENDPOINT
-        sync: false
+        value: https://wjkifrkhuidevmyhtnio.storage.supabase.co/storage/v1/s3
+      - key: S3_REGION
+        value: eu-west-1
+      - key: S3_BUCKET
+        value: pdfs
       - key: S3_ACCESS_KEY
         sync: false
       - key: S3_SECRET_KEY
         sync: false
-      - key: S3_BUCKET
-        value: pdfs
-      - key: GEMINI_MODEL
-        value: gemini-1.5-flash
-      - key: EMBEDDING_DIM
-        value: "768"
       - key: CORS_ORIGINS
-        sync: false          # Vercel frontend URL'in
+        sync: false
     startCommand: uvicorn app.main:app --host 0.0.0.0 --port $PORT
-
-  - type: worker
-    name: pdf-worker
-    runtime: docker
-    rootDir: apps/api
-    dockerfilePath: ./Dockerfile
-    plan: free
-    envVars:
-      - key: AI_PROVIDER
-        value: gemini
-      - key: GEMINI_API_KEY
-        sync: false
-      - key: DATABASE_URL
-        sync: false
-      - key: REDIS_URL
-        fromService: { name: pdf-redis, type: redis, property: connectionString }
-      - key: S3_ENDPOINT
-        sync: false
-      - key: S3_PUBLIC_ENDPOINT
-        sync: false
-      - key: S3_ACCESS_KEY
-        sync: false
-      - key: S3_SECRET_KEY
-        sync: false
-      - key: S3_BUCKET
-        value: pdfs
-      - key: GEMINI_MODEL
-        value: gemini-1.5-flash
-      - key: EMBEDDING_DIM
-        value: "768"
-    startCommand: celery -A app.workers.celery_app.celery worker --loglevel=info
-
-  - type: redis
-    name: pdf-redis
-    plan: free
-    ipAllowList: []

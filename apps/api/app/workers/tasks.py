@@ -95,3 +95,13 @@ def ingest_document(self, document_id: str):
         pass
     asyncio.run(_run_ingest(document_id))
     return {"document_id": document_id, "ok": True}
+
+
+def run_ingest_sync(document_id: str):
+    """Backend içinde (ayrı worker olmadan) senkron ingest çalıştırıcı.
+    FastAPI BackgroundTasks ile threadpool'da çağrılır."""
+    try:
+        ensure_bucket()
+    except Exception:  # noqa
+        pass
+    asyncio.run(_run_ingest(document_id))

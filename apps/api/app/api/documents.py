@@ -1,17 +1,17 @@
 import uuid
-from fastapi import APIRouter, Depends, UploadFile, File
-from fastapi.responses import Response
+from fastapi import APIRouter, Depends, UploadFile, File, BackgroundTasks
 from app.deps import db, current_user
 from app.config import settings
 from app.core.errors import FileTooLarge, NotFound, AppError
 from app.storage.object_store import put_object, presigned_url, delete_object
-from app.workers.tasks import ingest_document
+from app.workers.tasks import run_ingest_sync
 
 router = APIRouter(prefix="/documents", tags=["documents"])
 
 
 @router.post("")
-async def upload(file: UploadFile = File(...), conn=Depends(db), user=Depends(current_user)):
+async def upload(background: BackgroundTasks, file: UploadFile = File(...),
+                 conn=Depends(db), user=Depends(current_user)):
     if file.content_type not in ("application/pdf", "application/x-pdf"):
         raise AppError("Yalnızca PDF dosyaları yüklenebilir.")
     data = await file.read()
@@ -26,7 +26,7 @@ async def upload(file: UploadFile = File(...), conn=Depends(db), user=Depends(cu
            VALUES ($1,$2,$3,$4,$5,$6,'uploaded')""",
         doc_id, user["id"], title, file.filename, key, len(data),
     )
-    ingest_document.delay(doc_id)
+    background.add_task(run_ingest_sync, doc_id)
     return {"id": doc_id, "title": title, "status": "uploaded"}
 
 
@@ -81,10 +81,11 @@ async def delete_doc(doc_id: str, conn=Depends(db), user=Depends(current_user)):
 
 
 @router.post("/{doc_id}/reprocess")
-async def reprocess(doc_id: str, conn=Depends(db), user=Depends(current_user)):
+async def reprocess(doc_id: str, background: BackgroundTasks,
+                    conn=Depends(db), user=Depends(current_user)):
     row = await conn.fetchrow("SELECT id FROM documents WHERE id=$1 AND user_id=$2", doc_id, user["id"])
     if not row:
         raise NotFound("Belge bulunamadı.")
     await conn.execute("UPDATE documents SET status='uploaded', error_message=NULL WHERE id=$1", doc_id)
-    ingest_document.delay(doc_id)
+    background.add_task(run_ingest_sync, doc_id)
     return {"ok": True}
