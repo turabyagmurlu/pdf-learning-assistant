@@ -9,8 +9,8 @@ class Settings(BaseSettings):
 
     # Gemini (ücretsiz)
     gemini_api_key: str = "REPLACE_ME"
-    gemini_model: str = "gemini-2.0-flash"
-    gemini_model_advanced: str = "gemini-2.0-flash"
+    gemini_model: str = "gemini-flash-lite-latest"
+    gemini_model_advanced: str = "gemini-flash-lite-latest"
     gemini_embed_model: str = "gemini-embedding-001"
 
     # OpenAI (opsiyonel alternatif)
