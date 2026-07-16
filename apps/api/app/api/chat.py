@@ -120,7 +120,7 @@ async def send(sid: str, body: MessageIn, token: str | None = None):
 
             await conn.execute(
                 "INSERT INTO chat_messages (session_id, role, content, citations) VALUES ($1,'assistant',$2,$3)",
-                sid, full, json.dumps(citations))
+                sid, full, citations)
             yield _sse("done", {})
 
     return StreamingResponse(gen(), media_type="text/event-stream")

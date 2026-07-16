@@ -24,8 +24,7 @@ async def add_note(doc_id: str, body: NoteIn, conn=Depends(db), user=Depends(cur
                               highlight_color, anchor, tags)
            VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)""",
         nid, user["id"], doc_id, body.page_number, body.selected_text, body.note_content,
-        body.highlight_color, None if body.anchor is None else __import__("json").dumps(body.anchor),
-        body.tags)
+        body.highlight_color, body.anchor, body.tags)
     return {"id": nid}
 
 

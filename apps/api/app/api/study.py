@@ -32,7 +32,7 @@ async def generate(doc_id: str, body: GenerateIn, conn=Depends(db), user=Depends
                                         source_page, difficulty, due_at)
                VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)""",
             sid, user["id"], doc_id, it.get("type", body.type), it.get("question"), it.get("answer"),
-            json.dumps(it.get("options", [])), it.get("source_page"), it.get("difficulty"),
+            it.get("options", []), it.get("source_page"), it.get("difficulty"),
             datetime.now(timezone.utc))
         created.append(sid)
     return {"created": len(created)}

@@ -3,6 +3,12 @@ import { useEffect, useState } from "react";
 import { api } from "@/lib/api";
 import { ChatPanel } from "@/components/chat/ChatPanel";
 
+function toArr(v: any): any[] {
+  if (Array.isArray(v)) return v;
+  if (typeof v === "string") { try { const p = JSON.parse(v); return Array.isArray(p) ? p : []; } catch { return []; } }
+  return [];
+}
+
 export default function DocumentPage({ params }: { params: { id: string } }) {
   const id = params.id;
   const [doc, setDoc] = useState<any>(null);
@@ -38,21 +44,21 @@ export default function DocumentPage({ params }: { params: { id: string } }) {
         ) : (
           <>
             {doc.short_summary && <p className="text-sm text-text-secondary mb-4">{doc.short_summary}</p>}
-            {doc.outline && (
+            {toArr(doc.outline).length > 0 && (
               <div className="mb-4">
                 <p className="text-xs font-medium mb-1">İçindekiler</p>
                 <ul className="text-sm space-y-1">
-                  {(doc.outline as string[]).map((o, i) => <li key={i} className="text-text-secondary">{o}</li>)}
+                  {toArr(doc.outline).map((o, i) => <li key={i} className="text-text-secondary">{typeof o === "string" ? o : (o?.title || "")}</li>)}
                 </ul>
               </div>
             )}
-            {doc.key_concepts && (
+            {toArr(doc.key_concepts).length > 0 && (
               <div>
                 <p className="text-xs font-medium mb-1">Anahtar kavramlar</p>
                 <div className="flex flex-wrap gap-1">
-                  {(doc.key_concepts as any[]).map((k, i) => (
-                    <span key={i} title={k.definition}
-                          className="rounded-full bg-accent-amber/15 text-accent-amber px-2 py-0.5 text-xs">{k.term}</span>
+                  {toArr(doc.key_concepts).map((k, i) => (
+                    <span key={i} title={k?.definition || ""}
+                          className="rounded-full bg-accent-amber/15 text-accent-amber px-2 py-0.5 text-xs">{typeof k === "string" ? k : (k?.term || "")}</span>
                   ))}
                 </div>
               </div>

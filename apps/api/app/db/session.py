@@ -1,3 +1,4 @@
+import json
 import asyncpg
 from pgvector.asyncpg import register_vector
 from app.config import settings
@@ -16,6 +17,8 @@ def _dsn() -> str:
 
 async def _init_conn(conn: asyncpg.Connection):
     await register_vector(conn)
+    for t in ("jsonb", "json"):
+        await conn.set_type_codec(t, encoder=json.dumps, decoder=json.loads, schema="pg_catalog")
 
 
 async def get_pool() -> asyncpg.Pool:

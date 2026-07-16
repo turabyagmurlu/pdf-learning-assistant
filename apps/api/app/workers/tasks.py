@@ -21,6 +21,8 @@ def _dsn() -> str:
 async def _conn():
     conn = await asyncpg.connect(_dsn())
     await register_vector(conn)
+    for t in ("jsonb", "json"):
+        await conn.set_type_codec(t, encoder=json.dumps, decoder=json.loads, schema="pg_catalog")
     return conn
 
 
@@ -77,8 +79,8 @@ async def _run_ingest(document_id: str):
                 """UPDATE documents SET short_summary=$2, detailed_summary=$3, purpose=$4,
                    difficulty_level=$5, outline=$6, key_concepts=$7, difficult_concepts=$8 WHERE id=$1""",
                 document_id, a["short_summary"], a["detailed_summary"], a["purpose"],
-                a["difficulty_level"], json.dumps(a["outline"]), json.dumps(a["key_concepts"]),
-                json.dumps(a["difficult_concepts"]))
+                a["difficulty_level"], a["outline"], a["key_concepts"],
+                a["difficult_concepts"])
         except Exception:  # analiz başarısız olsa da belge yine de sohbete hazır
             pass
 
