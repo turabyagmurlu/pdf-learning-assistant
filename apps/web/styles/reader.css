@@ -1,0 +1,78 @@
+/* ---- Reader theme tokens (light / sepia / dark) ---- */
+.reader-root {
+  --r-bg: #F6F5F4;          /* app surround behind the page */
+  --r-page: #FFFDF8;        /* ivory paper surface */
+  --r-ink: #1F1D1A;         /* primary text (chrome) */
+  --r-ink-2: #6F6A61;       /* secondary text */
+  --r-border: rgba(31,29,26,0.10);
+  --r-accent: #6D5DF6;
+  --r-toolbar: rgba(255,255,255,0.82);
+  --r-shadow: 0 1px 2px rgba(31,29,26,0.05), 0 12px 34px rgba(31,29,26,0.12);
+}
+.reader-root[data-theme="sepia"] {
+  --r-bg: #EFE7D7;
+  --r-page: #FBF3E3;
+  --r-ink: #3B3320;
+  --r-ink-2: #7C6F54;
+  --r-border: rgba(59,51,32,0.12);
+  --r-toolbar: rgba(251,243,227,0.85);
+  --r-shadow: 0 1px 2px rgba(59,51,32,0.06), 0 12px 34px rgba(59,51,32,0.14);
+}
+.reader-root[data-theme="dark"] {
+  --r-bg: #14161C;
+  --r-page: #F3EFE7;        /* keep paper light even in dark surround for readability */
+  --r-ink: #E9E7E2;
+  --r-ink-2: #A6A29A;
+  --r-border: rgba(255,255,255,0.10);
+  --r-toolbar: rgba(24,26,33,0.85);
+  --r-shadow: 0 1px 2px rgba(0,0,0,0.4), 0 14px 40px rgba(0,0,0,0.5);
+}
+
+.reader-surround { background: var(--r-bg); }
+
+/* paper page */
+.paper-page {
+  background: var(--r-page);
+  border: 1px solid var(--r-border);
+  border-radius: 4px;
+  box-shadow: var(--r-shadow);
+  position: relative;
+}
+
+/* floating toolbar */
+.reader-toolbar {
+  background: var(--r-toolbar);
+  backdrop-filter: saturate(1.1) blur(10px);
+  border: 1px solid var(--r-border);
+  color: var(--r-ink);
+}
+
+/* highlight overlay layer sits above the pdf canvas/text layer */
+.hl-layer { position: absolute; inset: 0; pointer-events: none; }
+.hl-rect {
+  position: absolute;
+  border-radius: 2px;
+  mix-blend-mode: multiply;
+  pointer-events: auto;
+  cursor: pointer;
+  transition: filter .12s ease;
+}
+.hl-rect:hover { filter: brightness(0.96) saturate(1.15); }
+.hl-note-dot {
+  position: absolute;
+  width: 18px; height: 18px;
+  transform: translate(-50%, -50%);
+  border-radius: 50%;
+  background: var(--r-accent);
+  color: #fff;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 11px;
+  box-shadow: 0 2px 6px rgba(0,0,0,0.25);
+  pointer-events: auto; cursor: pointer;
+}
+
+/* react-pdf text layer selection tint */
+.textLayer ::selection { background: rgba(109,93,246,0.28); }
+
+/* reduce react-pdf default annotation layer intrusiveness */
+.reader-page .react-pdf__Page__annotations.annotationLayer { display: none; }
