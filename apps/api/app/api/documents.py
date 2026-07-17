@@ -90,8 +90,8 @@ async def update_doc(doc_id: str, body: DocPatch, conn=Depends(db), user=Depends
     if body.is_favorite is not None:
         sets.append(f"is_favorite=${i}"); vals.append(body.is_favorite); i += 1
     if sets:
-        vals.append(doc_id)
-        await conn.execute(f"UPDATE documents SET {', '.join(sets)} WHERE id=${i}", *vals)
+        vals.append(doc_id); vals.append(user["id"])
+        await conn.execute(f"UPDATE documents SET {', '.join(sets)} WHERE id=${i} AND user_id=${i + 1}", *vals)
     return {"ok": True}
 
 
@@ -104,7 +104,7 @@ async def delete_doc(doc_id: str, conn=Depends(db), user=Depends(current_user)):
         delete_object(row["file_path"])
     except Exception:  # noqa
         pass
-    await conn.execute("DELETE FROM documents WHERE id=$1", doc_id)
+    await conn.execute("DELETE FROM documents WHERE id=$1 AND user_id=$2", doc_id, user["id"])
     return {"ok": True}
 
 

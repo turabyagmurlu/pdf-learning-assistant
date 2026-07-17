@@ -85,12 +85,14 @@ export default function LibraryPage() {
   }
 
   async function patchDoc(id: string, body: any) {
+    const prevDocs = docs;
     setDocs((prev) => prev.map((d) => (d.id === id ? { ...d, ...body } : d)));
-    try { await fetch(API + "/documents/" + id, { method: "PATCH", headers: { Authorization: "Bearer " + getToken(), "Content-Type": "application/json" }, body: JSON.stringify(body) }); } catch {}
+    try { const r = await fetch(API + "/documents/" + id, { method: "PATCH", headers: { Authorization: "Bearer " + getToken(), "Content-Type": "application/json" }, body: JSON.stringify(body) }); if (!r.ok) setDocs(prevDocs); } catch { setDocs(prevDocs); }
   }
   async function removeDoc(id: string) {
+    const prevDocs = docs;
     setDocs((prev) => prev.filter((d) => d.id !== id));
-    try { await fetch(API + "/documents/" + id, { method: "DELETE", headers: { Authorization: "Bearer " + getToken() } }); } catch {}
+    try { const r = await fetch(API + "/documents/" + id, { method: "DELETE", headers: { Authorization: "Bearer " + getToken() } }); if (!r.ok) setDocs(prevDocs); } catch { setDocs(prevDocs); }
   }
 
   const gap = density === "compact" ? "gap-2" : "gap-4";

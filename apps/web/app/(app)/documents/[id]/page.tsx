@@ -53,10 +53,11 @@ export default function DocumentPage({ params }: { params: { id: string } }) {
 
   useEffect(() => {
     let alive = true;
+    let fileLoaded = false;
     async function load() {
       try {
         const d = await api(`/documents/${id}`); if (alive) setDoc(d);
-        try { const f = await api(`/documents/${id}/file`); if (alive) setFileUrl(f.url); } catch {}
+        if (!fileLoaded) try { const f = await api(`/documents/${id}/file`); if (alive) { setFileUrl(f.url); fileLoaded = true; } } catch {}
       } catch {}
     }
     load();
