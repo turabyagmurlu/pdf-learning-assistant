@@ -210,7 +210,7 @@ function NoteEditor({ ann, onClose, onSave, onDelete }: {
   useEffect(() => { ref.current?.focus(); }, []);
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/30 p-4" onClick={onClose}>
-      <div className="w-full max-w-md rounded-2xl border bg-surface p-5 shadow-xl" onClick={(e) => e.stopPropagation()}>
+      <div role="dialog" aria-modal="true" aria-label="Not düzenleyici" className="w-full max-w-md rounded-2xl border bg-surface p-5 shadow-xl" onClick={(e) => e.stopPropagation()}>
         <div className="mb-2 flex items-center justify-between">
           <h3 className="font-heading text-lg">{ann.anchor.type === "sticky" ? "Kenar notu" : "Highlight notu"} · s.{ann.page_number}</h3>
           <button onClick={onClose} aria-label="Kapat" className="rounded-md p-1 hover:bg-black/5"><X size={16} /></button>

@@ -37,7 +37,7 @@ export default function PdfReader(props: Props) {
   const onLoad = useCallback((pdf: { numPages: number }) => {
     setNumPages(pdf.numPages);
     props.onNumPages(pdf.numPages);
-  }, [props]);
+  }, [props.onNumPages]);
 
   // scroll active page into view when `page` changes externally
   useEffect(() => {
@@ -66,7 +66,7 @@ export default function PdfReader(props: Props) {
     };
     c.addEventListener("scroll", onScroll, { passive: true });
     return () => c.removeEventListener("scroll", onScroll);
-  }, [numPages, props]);
+  }, [numPages, props.onVisiblePage]);
 
   // text selection → relative rects
   const handleMouseUp = useCallback(() => {
@@ -149,7 +149,7 @@ export default function PdfReader(props: Props) {
           {HIGHLIGHT_COLORS.map((c) => (
             <button key={c.key} title={c.label} aria-label={`${c.label} highlight`}
                     onClick={() => commitHighlight(c.value)}
-                    className="h-5 w-5 rounded-full border border-black/10"
+                    className="h-6 w-6 rounded-full border border-black/10"
                     style={{ background: c.value }} />
           ))}
           <button onClick={() => commitHighlight(HIGHLIGHT_COLORS[0].value, true)}

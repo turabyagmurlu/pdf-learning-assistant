@@ -29,12 +29,14 @@ export function useAnnotations(docId: string) {
     });
     if (!merged) return;
     const m = merged as Annotation;
-    await deleteAnnotation(id);
     const created = await createAnnotation(docId, {
       page_number: m.page_number, selected_text: m.selected_text,
       note_content: m.note_content ?? "", highlight_color: m.highlight_color, anchor: m.anchor,
     });
-    if (created) setAnnotations((prev) => prev.map((x) => (x.id === id ? { ...m, id: created.id } : x)));
+    if (created) {
+      await deleteAnnotation(id);
+      setAnnotations((prev) => prev.map((x) => (x.id === id ? { ...m, id: created.id } : x)));
+    }
   }, [docId]);
 
   const remove = useCallback(async (id: string) => {

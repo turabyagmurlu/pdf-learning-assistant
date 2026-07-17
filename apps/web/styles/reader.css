@@ -76,3 +76,21 @@
 
 /* reduce react-pdf default annotation layer intrusiveness */
 .reader-page .react-pdf__Page__annotations.annotationLayer { display: none; }
+
+
+/* ===== Phase 1.5 fixes: focus, hit targets, themed panels ===== */
+.reader-surround { position: relative; }
+.reader-root :is(button, a, input, textarea, [tabindex]):focus-visible {
+  outline: 2px solid var(--r-accent);
+  outline-offset: 2px;
+  border-radius: 8px;
+}
+.hl-note-dot { width: 24px; height: 24px; }
+.reader-root[data-theme="sepia"] .bg-surface { background: #F7EFDF !important; }
+.reader-root[data-theme="sepia"] .bg-surface-muted { background: #EFE4CE !important; }
+.reader-root[data-theme="sepia"] .text-text-primary { color: #3B3320 !important; }
+.reader-root[data-theme="sepia"] .text-text-secondary { color: #7C6F54 !important; }
+.reader-root[data-theme="dark"] .bg-surface { background: #181A21 !important; }
+.reader-root[data-theme="dark"] .bg-surface-muted { background: #20232C !important; }
+.reader-root[data-theme="dark"] .text-text-primary { color: #E9E7E2 !important; }
+.reader-root[data-theme="dark"] .text-text-secondary { color: #A6A29A !important; }
