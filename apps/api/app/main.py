@@ -15,6 +15,15 @@ async def lifespan(app: FastAPI):
         ensure_bucket()
     except Exception:  # noqa
         pass
+    try:
+        from app.db.session import get_pool
+        pool = await get_pool()
+        async with pool.acquire() as conn:
+            await conn.execute("ALTER TABLE documents ADD COLUMN IF NOT EXISTS category text")
+            await conn.execute("ALTER TABLE documents ADD COLUMN IF NOT EXISTS tags jsonb DEFAULT '[]'::jsonb")
+            await conn.execute("ALTER TABLE documents ADD COLUMN IF NOT EXISTS is_favorite boolean DEFAULT false")
+    except Exception:  # noqa
+        pass
     yield
     await close_pool()
 

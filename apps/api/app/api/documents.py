@@ -1,5 +1,6 @@
 import uuid
 from fastapi import APIRouter, Depends, UploadFile, File, BackgroundTasks
+from pydantic import BaseModel
 from app.deps import db, current_user
 from app.config import settings
 from app.core.errors import FileTooLarge, NotFound, AppError
@@ -34,7 +35,7 @@ async def upload(background: BackgroundTasks, file: UploadFile = File(...),
 async def list_docs(conn=Depends(db), user=Depends(current_user)):
     rows = await conn.fetch(
         """SELECT id, title, status, processing_stage, page_count, short_summary,
-                  difficulty_level, key_concepts, created_at
+                  difficulty_level, key_concepts, category, tags, is_favorite, created_at
            FROM documents WHERE user_id=$1 ORDER BY created_at DESC""",
         user["id"],
     )
@@ -65,6 +66,33 @@ async def file_url(doc_id: str, conn=Depends(db), user=Depends(current_user)):
     if not row:
         raise NotFound("Belge bulunamadı.")
     return {"url": presigned_url(row["file_path"])}
+
+
+class DocPatch(BaseModel):
+    title: str | None = None
+    category: str | None = None
+    tags: list[str] | None = None
+    is_favorite: bool | None = None
+
+
+@router.patch("/{doc_id}")
+async def update_doc(doc_id: str, body: DocPatch, conn=Depends(db), user=Depends(current_user)):
+    row = await conn.fetchrow("SELECT id FROM documents WHERE id=$1 AND user_id=$2", doc_id, user["id"])
+    if not row:
+        raise NotFound("Belge bulunamadı.")
+    sets, vals, i = [], [], 1
+    if body.title is not None:
+        sets.append(f"title=${i}"); vals.append(body.title); i += 1
+    if body.category is not None:
+        sets.append(f"category=${i}"); vals.append(body.category); i += 1
+    if body.tags is not None:
+        sets.append(f"tags=${i}"); vals.append(body.tags); i += 1
+    if body.is_favorite is not None:
+        sets.append(f"is_favorite=${i}"); vals.append(body.is_favorite); i += 1
+    if sets:
+        vals.append(doc_id)
+        await conn.execute(f"UPDATE documents SET {', '.join(sets)} WHERE id=${i}", *vals)
+    return {"ok": True}
 
 
 @router.delete("/{doc_id}")
