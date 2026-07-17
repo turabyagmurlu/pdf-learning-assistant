@@ -1,7 +1,7 @@
 "use client";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { Library, GraduationCap, LogOut, BookOpen } from "lucide-react";
+import { Library, GraduationCap, LogOut, BookOpen, Compass } from "lucide-react";
 import { clearToken } from "@/lib/api";
 
 export default function AppLayout({ children }: { children: React.ReactNode }) {
@@ -17,6 +17,9 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
         </Link>
         <Link href="/study" className="flex items-center gap-2 rounded-md px-3 py-2 hover:bg-surface-muted">
           <GraduationCap size={18} /> Öğrenme
+        </Link>
+        <Link href="/search" className="flex items-center gap-2 rounded-md px-3 py-2 hover:bg-surface-muted">
+          <Compass size={18} /> Keşfet
         </Link>
         <button onClick={() => { clearToken(); router.replace("/login"); }}
                 className="mt-auto flex items-center gap-2 rounded-md px-3 py-2 text-text-secondary hover:bg-surface-muted">
