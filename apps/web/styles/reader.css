@@ -94,3 +94,11 @@
 .reader-root[data-theme="dark"] .bg-surface-muted { background: #20232C !important; }
 .reader-root[data-theme="dark"] .text-text-primary { color: #E9E7E2 !important; }
 .reader-root[data-theme="dark"] .text-text-secondary { color: #A6A29A !important; }
+
+
+/* ===== Phase 6 polish ===== */
+.reader-root[data-theme="dark"] .reader-toolbar button:hover { background: rgba(255,255,255,0.08); }
+@media (max-width: 640px) {
+  .reader-root aside { width: 80vw !important; max-width: 300px; }
+  .reader-toolbar { flex-wrap: wrap; max-width: 94vw; }
+}

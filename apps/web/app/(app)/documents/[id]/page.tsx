@@ -95,7 +95,7 @@ export default function DocumentPage({ params }: { params: { id: string } }) {
     const md = exportMarkdown(doc?.title || "Belge", annotations);
     const blob = new Blob([md], { type: "text/markdown" });
     const a = document.createElement("a");
-    a.href = URL.createObjectURL(blob); a.download = `${doc?.title || "notlar"}.md`; a.click();
+    a.href = URL.createObjectURL(blob); a.download = `${doc?.title || "notlar"}.md`; a.click(); setTimeout(() => URL.revokeObjectURL(a.href), 4000);
   }
 
   if (!doc) return <div className="p-8 text-text-secondary">Yükleniyor…</div>;

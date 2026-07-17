@@ -85,7 +85,8 @@ export default function PdfReader(props: Props) {
       y: (r.top - pr.top) / pr.height,
       w: r.width / pr.width,
       h: r.height / pr.height,
-    }));
+    })).filter((rc) => rc.y >= -0.05 && rc.y + rc.h <= 1.05);
+    if (!rects.length) { setSel(null); return; }
     const cRect = scrollRef.current.getBoundingClientRect();
     const first = clientRects[0];
     setSel({
