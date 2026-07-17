@@ -22,6 +22,7 @@ async def lifespan(app: FastAPI):
             await conn.execute("ALTER TABLE documents ADD COLUMN IF NOT EXISTS category text")
             await conn.execute("ALTER TABLE documents ADD COLUMN IF NOT EXISTS tags jsonb DEFAULT '[]'::jsonb")
             await conn.execute("ALTER TABLE documents ADD COLUMN IF NOT EXISTS is_favorite boolean DEFAULT false")
+            await conn.execute("ALTER TABLE documents ADD COLUMN IF NOT EXISTS collection_id uuid")
     except Exception:  # noqa
         pass
     yield

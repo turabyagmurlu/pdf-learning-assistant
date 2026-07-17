@@ -2,12 +2,12 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { api, API, getToken } from "@/lib/api";
-import { UploadCloud, Search, Star, Trash2, Pencil, LayoutGrid, List, MoreVertical, X, FileText } from "lucide-react";
+import { UploadCloud, Search, Star, Trash2, Pencil, LayoutGrid, List, MoreVertical, X, FileText, FolderOpen, FolderPlus, Check } from "lucide-react";
 
 type Doc = {
   id: string; title: string; status: string; processing_stage?: string | null;
   page_count?: number | null; short_summary?: string | null; difficulty_level?: string | null;
-  key_concepts?: any; category?: string | null; tags?: any; is_favorite?: boolean; created_at?: string;
+  key_concepts?: any; category?: string | null; tags?: any; is_favorite?: boolean; collection_id?: string | null; created_at?: string;
 };
 
 const cx = (...a: any[]) => a.filter(Boolean).join(" ");
@@ -35,9 +35,13 @@ export default function LibraryPage() {
   const [drag, setDrag] = useState(false);
   const [editing, setEditing] = useState<Doc | null>(null);
   const [menuFor, setMenuFor] = useState<string | null>(null);
+  const [collections, setCollections] = useState<{ id: string; title: string }[]>([]);
+  const [folder, setFolder] = useState("");
+  const [creatingFolder, setCreatingFolder] = useState(false);
+  const [newFolder, setNewFolder] = useState("");
   const fileRef = useRef<HTMLInputElement>(null);
 
-  async function reload() { try { const d = await api("/documents"); setDocs(d as Doc[]); } catch {} setLoading(false); }
+  async function reload() { try { const d = await api("/documents"); setDocs(d as Doc[]); } catch {} try { const cs = await fetch(API + "/collections", { headers: { Authorization: "Bearer " + getToken() } }); if (cs.ok) setCollections(await cs.json()); } catch {} setLoading(false); }
   useEffect(() => { reload(); }, []);
   useEffect(() => {
     try {
@@ -64,6 +68,7 @@ export default function LibraryPage() {
     if (favOnly) list = list.filter((d) => d.is_favorite);
     if (cat) list = list.filter((d) => d.category === cat);
     if (tag) list = list.filter((d) => toArr(d.tags).map(String).includes(tag));
+    if (folder) list = list.filter((d) => d.collection_id === folder);
     if (q.trim()) {
       const s = q.toLowerCase();
       list = list.filter((d) => (d.title || "").toLowerCase().includes(s) || (d.short_summary || "").toLowerCase().includes(s) || toArr(d.tags).some((t) => String(t).toLowerCase().includes(s)));
@@ -71,7 +76,7 @@ export default function LibraryPage() {
     if (sort === "title") list.sort((a, b) => (a.title || "").localeCompare(b.title || ""));
     else if (sort === "fav") list.sort((a, b) => Number(!!b.is_favorite) - Number(!!a.is_favorite));
     return list;
-  }, [docs, favOnly, cat, tag, q, sort]);
+  }, [docs, favOnly, cat, tag, q, sort, folder]);
 
   async function onFiles(files: FileList | null) {
     if (!files || !files.length) return;
@@ -94,6 +99,8 @@ export default function LibraryPage() {
     setDocs((prev) => prev.filter((d) => d.id !== id));
     try { const r = await fetch(API + "/documents/" + id, { method: "DELETE", headers: { Authorization: "Bearer " + getToken() } }); if (!r.ok) setDocs(prevDocs); } catch { setDocs(prevDocs); }
   }
+
+  async function createFolder() { const t = newFolder.trim(); if (!t) { setCreatingFolder(false); return; } try { const r = await fetch(API + "/collections", { method: "POST", headers: { Authorization: "Bearer " + getToken(), "Content-Type": "application/json" }, body: JSON.stringify({ title: t }) }); if (r.ok) { setNewFolder(""); setCreatingFolder(false); reload(); } } catch {} }
 
   const gap = density === "compact" ? "gap-2" : "gap-4";
   const pad = density === "compact" ? "p-3" : "p-4";
@@ -139,6 +146,22 @@ export default function LibraryPage() {
           ))}
         </div>
       )}
+
+      <div className="mt-3 flex flex-wrap items-center gap-1.5">
+        <span className="mr-1 flex items-center gap-1 text-xs text-text-secondary"><FolderOpen size={13} /> Klasörler:</span>
+        <button onClick={() => setFolder("")} className={cx("rounded-full px-2.5 py-1 text-xs", folder === "" ? "bg-accent-purple/15 text-accent-purple" : "border bg-surface text-text-secondary")}>Tümü</button>
+        {collections.map((c) => (
+          <button key={c.id} onClick={() => setFolder(c.id)} className={cx("rounded-full px-2.5 py-1 text-xs", folder === c.id ? "bg-accent-purple/15 text-accent-purple" : "border bg-surface text-text-secondary hover:border-accent-purple/50")}>{c.title}</button>
+        ))}
+        {creatingFolder ? (
+          <span className="flex items-center gap-1">
+            <input autoFocus value={newFolder} onChange={(e) => setNewFolder(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") createFolder(); if (e.key === "Escape") setCreatingFolder(false); }} placeholder="Klasör adı" aria-label="Yeni klasör adı" className="w-28 rounded-full border bg-surface px-2.5 py-1 text-xs outline-none focus:border-accent-purple" />
+            <button onClick={createFolder} aria-label="Klasörü oluştur" className="rounded-full bg-accent-purple p-1 text-white"><Check size={12} /></button>
+          </span>
+        ) : (
+          <button onClick={() => setCreatingFolder(true)} aria-label="Yeni klasör" className="flex items-center gap-1 rounded-full border border-dashed px-2.5 py-1 text-xs text-text-secondary hover:border-accent-purple/50"><FolderPlus size={13} /> Yeni</button>
+        )}
+      </div>
 
       <div
         onDragOver={(e) => { e.preventDefault(); setDrag(true); }}
@@ -200,16 +223,17 @@ export default function LibraryPage() {
         </div>
       )}
 
-      {editing && <EditModal doc={editing} onClose={() => setEditing(null)} onSave={(b) => { patchDoc(editing.id, b); setEditing(null); }} />}
+      {editing && <EditModal doc={editing} collections={collections} onClose={() => setEditing(null)} onSave={(b) => { patchDoc(editing.id, b); setEditing(null); }} />}
     </div>
   );
 }
 
-function EditModal({ doc, onClose, onSave }: { doc: Doc; onClose: () => void; onSave: (b: any) => void }) {
+function EditModal({ doc, collections, onClose, onSave }: { doc: Doc; collections: { id: string; title: string }[]; onClose: () => void; onSave: (b: any) => void }) {
   const [title, setTitle] = useState(doc.title || "");
   const [category, setCategory] = useState(doc.category || "");
   const [tagsStr, setTagsStr] = useState(toArr(doc.tags).join(", "));
   const [fav, setFav] = useState(!!doc.is_favorite);
+  const [col, setCol] = useState(doc.collection_id || "");
   return (
     <div role="dialog" aria-modal="true" aria-label="Belgeyi düzenle" className="fixed inset-0 z-50 flex items-center justify-center bg-black/30 p-4" onClick={onClose}>
       <div className="w-full max-w-md rounded-2xl border bg-surface p-5 shadow-xl" onClick={(e) => e.stopPropagation()}>
@@ -223,12 +247,17 @@ function EditModal({ doc, onClose, onSave }: { doc: Doc; onClose: () => void; on
         <input value={category} onChange={(e) => setCategory(e.target.value)} placeholder="ör. Tarih, Makale, Ders" className="mb-3 w-full rounded-lg border bg-surface-muted px-3 py-2 text-sm outline-none focus:border-accent-purple" />
         <label className="mb-1 block text-xs font-medium text-text-secondary">Etiketler (virgülle)</label>
         <input value={tagsStr} onChange={(e) => setTagsStr(e.target.value)} placeholder="ör. sınav, önemli" className="mb-3 w-full rounded-lg border bg-surface-muted px-3 py-2 text-sm outline-none focus:border-accent-purple" />
+        <label className="mb-1 block text-xs font-medium text-text-secondary">Klasör</label>
+        <select value={col} onChange={(e) => setCol(e.target.value)} aria-label="Klasör" className="mb-3 w-full rounded-lg border bg-surface-muted px-3 py-2 text-sm outline-none focus:border-accent-purple">
+          <option value="">(Klasörsüz)</option>
+          {collections.map((c) => (<option key={c.id} value={c.id}>{c.title}</option>))}
+        </select>
         <label className="mb-4 flex items-center gap-2 text-sm text-text-primary">
           <input type="checkbox" checked={fav} onChange={(e) => setFav(e.target.checked)} /> Favori
         </label>
         <div className="flex justify-end gap-2">
           <button onClick={onClose} className="rounded-lg px-3 py-1.5 text-sm text-text-secondary hover:bg-surface-muted">Vazgeç</button>
-          <button onClick={() => onSave({ title: title.trim() || doc.title, category: category.trim(), tags: tagsStr.split(",").map((s) => s.trim()).filter(Boolean), is_favorite: fav })} className="rounded-lg bg-accent-purple px-4 py-1.5 text-sm text-white">Kaydet</button>
+          <button onClick={() => onSave({ title: title.trim() || doc.title, category: category.trim(), tags: tagsStr.split(",").map((s) => s.trim()).filter(Boolean), is_favorite: fav, collection_id: col })} className="rounded-lg bg-accent-purple px-4 py-1.5 text-sm text-white">Kaydet</button>
         </div>
       </div>
     </div>

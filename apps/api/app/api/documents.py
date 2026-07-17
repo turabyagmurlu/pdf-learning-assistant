@@ -35,7 +35,7 @@ async def upload(background: BackgroundTasks, file: UploadFile = File(...),
 async def list_docs(conn=Depends(db), user=Depends(current_user)):
     rows = await conn.fetch(
         """SELECT id, title, status, processing_stage, page_count, short_summary,
-                  difficulty_level, key_concepts, category, tags, is_favorite, created_at
+                  difficulty_level, key_concepts, category, tags, is_favorite, collection_id, created_at
            FROM documents WHERE user_id=$1 ORDER BY created_at DESC""",
         user["id"],
     )
@@ -73,6 +73,7 @@ class DocPatch(BaseModel):
     category: str | None = None
     tags: list[str] | None = None
     is_favorite: bool | None = None
+    collection_id: str | None = None
 
 
 @router.patch("/{doc_id}")
@@ -89,6 +90,8 @@ async def update_doc(doc_id: str, body: DocPatch, conn=Depends(db), user=Depends
         sets.append(f"tags=${i}"); vals.append(body.tags); i += 1
     if body.is_favorite is not None:
         sets.append(f"is_favorite=${i}"); vals.append(body.is_favorite); i += 1
+    if body.collection_id is not None:
+        sets.append(f"collection_id=${i}::uuid"); vals.append(body.collection_id or None); i += 1
     if sets:
         vals.append(doc_id); vals.append(user["id"])
         await conn.execute(f"UPDATE documents SET {', '.join(sets)} WHERE id=${i} AND user_id=${i + 1}", *vals)
