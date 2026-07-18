@@ -36,6 +36,8 @@ export default function DocumentPage({ params }: { params: { id: string } }) {
   const [rightOpen, setRightOpen] = useState(true);
   const [rightTab, setRightTab] = useState<"ai" | "notes">("ai");
   const [editing, setEditing] = useState<Annotation | null>(null);
+  const [rightW, setRightW] = useState(420);
+  const [leftW, setLeftW] = useState(288);
 
   const { annotations, add, patch, remove } = useAnnotations(id);
 
@@ -46,10 +48,14 @@ export default function DocumentPage({ params }: { params: { id: string } }) {
       if (t) setTheme(t);
       const sp = localStorage.getItem("reader.spread");
       if (sp) setSpread(sp === "1");
+      const rw = parseInt(localStorage.getItem("reader.rightW") || "", 10); if (!isNaN(rw)) setRightW(Math.min(760, Math.max(320, rw)));
+      const lw = parseInt(localStorage.getItem("reader.leftW") || "", 10); if (!isNaN(lw)) setLeftW(Math.min(460, Math.max(220, lw)));
     } catch {}
   }, []);
   useEffect(() => { try { localStorage.setItem("reader.theme", theme); } catch {} }, [theme]);
   useEffect(() => { try { localStorage.setItem("reader.spread", spread ? "1" : "0"); } catch {} }, [spread]);
+  useEffect(() => { try { localStorage.setItem("reader.rightW", String(rightW)); } catch {} }, [rightW]);
+  useEffect(() => { try { localStorage.setItem("reader.leftW", String(leftW)); } catch {} }, [leftW]);
 
   useEffect(() => {
     let alive = true;
@@ -100,6 +106,18 @@ export default function DocumentPage({ params }: { params: { id: string } }) {
 
   if (!doc) return <div className="p-8 text-text-secondary">Yükleniyor…</div>;
 
+  function startResize(side: "left" | "right", e: any) {
+    e.preventDefault();
+    const move = (ev: MouseEvent) => {
+      if (side === "right") setRightW(Math.min(760, Math.max(320, window.innerWidth - ev.clientX)));
+      else setLeftW(Math.min(460, Math.max(220, ev.clientX)));
+    };
+    const up = () => { window.removeEventListener("mousemove", move); window.removeEventListener("mouseup", up); document.body.style.userSelect = ""; };
+    document.body.style.userSelect = "none";
+    window.addEventListener("mousemove", move);
+    window.addEventListener("mouseup", up);
+  }
+
   return (
     <div className="reader-root flex h-screen flex-col" data-theme={theme}>
       {/* top toolbar */}
@@ -117,7 +135,7 @@ export default function DocumentPage({ params }: { params: { id: string } }) {
       <div className="flex flex-1 overflow-hidden">
         {/* LEFT study panel */}
         {!focus && leftOpen && (
-          <aside className="w-72 shrink-0 overflow-auto border-r bg-surface p-4">
+          <aside style={{ width: leftW }} className="shrink-0 overflow-auto border-r bg-surface p-4">
             <h2 className="font-heading text-lg mb-1 leading-tight">{doc.title}</h2>
             {doc.status !== "ready" ? (
               <p className="text-sm text-text-secondary">{doc.status === "failed" ? `⚠️ ${doc.error_message}` : `İşleniyor… ${doc.processing_stage || ""}`}</p>
@@ -148,6 +166,9 @@ export default function DocumentPage({ params }: { params: { id: string } }) {
             )}
           </aside>
         )}
+        {!focus && leftOpen && (
+          <div onMouseDown={(e) => startResize("left", e)} className="w-1.5 shrink-0 cursor-col-resize bg-transparent transition hover:bg-accent-purple/40" role="separator" aria-label="Sol paneli yeniden boyutlandır" title="Sürükleyerek boyutlandır" />
+        )}
 
         {/* CENTER reader */}
         <main className="relative flex-1 overflow-hidden">
@@ -168,7 +189,10 @@ export default function DocumentPage({ params }: { params: { id: string } }) {
 
         {/* RIGHT learning/notes panel */}
         {!focus && rightOpen && (
-          <aside className="flex w-[400px] shrink-0 flex-col border-l bg-surface">
+          <div onMouseDown={(e) => startResize("right", e)} className="w-1.5 shrink-0 cursor-col-resize bg-transparent transition hover:bg-accent-purple/40" role="separator" aria-label="Sohbet panelini yeniden boyutlandır" title="Sürükleyerek boyutlandır" />
+        )}
+        {!focus && rightOpen && (
+          <aside style={{ width: rightW }} className="flex shrink-0 flex-col border-l bg-surface">
             <div className="flex border-b">
               <button onClick={() => setRightTab("ai")}
                       className={`flex flex-1 items-center justify-center gap-1.5 py-2.5 text-sm ${rightTab === "ai" ? "border-b-2 border-accent-purple text-accent-purple" : "text-text-secondary"}`}>
