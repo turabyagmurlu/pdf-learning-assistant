@@ -2,6 +2,7 @@ from fastapi import APIRouter, Depends
 from pydantic import BaseModel, EmailStr
 from app.deps import db, current_user
 from app.core.security import hash_password, verify_password, create_token
+from app.config import settings
 from app.core.errors import AppError, Unauthorized
 
 router = APIRouter(prefix="/auth", tags=["auth"])
@@ -16,6 +17,25 @@ class RegisterIn(BaseModel):
 class LoginIn(BaseModel):
     email: EmailStr
     password: str
+
+
+class ResetIn(BaseModel):
+    email: EmailStr
+    new_password: str
+    recovery_code: str
+
+
+@router.post("/reset-password")
+async def reset_password(body: ResetIn, conn=Depends(db)):
+    if not settings.reset_secret or body.recovery_code != settings.reset_secret:
+        raise Unauthorized("Kurtarma kodu hatalı.")
+    if len(body.new_password) < 6:
+        raise AppError("Şifre en az 6 karakter olmalı.")
+    row = await conn.fetchrow("SELECT id FROM users WHERE email=$1", body.email)
+    if not row:
+        raise AppError("Bu e-posta ile kayıt bulunamadı.")
+    await conn.execute("UPDATE users SET password_hash=$1 WHERE email=$2", hash_password(body.new_password), body.email)
+    return {"ok": True}
 
 
 @router.post("/register")

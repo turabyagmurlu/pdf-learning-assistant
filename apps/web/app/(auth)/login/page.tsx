@@ -29,6 +29,9 @@ export default function LoginPage() {
         <p className="text-text-secondary text-sm mb-6">
           {mode === "login" ? "Hesabına giriş yap." : "Yeni hesap oluştur."}
         </p>
+        {mode === "login" && (
+          <a href="/forgot" className="-mt-4 mb-5 block text-sm text-accent-purple hover:underline">Şifremi unuttum?</a>
+        )}
         <form onSubmit={submit} className="space-y-3">
           {mode === "register" && (
             <input className="w-full rounded-md border bg-surface-muted px-3 py-2" placeholder="Ad"

@@ -25,6 +25,7 @@ class Settings(BaseSettings):
     # Auth
     jwt_secret: str = "dev-secret-change-me"
     jwt_expire_minutes: int = 10080
+    reset_secret: str = ""
 
     # DB / Redis
     database_url: str = "postgresql://pdfapp:pdfapp@db:5432/pdfapp"
