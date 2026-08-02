@@ -4,8 +4,8 @@ from datetime import datetime, timedelta, timezone
 from fastapi import APIRouter, Depends
 from pydantic import BaseModel
 from app.deps import db, current_user
-from app.core.errors import NotFound
-from app.services.analysis_service import generate_study_items
+from app.core.errors import NotFound, AppError
+from app.services.analysis_service import generate_study_items, cards_from_text, explain_page
 
 router = APIRouter(tags=["study"])
 
@@ -36,6 +36,58 @@ async def generate(doc_id: str, body: GenerateIn, conn=Depends(db), user=Depends
             datetime.now(timezone.utc))
         created.append(sid)
     return {"created": len(created)}
+
+
+class FromTextIn(BaseModel):
+    text: str
+    page: int | None = None
+    count: int = 2
+
+
+@router.post("/documents/{doc_id}/study/from-text")
+async def study_from_text(doc_id: str, body: FromTextIn, conn=Depends(db), user=Depends(current_user)):
+    """PDF'te secilen metinden aninda flashcard uretir."""
+    doc = await conn.fetchrow("SELECT id FROM documents WHERE id=$1 AND user_id=$2", doc_id, user["id"])
+    if not doc:
+        raise NotFound("Belge bulunamadı.")
+    txt = (body.text or "").strip()
+    if len(txt) < 15:
+        raise AppError("Seçilen metin çok kısa. Biraz daha uzun bir bölüm seç.")
+    items = cards_from_text(txt, max(1, min(5, body.count)))
+    created = 0
+    for it in items:
+        sid = str(uuid.uuid4())
+        await conn.execute(
+            """INSERT INTO study_items (id, user_id, document_id, type, question, answer, options,
+                                        source_page, difficulty, due_at)
+               VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)""",
+            sid, user["id"], doc_id, "flashcard", it.get("question"), it.get("answer"),
+            [], body.page or it.get("source_page"), it.get("difficulty"),
+            datetime.now(timezone.utc))
+        created += 1
+    return {"created": created}
+
+
+class ExplainIn(BaseModel):
+    text: str
+    page: int | None = None
+
+
+@router.post("/documents/{doc_id}/explain-page")
+async def explain(doc_id: str, body: ExplainIn, conn=Depends(db), user=Depends(current_user)):
+    """Acik olan sayfayi sade dille anlatir (sesli okumaya uygun)."""
+    doc = await conn.fetchrow("SELECT id FROM documents WHERE id=$1 AND user_id=$2", doc_id, user["id"])
+    if not doc:
+        raise NotFound("Belge bulunamadı.")
+    txt = (body.text or "").strip()
+    if len(txt) < 40 and body.page:
+        rows = await conn.fetch(
+            "SELECT content FROM document_chunks WHERE document_id=$1 AND page_number=$2 ORDER BY chunk_index",
+            doc_id, body.page)
+        txt = "\n".join(r["content"] for r in rows).strip()
+    if len(txt) < 40:
+        raise AppError("Bu sayfada anlatılacak yeterli metin bulunamadı.")
+    return {"explanation": explain_page(txt)}
 
 
 @router.get("/study/items")

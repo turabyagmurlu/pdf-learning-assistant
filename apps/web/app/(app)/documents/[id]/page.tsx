@@ -6,8 +6,9 @@ import { exportMarkdown, Annotation, HIGHLIGHT_COLORS } from "@/lib/reader";
 import { useAnnotations } from "@/hooks/useAnnotations";
 import ReaderToolbar from "@/components/reader/ReaderToolbar";
 import NotesPanel from "@/components/reader/NotesPanel";
+import ExplainPanel from "@/components/reader/ExplainPanel";
 import { ChatPanel } from "@/components/chat/ChatPanel";
-import { X, Sparkles, StickyNote } from "lucide-react";
+import { X, Sparkles, StickyNote, Volume2 } from "lucide-react";
 
 // react-pdf must be client-only (no SSR)
 const PdfReader = dynamic(() => import("@/components/reader/PdfReader"), { ssr: false });
@@ -34,7 +35,10 @@ export default function DocumentPage({ params }: { params: { id: string } }) {
   const [focus, setFocus] = useState(false);
   const [leftOpen, setLeftOpen] = useState(true);
   const [rightOpen, setRightOpen] = useState(true);
-  const [rightTab, setRightTab] = useState<"ai" | "notes">("ai");
+  const [rightTab, setRightTab] = useState<"ai" | "notes" | "explain">("ai");
+  const [peek, setPeek] = useState<"left" | "right" | null>(null);
+  const [restored, setRestored] = useState(false);
+  const [cardMsg, setCardMsg] = useState("");
   const [editing, setEditing] = useState<Annotation | null>(null);
   const [rightW, setRightW] = useState(420);
   const [leftW, setLeftW] = useState(288);
@@ -86,6 +90,64 @@ export default function DocumentPage({ params }: { params: { id: string } }) {
     return () => window.removeEventListener("keydown", onKey);
   }, [numPages]);
 
+  // kaldigin yerden devam: PDF acilinca kayitli sayfaya don
+  useEffect(() => {
+    if (!numPages || restored) return;
+    try {
+      const saved = parseInt(localStorage.getItem(`reader.pos.${id}`) || "", 10);
+      if (!isNaN(saved) && saved > 1 && saved <= numPages) setPage(saved);
+    } catch {}
+    setRestored(true);
+  }, [numPages, restored, id]);
+
+  // okudugun yeri ve ilerlemeyi kaydet (kutuphane bunu okur)
+  useEffect(() => {
+    if (!restored || !numPages) return;
+    try {
+      localStorage.setItem(`reader.pos.${id}`, String(page));
+      localStorage.setItem(`reader.prog.${id}`, JSON.stringify({
+        page, numPages, pct: Math.round((page / numPages) * 100), at: Date.now(),
+      }));
+    } catch {}
+  }, [page, numPages, restored, id]);
+
+  // kitap modunda: ekran kenarina gelince paneli gecici goster
+  useEffect(() => {
+    if (!focus) { setPeek(null); return; }
+    const onMove = (e: MouseEvent) => {
+      if (e.clientX <= 12) setPeek("left");
+      else if (e.clientX >= window.innerWidth - 12) setPeek("right");
+      else if (e.clientX > leftW + 40 && e.clientX < window.innerWidth - rightW - 40) setPeek(null);
+    };
+    window.addEventListener("mousemove", onMove);
+    return () => window.removeEventListener("mousemove", onMove);
+  }, [focus, leftW, rightW]);
+
+  // secili metinden flashcard uret
+  async function onMakeCard(text: string, pageNum: number) {
+    setCardMsg("Kart üretiliyor…");
+    try {
+      const r = await api(`/documents/${id}/study/from-text`, {
+        method: "POST",
+        body: JSON.stringify({ text, page: pageNum, count: 2 }),
+      });
+      setCardMsg(`${r.created} kart eklendi ✓ (Öğrenme sayfasında)`);
+    } catch (e: any) {
+      setCardMsg(e?.message || "Kart üretilemedi.");
+    }
+    setTimeout(() => setCardMsg(""), 4000);
+  }
+
+  // acik sayfanin metnini DOM'dan al (pdf.js text layer)
+  function getPageText(n: number): string {
+    try {
+      const el = document.querySelector(`[data-page="${n}"] .react-pdf__Page__textContent`);
+      return el ? (el.textContent || "") : "";
+    } catch { return ""; }
+  }
+
+  const showLeft = leftOpen && (!focus || peek === "left");
+  const showRight = rightOpen && (!focus || peek === "right");
   const progress = numPages ? Math.round((page / numPages) * 100) : 0;
 
   async function onCreateHighlight(h: { page: number; rects: any[]; text: string; color: string; openNote?: boolean }) {
@@ -132,10 +194,11 @@ export default function DocumentPage({ params }: { params: { id: string } }) {
         />
       </div>
 
-      <div className="flex flex-1 overflow-hidden">
+      <div className="relative flex flex-1 overflow-hidden">
         {/* LEFT study panel */}
-        {!focus && leftOpen && (
-          <aside style={{ width: leftW }} className="shrink-0 overflow-auto border-r bg-surface p-4">
+        {showLeft && (
+          <aside style={{ width: leftW }}
+                 className={`shrink-0 overflow-auto border-r bg-surface p-4 ${focus ? "absolute left-0 top-0 z-30 h-full shadow-2xl" : ""}`}>
             <h2 className="font-heading text-lg mb-1 leading-tight">{doc.title}</h2>
             {doc.status !== "ready" ? (
               <p className="text-sm text-text-secondary">{doc.status === "failed" ? `⚠️ ${doc.error_message}` : `İşleniyor… ${doc.processing_stage || ""}`}</p>
@@ -166,7 +229,7 @@ export default function DocumentPage({ params }: { params: { id: string } }) {
             )}
           </aside>
         )}
-        {!focus && leftOpen && (
+        {showLeft && !focus && (
           <div onMouseDown={(e) => startResize("left", e)} className="w-1.5 shrink-0 cursor-col-resize bg-transparent transition hover:bg-accent-purple/40" role="separator" aria-label="Sol paneli yeniden boyutlandır" title="Sürükleyerek boyutlandır" />
         )}
 
@@ -179,26 +242,42 @@ export default function DocumentPage({ params }: { params: { id: string } }) {
             onNumPages={setNumPages} onVisiblePage={setPage}
             onCreateHighlight={onCreateHighlight} onCreateSticky={onCreateSticky}
             onSelectAnnotation={(a) => { setEditing(a); setRightOpen(true); setRightTab("notes"); }}
+            onMakeCard={onMakeCard}
           />
           ) : (
             <div className="reader-surround flex h-full items-center justify-center text-sm" style={{ color: "var(--r-ink-2)" }}>PDF hazırlanıyor…</div>
           )}
           {/* reading progress */}
           <div className="pointer-events-none absolute bottom-0 left-0 h-1 bg-accent-purple/70 transition-all" style={{ width: `${progress}%` }} />
+          {numPages > 0 && (
+            <div className="pointer-events-none absolute bottom-3 right-4 rounded-full bg-black/55 px-2.5 py-1 text-xs text-white">
+              s.{page} / {numPages} · %{progress}
+            </div>
+          )}
+          {cardMsg && (
+            <div className="absolute bottom-10 left-1/2 z-40 -translate-x-1/2 rounded-xl bg-accent-purple px-4 py-2 text-sm text-white shadow-lg">
+              {cardMsg}
+            </div>
+          )}
         </main>
 
         {/* RIGHT learning/notes panel */}
-        {!focus && rightOpen && (
+        {showRight && !focus && (
           <div onMouseDown={(e) => startResize("right", e)} className="w-1.5 shrink-0 cursor-col-resize bg-transparent transition hover:bg-accent-purple/40" role="separator" aria-label="Sohbet panelini yeniden boyutlandır" title="Sürükleyerek boyutlandır" />
         )}
-        {!focus && rightOpen && (
-          <aside style={{ width: rightW }} className="flex shrink-0 flex-col border-l bg-surface">
+        {showRight && (
+          <aside style={{ width: rightW }}
+                 className={`flex shrink-0 flex-col border-l bg-surface ${focus ? "absolute right-0 top-0 z-30 h-full shadow-2xl" : ""}`}>
             <div className="flex border-b">
-              <button onClick={() => setRightTab("ai")}
+              <button onClick={() => setRightTab("ai")} title="AI Asistan"
                       className={`flex flex-1 items-center justify-center gap-1.5 py-2.5 text-sm ${rightTab === "ai" ? "border-b-2 border-accent-purple text-accent-purple" : "text-text-secondary"}`}>
-                <Sparkles size={15} /> AI Asistan
+                <Sparkles size={15} /> Asistan
               </button>
-              <button onClick={() => setRightTab("notes")}
+              <button onClick={() => setRightTab("explain")} title="Bu sayfayı anlat ve sesli oku"
+                      className={`flex flex-1 items-center justify-center gap-1.5 py-2.5 text-sm ${rightTab === "explain" ? "border-b-2 border-accent-purple text-accent-purple" : "text-text-secondary"}`}>
+                <Volume2 size={15} /> Anlat
+              </button>
+              <button onClick={() => setRightTab("notes")} title="Notlar"
                       className={`flex flex-1 items-center justify-center gap-1.5 py-2.5 text-sm ${rightTab === "notes" ? "border-b-2 border-accent-purple text-accent-purple" : "text-text-secondary"}`}>
                 <StickyNote size={15} /> Notlar {annotations.length > 0 && <span className="rounded-full bg-accent-purple/15 px-1.5 text-xs text-accent-purple">{annotations.length}</span>}
               </button>
@@ -206,6 +285,8 @@ export default function DocumentPage({ params }: { params: { id: string } }) {
             <div className="min-h-0 flex-1">
               {rightTab === "ai" ? (
                 <ChatPanel documentId={id} />
+              ) : rightTab === "explain" ? (
+                <ExplainPanel documentId={id} page={page} getPageText={getPageText} />
               ) : (
                 <NotesPanel annotations={annotations}
                             onJump={(a) => setPage(a.page_number)}

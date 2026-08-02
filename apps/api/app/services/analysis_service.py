@@ -15,6 +15,31 @@ def analyze_document(full_text: str) -> dict:
     return json.loads(raw)
 
 
+def cards_from_text(text: str, count: int = 2) -> list[dict]:
+    """Kullanicinin PDF'te sectigi metinden flashcard uretir."""
+    llm = get_llm()
+    messages = [
+        {"role": "system", "content": "Sen bir ogrenme materyali ureticisisin. Turkce uret, kaynaga sadik kal."},
+        {"role": "user", "content": f"Asagidaki metinden {count} adet kisa soru-cevap flashcard uret. "
+                                    f"type alani 'flashcard', options bos dizi olsun.\n\n{text[:4000]}"},
+    ]
+    raw = llm.structured(messages, STUDY_ITEMS_SCHEMA, model=settings.active_llm_model)
+    return json.loads(raw).get("items", [])
+
+
+def explain_page(text: str) -> str:
+    """Bir PDF sayfasini sade dille anlatir (sesli okunmaya uygun duz metin)."""
+    llm = get_llm()
+    messages = [
+        {"role": "system", "content": "Sen sabirli bir ogretmensin. Turkce, sade ve akici anlat. "
+                                      "Metin sesli okunacak: baslik, madde isareti, yildiz veya "
+                                      "bicimlendirme kullanma. Sadece duz cumleler yaz. 4-8 cumle."},
+        {"role": "user", "content": "Asagidaki sayfayi bana anlat. Once ana fikri soyle, sonra onemli "
+                                    f"noktalari acikla, gerekirse basit bir ornek ver.\n\n{text[:8000]}"},
+    ]
+    return llm.complete(messages, model=settings.active_llm_model)
+
+
 def generate_study_items(context: str, kind: str, count: int = 8) -> list[dict]:
     llm = get_llm()
     instr = {

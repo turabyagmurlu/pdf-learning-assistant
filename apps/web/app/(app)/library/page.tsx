@@ -36,6 +36,7 @@ export default function LibraryPage() {
   const [editing, setEditing] = useState<Doc | null>(null);
   const [menuFor, setMenuFor] = useState<string | null>(null);
   const [collections, setCollections] = useState<{ id: string; title: string }[]>([]);
+  const [prog, setProg] = useState<Record<string, { page: number; numPages: number; pct: number }>>({});
   const [folder, setFolder] = useState("");
   const [creatingFolder, setCreatingFolder] = useState(false);
   const [newFolder, setNewFolder] = useState("");
@@ -43,6 +44,20 @@ export default function LibraryPage() {
 
   async function reload() { try { const d = await api("/documents"); setDocs(d as Doc[]); } catch {} try { const cs = await fetch(API + "/collections", { headers: { Authorization: "Bearer " + getToken() } }); if (cs.ok) setCollections(await cs.json()); } catch {} setLoading(false); }
   useEffect(() => { reload(); }, []);
+  // okuma ilerlemesini oku (reader localStorage'a yazar)
+  useEffect(() => {
+    if (!docs.length) return;
+    const out: Record<string, { page: number; numPages: number; pct: number }> = {};
+    for (const d of docs) {
+      try {
+        const raw = localStorage.getItem("reader.prog." + d.id);
+        if (!raw) continue;
+        const p = JSON.parse(raw);
+        if (p && typeof p.pct === "number") out[d.id] = { page: p.page, numPages: p.numPages, pct: p.pct };
+      } catch {}
+    }
+    setProg(out);
+  }, [docs]);
   useEffect(() => {
     try {
       const v = localStorage.getItem(VIEW_KEY); if (v === "grid" || v === "list") setView(v);
@@ -212,6 +227,16 @@ export default function LibraryPage() {
                 {d.page_count ? <span className="rounded-full bg-surface-muted px-2 py-0.5 text-text-secondary">{d.page_count} sayfa</span> : null}
                 {toArr(d.tags).slice(0, 4).map((t, i) => <span key={i} className="rounded-full bg-accent-amber/15 px-2 py-0.5 text-accent-amber">#{String(t)}</span>)}
               </div>
+              {prog[d.id] && prog[d.id].pct > 0 && (
+                <div className="mt-2.5">
+                  <div className="h-1.5 w-full overflow-hidden rounded-full bg-surface-muted">
+                    <div className="h-full rounded-full bg-accent-purple transition-all" style={{ width: prog[d.id].pct + "%" }} />
+                  </div>
+                  <p className="mt-1 text-[11px] text-text-secondary">
+                    %{prog[d.id].pct} okundu · s.{prog[d.id].page}/{prog[d.id].numPages} · kaldığın yerden devam et
+                  </p>
+                </div>
+              )}
               {menuFor === d.id && (
                 <div onClick={(e) => e.stopPropagation()} className="absolute right-3 top-11 z-20 w-40 overflow-hidden rounded-xl border bg-surface shadow-lg">
                   <button onClick={() => { setEditing(d); setMenuFor(null); }} className="flex w-full items-center gap-2 px-3 py-2 text-left text-sm hover:bg-surface-muted"><Pencil size={14} /> Düzenle</button>

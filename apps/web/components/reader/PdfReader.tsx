@@ -24,6 +24,7 @@ interface Props {
   onCreateHighlight: (h: NewHighlight) => void;
   onCreateSticky: (s: NewSticky) => void;
   onSelectAnnotation: (a: Annotation) => void;
+  onMakeCard?: (text: string, page: number) => void;
 }
 
 const PAGE_MAX = 820; // px baseline page width before scale
@@ -156,6 +157,11 @@ export default function PdfReader(props: Props) {
           <button onClick={() => commitHighlight(HIGHLIGHT_COLORS[0].value, true)}
                   className="ml-1 rounded-md px-2 py-0.5 text-xs text-[#1F1D1A] hover:bg-black/5"
                   aria-label="Not ekle">+ Not</button>
+          {props.onMakeCard && (
+            <button onClick={() => { const s = sel; if (!s || !props.onMakeCard) return; props.onMakeCard(s.text, s.page); window.getSelection()?.removeAllRanges(); setSel(null); }}
+                    className="rounded-md bg-accent-purple/10 px-2 py-0.5 text-xs font-medium text-accent-purple hover:bg-accent-purple/20"
+                    aria-label="Seçili metinden kart üret">🎴 Kart</button>
+          )}
         </div>
       )}
     </div>
