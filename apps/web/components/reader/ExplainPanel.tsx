@@ -1,25 +1,9 @@
 "use client";
-import { useEffect, useMemo, useRef, useState } from "react";
-import { api } from "@/lib/api";
-import { Sparkles, Play, Pause, Square, Volume2 } from "lucide-react";
+import { useEffect, useRef, useState } from "react";
+import { api, API, getToken } from "@/lib/api";
+import { Sparkles, Play, Pause, Square, Volume2, Loader2 } from "lucide-react";
 
-/** Kadin sesi olma ihtimali yuksek isimler (Windows/Chrome/Edge/Android) */
-const FEMALE_HINTS = [
-  "emel", "yelda", "seda", "filiz", "aylin", "zeynep", "elif",
-  "female", "kadin", "woman", "google türkçe", "google turkce",
-];
-const MALE_HINTS = ["tolga", "male", "erkek", "man"];
-
-function scoreVoice(v: SpeechSynthesisVoice): number {
-  const n = (v.name + " " + v.voiceURI).toLowerCase();
-  let s = 0;
-  if (v.lang?.toLowerCase().startsWith("tr")) s += 100;
-  if (FEMALE_HINTS.some((h) => n.includes(h))) s += 50;
-  if (MALE_HINTS.some((h) => n.includes(h))) s -= 40;
-  if (n.includes("google")) s += 10;
-  if (n.includes("natural") || n.includes("neural")) s += 15;
-  return s;
-}
+type Voice = { id: string; label: string };
 
 export default function ExplainPanel({
   documentId, page, getPageText,
@@ -33,54 +17,51 @@ export default function ExplainPanel({
   const [err, setErr] = useState("");
   const [explainedPage, setExplainedPage] = useState<number | null>(null);
 
-  const [voices, setVoices] = useState<SpeechSynthesisVoice[]>([]);
-  const [voiceURI, setVoiceURI] = useState<string>("");
-  const [rate, setRate] = useState(0.95);
-  const [pitch, setPitch] = useState(1.25);
-  const [speaking, setSpeaking] = useState(false);
+  const [voices, setVoices] = useState<Voice[]>([]);
+  const [voice, setVoice] = useState("Sulafat");
+  const [audioBusy, setAudioBusy] = useState(false);
+  const [playing, setPlaying] = useState(false);
   const [paused, setPaused] = useState(false);
-  const uttRef = useRef<SpeechSynthesisUtterance | null>(null);
+  const [rate, setRate] = useState(1);
+  const audioRef = useRef<HTMLAudioElement | null>(null);
+  const urlRef = useRef<string>("");
 
-  // sesleri yukle (bazi tarayicilarda gec gelir)
+  // ses listesini yukle
   useEffect(() => {
-    if (typeof window === "undefined" || !window.speechSynthesis) return;
-    const load = () => {
-      const all = window.speechSynthesis.getVoices();
-      if (!all.length) return;
-      const sorted = [...all].sort((a, b) => scoreVoice(b) - scoreVoice(a));
-      setVoices(sorted);
-      setVoiceURI((cur) => {
-        if (cur && sorted.some((v) => v.voiceURI === cur)) return cur;
-        try {
-          const saved = localStorage.getItem("reader.voice");
-          if (saved && sorted.some((v) => v.voiceURI === saved)) return saved;
-        } catch {}
-        return sorted[0]?.voiceURI || "";
-      });
-    };
-    load();
-    window.speechSynthesis.onvoiceschanged = load;
-    return () => { try { window.speechSynthesis.onvoiceschanged = null; } catch {} };
+    (async () => {
+      try {
+        const r = await api("/tts/voices");
+        if (r?.voices?.length) {
+          setVoices(r.voices);
+          let pick = r.default || r.voices[0].id;
+          try {
+            const saved = localStorage.getItem("reader.voiceId");
+            if (saved && r.voices.some((v: Voice) => v.id === saved)) pick = saved;
+          } catch {}
+          setVoice(pick);
+        }
+      } catch {}
+    })();
   }, []);
 
-  useEffect(() => { try { if (voiceURI) localStorage.setItem("reader.voice", voiceURI); } catch {} }, [voiceURI]);
-  useEffect(() => {
-    try {
-      const r = parseFloat(localStorage.getItem("reader.rate") || ""); if (!isNaN(r)) setRate(r);
-      const p = parseFloat(localStorage.getItem("reader.pitch") || ""); if (!isNaN(p)) setPitch(p);
-    } catch {}
-  }, []);
+  useEffect(() => { try { localStorage.setItem("reader.voiceId", voice); } catch {} }, [voice]);
+  useEffect(() => { try { const s = parseFloat(localStorage.getItem("reader.rate") || ""); if (!isNaN(s)) setRate(s); } catch {} }, []);
   useEffect(() => { try { localStorage.setItem("reader.rate", String(rate)); } catch {} }, [rate]);
-  useEffect(() => { try { localStorage.setItem("reader.pitch", String(pitch)); } catch {} }, [pitch]);
+  useEffect(() => { if (audioRef.current) audioRef.current.playbackRate = rate; }, [rate]);
 
-  // sayfadan cikinca konusmayi durdur
-  useEffect(() => () => { try { window.speechSynthesis?.cancel(); } catch {} }, []);
+  function stopAudio() {
+    try {
+      if (audioRef.current) { audioRef.current.pause(); audioRef.current.src = ""; }
+      if (urlRef.current) { URL.revokeObjectURL(urlRef.current); urlRef.current = ""; }
+    } catch {}
+    setPlaying(false); setPaused(false);
+  }
 
-  const trVoices = useMemo(() => voices.filter((v) => v.lang?.toLowerCase().startsWith("tr")), [voices]);
-  const listed = trVoices.length ? trVoices : voices.slice(0, 12);
+  // sayfadan cikinca sesi durdur
+  useEffect(() => () => { stopAudio(); }, []);
 
   async function explain() {
-    setErr(""); setBusy(true); stop();
+    setErr(""); setBusy(true); stopAudio();
     try {
       const pageText = (getPageText(page) || "").trim();
       const r = await api(`/documents/${documentId}/explain-page`, {
@@ -96,31 +77,42 @@ export default function ExplainPanel({
     }
   }
 
-  function speak() {
-    if (!text || typeof window === "undefined" || !window.speechSynthesis) return;
-    window.speechSynthesis.cancel();
-    const u = new SpeechSynthesisUtterance(text);
-    const v = voices.find((x) => x.voiceURI === voiceURI);
-    if (v) u.voice = v;
-    u.lang = v?.lang || "tr-TR";
-    u.rate = rate;
-    u.pitch = pitch;   // ton: yukseltince ses incelir/yumusar
-    u.volume = 1;
-    u.onend = () => { setSpeaking(false); setPaused(false); };
-    u.onerror = () => { setSpeaking(false); setPaused(false); };
-    uttRef.current = u;
-    window.speechSynthesis.speak(u);
-    setSpeaking(true); setPaused(false);
+  async function speak() {
+    if (!text) return;
+    setErr(""); setAudioBusy(true); stopAudio();
+    try {
+      const res = await fetch(`${API}/tts`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Authorization: "Bearer " + getToken() },
+        body: JSON.stringify({ text, voice }),
+      });
+      if (!res.ok) {
+        let msg = "Seslendirme yapılamadı.";
+        try { const j = await res.json(); msg = j?.error?.user_message || msg; } catch {}
+        throw new Error(msg);
+      }
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      urlRef.current = url;
+      const a = new Audio(url);
+      a.playbackRate = rate;
+      a.onended = () => { setPlaying(false); setPaused(false); };
+      a.onerror = () => { setPlaying(false); setPaused(false); };
+      audioRef.current = a;
+      await a.play();
+      setPlaying(true); setPaused(false);
+    } catch (e: any) {
+      setErr(e?.message || "Seslendirme yapılamadı.");
+    } finally {
+      setAudioBusy(false);
+    }
   }
+
   function toggle() {
-    if (!window.speechSynthesis) return;
-    if (!speaking) return speak();
-    if (paused) { window.speechSynthesis.resume(); setPaused(false); }
-    else { window.speechSynthesis.pause(); setPaused(true); }
-  }
-  function stop() {
-    try { window.speechSynthesis?.cancel(); } catch {}
-    setSpeaking(false); setPaused(false);
+    const a = audioRef.current;
+    if (!a || !urlRef.current) { speak(); return; }
+    if (a.paused) { a.play(); setPaused(false); setPlaying(true); }
+    else { a.pause(); setPaused(true); }
   }
 
   const stale = explainedPage !== null && explainedPage !== page;
@@ -132,7 +124,7 @@ export default function ExplainPanel({
         disabled={busy}
         className="flex w-full items-center justify-center gap-2 rounded-xl bg-accent-purple px-4 py-2.5 text-sm font-medium text-white disabled:opacity-60"
       >
-        <Sparkles size={16} />
+        {busy ? <Loader2 size={16} className="animate-spin" /> : <Sparkles size={16} />}
         {busy ? "Hazırlanıyor…" : `Bu sayfayı anlat (s.${page})`}
       </button>
 
@@ -148,13 +140,15 @@ export default function ExplainPanel({
           <div className="mt-4 flex items-center gap-2">
             <button
               onClick={toggle}
-              className="flex items-center gap-1.5 rounded-lg border px-3 py-1.5 text-sm hover:bg-black/5"
+              disabled={audioBusy}
+              className="flex items-center gap-1.5 rounded-lg border px-3 py-1.5 text-sm hover:bg-black/5 disabled:opacity-60"
             >
-              {speaking && !paused ? <Pause size={15} /> : <Play size={15} />}
-              {speaking && !paused ? "Duraklat" : speaking ? "Devam" : "Sesli oku"}
+              {audioBusy ? <Loader2 size={15} className="animate-spin" />
+                : playing && !paused ? <Pause size={15} /> : <Play size={15} />}
+              {audioBusy ? "Ses hazırlanıyor…" : playing && !paused ? "Duraklat" : paused ? "Devam" : "Sesli oku"}
             </button>
-            {speaking && (
-              <button onClick={stop} className="flex items-center gap-1.5 rounded-lg border px-3 py-1.5 text-sm hover:bg-black/5">
+            {(playing || paused) && (
+              <button onClick={stopAudio} className="flex items-center gap-1.5 rounded-lg border px-3 py-1.5 text-sm hover:bg-black/5">
                 <Square size={14} /> Durdur
               </button>
             )}
@@ -162,51 +156,33 @@ export default function ExplainPanel({
 
           <div className="mt-3 space-y-2 rounded-xl border bg-surface-muted p-3">
             <label className="flex items-center gap-2 text-xs text-text-secondary">
-              <Volume2 size={14} /> Ses
+              <Volume2 size={14} /> Kadın sesi
             </label>
             <select
-              value={voiceURI}
-              onChange={(e) => { setVoiceURI(e.target.value); stop(); }}
+              value={voice}
+              onChange={(e) => { setVoice(e.target.value); stopAudio(); }}
               className="w-full rounded-lg border bg-surface px-2 py-1.5 text-sm outline-none"
             >
-              {listed.map((v) => (
-                <option key={v.voiceURI} value={v.voiceURI}>
-                  {v.name} {v.lang ? `(${v.lang})` : ""}
-                </option>
+              {voices.map((v) => (
+                <option key={v.id} value={v.id}>{v.label} ({v.id})</option>
               ))}
             </select>
-            {!trVoices.length ? (
-              <p className="text-xs text-text-secondary">
-                Cihazında Türkçe ses bulunamadı. Windows&apos;ta Ayarlar → Saat ve Dil → Konuşma bölümünden
-                Türkçe ses paketi ekleyebilirsin.
-              </p>
-            ) : trVoices.length === 1 ? (
-              <p className="text-xs text-text-secondary">
-                Cihazında tek Türkçe ses var. Kadın sesi için Windows Ayarlar → Saat ve Dil → Konuşma →
-                &quot;Ses ekle&quot; bölümünden Türkçe ses paketlerini kontrol et. Şimdilik alttaki
-                <b> Ton</b> ayarını sağa çekerek sesi inceltebilirsin.
-              </p>
-            ) : null}
+            <p className="text-xs text-text-secondary">
+              Ses yapay zekâ ile üretilir; ilk okumada birkaç saniye sürebilir.
+            </p>
+
             <label className="mt-1 block text-xs text-text-secondary">Hız: {rate.toFixed(2)}x</label>
             <input
-              type="range" min={0.6} max={1.4} step={0.05} value={rate}
-              onChange={(e) => { setRate(parseFloat(e.target.value)); }}
-              className="w-full accent-accent-purple"
-            />
-            <label className="mt-1 block text-xs text-text-secondary">
-              Ton: {pitch.toFixed(2)} <span className="opacity-70">(sağa çekince ses incelir)</span>
-            </label>
-            <input
-              type="range" min={0.7} max={2} step={0.05} value={pitch}
-              onChange={(e) => { setPitch(parseFloat(e.target.value)); }}
+              type="range" min={0.7} max={1.5} step={0.05} value={rate}
+              onChange={(e) => setRate(parseFloat(e.target.value))}
               className="w-full accent-accent-purple"
             />
             <button
-              onClick={() => { stop(); setTimeout(speak, 60); }}
-              disabled={!text}
+              onClick={speak}
+              disabled={audioBusy || !text}
               className="mt-1 w-full rounded-lg border px-2 py-1.5 text-xs text-text-secondary hover:bg-black/5 disabled:opacity-50"
             >
-              Bu ayarla dene
+              Bu sesle yeniden oku
             </button>
           </div>
 
@@ -216,7 +192,7 @@ export default function ExplainPanel({
 
       {!text && !busy && !err && (
         <p className="mt-6 text-center text-sm text-text-secondary">
-          Açık olan sayfayı sade dille anlatır, istersen sesli okur.
+          Açık olan sayfayı sade dille anlatır, doğal kadın sesiyle okur.
         </p>
       )}
     </div>

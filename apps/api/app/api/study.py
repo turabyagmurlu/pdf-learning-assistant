@@ -1,11 +1,12 @@
 import json
 import uuid
 from datetime import datetime, timedelta, timezone
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Response
 from pydantic import BaseModel
 from app.deps import db, current_user
 from app.core.errors import NotFound, AppError
 from app.services.analysis_service import generate_study_items, cards_from_text, explain_page
+from app.services.tts_service import synthesize, FEMALE_VOICES, DEFAULT_VOICE
 
 router = APIRouter(tags=["study"])
 
@@ -88,6 +89,30 @@ async def explain(doc_id: str, body: ExplainIn, conn=Depends(db), user=Depends(c
     if len(txt) < 40:
         raise AppError("Bu sayfada anlatılacak yeterli metin bulunamadı.")
     return {"explanation": explain_page(txt)}
+
+
+class TtsIn(BaseModel):
+    text: str
+    voice: str | None = None
+    style: str | None = None
+
+
+@router.get("/tts/voices")
+async def tts_voices(user=Depends(current_user)):
+    """Kullanilabilir Turkce kadin sesleri."""
+    return {"voices": [{"id": k, "label": v} for k, v in FEMALE_VOICES.items()],
+            "default": DEFAULT_VOICE}
+
+
+@router.post("/tts")
+async def tts(body: TtsIn, user=Depends(current_user)):
+    """Metni dogal kadin sesiyle seslendirir (WAV)."""
+    txt = (body.text or "").strip()
+    if len(txt) < 2:
+        raise AppError("Seslendirilecek metin boş.")
+    wav = synthesize(txt, body.voice or DEFAULT_VOICE, body.style or "")
+    return Response(content=wav, media_type="audio/wav",
+                    headers={"Cache-Control": "no-store"})
 
 
 @router.get("/study/items")

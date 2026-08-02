@@ -12,6 +12,7 @@ class Settings(BaseSettings):
     gemini_model: str = "gemini-flash-lite-latest"
     gemini_model_advanced: str = "gemini-flash-lite-latest"
     gemini_embed_model: str = "gemini-embedding-001"
+    gemini_tts_model: str = "gemini-2.5-flash-preview-tts"
 
     # OpenAI (opsiyonel alternatif)
     openai_api_key: str = "sk-REPLACE_ME"
