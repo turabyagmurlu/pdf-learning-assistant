@@ -115,9 +115,10 @@ export default function DocumentPage({ params }: { params: { id: string } }) {
   useEffect(() => {
     if (!focus) { setPeek(null); return; }
     const onMove = (e: MouseEvent) => {
-      if (e.clientX <= 12) setPeek("left");
-      else if (e.clientX >= window.innerWidth - 12) setPeek("right");
-      else if (e.clientX > leftW + 40 && e.clientX < window.innerWidth - rightW - 40) setPeek(null);
+      const w = document.documentElement.clientWidth || window.innerWidth;
+      if (e.clientX <= 32) setPeek("left");
+      else if (e.clientX >= w - 32) setPeek("right");
+      else if (e.clientX > leftW + 40 && e.clientX < w - rightW - 40) setPeek(null);
     };
     window.addEventListener("mousemove", onMove);
     return () => window.removeEventListener("mousemove", onMove);
@@ -195,6 +196,17 @@ export default function DocumentPage({ params }: { params: { id: string } }) {
       </div>
 
       <div className="relative flex flex-1 overflow-hidden">
+        {/* kitap modu: kenar tutamaklari (uzerine gelince panel belirir) */}
+        {focus && leftOpen && !showLeft && (
+          <button onMouseEnter={() => setPeek("left")} onClick={() => setPeek("left")}
+                  aria-label="Sol paneli göster"
+                  className="absolute left-0 top-1/2 z-20 h-24 w-2 -translate-y-1/2 rounded-r-full bg-accent-purple/25 transition hover:w-3 hover:bg-accent-purple/60" />
+        )}
+        {focus && rightOpen && !showRight && (
+          <button onMouseEnter={() => setPeek("right")} onClick={() => setPeek("right")}
+                  aria-label="Sağ paneli göster"
+                  className="absolute right-0 top-1/2 z-20 h-24 w-2 -translate-y-1/2 rounded-l-full bg-accent-purple/25 transition hover:w-3 hover:bg-accent-purple/60" />
+        )}
         {/* LEFT study panel */}
         {showLeft && (
           <aside style={{ width: leftW }}

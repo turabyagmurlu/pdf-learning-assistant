@@ -36,6 +36,7 @@ export default function ExplainPanel({
   const [voices, setVoices] = useState<SpeechSynthesisVoice[]>([]);
   const [voiceURI, setVoiceURI] = useState<string>("");
   const [rate, setRate] = useState(0.95);
+  const [pitch, setPitch] = useState(1.25);
   const [speaking, setSpeaking] = useState(false);
   const [paused, setPaused] = useState(false);
   const uttRef = useRef<SpeechSynthesisUtterance | null>(null);
@@ -63,8 +64,14 @@ export default function ExplainPanel({
   }, []);
 
   useEffect(() => { try { if (voiceURI) localStorage.setItem("reader.voice", voiceURI); } catch {} }, [voiceURI]);
-  useEffect(() => { try { const r = parseFloat(localStorage.getItem("reader.rate") || ""); if (!isNaN(r)) setRate(r); } catch {} }, []);
+  useEffect(() => {
+    try {
+      const r = parseFloat(localStorage.getItem("reader.rate") || ""); if (!isNaN(r)) setRate(r);
+      const p = parseFloat(localStorage.getItem("reader.pitch") || ""); if (!isNaN(p)) setPitch(p);
+    } catch {}
+  }, []);
   useEffect(() => { try { localStorage.setItem("reader.rate", String(rate)); } catch {} }, [rate]);
+  useEffect(() => { try { localStorage.setItem("reader.pitch", String(pitch)); } catch {} }, [pitch]);
 
   // sayfadan cikinca konusmayi durdur
   useEffect(() => () => { try { window.speechSynthesis?.cancel(); } catch {} }, []);
@@ -97,7 +104,7 @@ export default function ExplainPanel({
     if (v) u.voice = v;
     u.lang = v?.lang || "tr-TR";
     u.rate = rate;
-    u.pitch = 1.08;   // hafif yumusak, sicak ton
+    u.pitch = pitch;   // ton: yukseltince ses incelir/yumusar
     u.volume = 1;
     u.onend = () => { setSpeaking(false); setPaused(false); };
     u.onerror = () => { setSpeaking(false); setPaused(false); };
@@ -168,18 +175,39 @@ export default function ExplainPanel({
                 </option>
               ))}
             </select>
-            {!trVoices.length && (
+            {!trVoices.length ? (
               <p className="text-xs text-text-secondary">
                 Cihazında Türkçe ses bulunamadı. Windows&apos;ta Ayarlar → Saat ve Dil → Konuşma bölümünden
                 Türkçe ses paketi ekleyebilirsin.
               </p>
-            )}
+            ) : trVoices.length === 1 ? (
+              <p className="text-xs text-text-secondary">
+                Cihazında tek Türkçe ses var. Kadın sesi için Windows Ayarlar → Saat ve Dil → Konuşma →
+                &quot;Ses ekle&quot; bölümünden Türkçe ses paketlerini kontrol et. Şimdilik alttaki
+                <b> Ton</b> ayarını sağa çekerek sesi inceltebilirsin.
+              </p>
+            ) : null}
             <label className="mt-1 block text-xs text-text-secondary">Hız: {rate.toFixed(2)}x</label>
             <input
               type="range" min={0.6} max={1.4} step={0.05} value={rate}
               onChange={(e) => { setRate(parseFloat(e.target.value)); }}
               className="w-full accent-accent-purple"
             />
+            <label className="mt-1 block text-xs text-text-secondary">
+              Ton: {pitch.toFixed(2)} <span className="opacity-70">(sağa çekince ses incelir)</span>
+            </label>
+            <input
+              type="range" min={0.7} max={2} step={0.05} value={pitch}
+              onChange={(e) => { setPitch(parseFloat(e.target.value)); }}
+              className="w-full accent-accent-purple"
+            />
+            <button
+              onClick={() => { stop(); setTimeout(speak, 60); }}
+              disabled={!text}
+              className="mt-1 w-full rounded-lg border px-2 py-1.5 text-xs text-text-secondary hover:bg-black/5 disabled:opacity-50"
+            >
+              Bu ayarla dene
+            </button>
           </div>
 
           <p className="mt-4 whitespace-pre-wrap text-sm leading-relaxed">{text}</p>
