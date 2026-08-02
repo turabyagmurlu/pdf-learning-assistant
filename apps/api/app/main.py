@@ -49,6 +49,19 @@ async def health():
     return {"status": "ok"}
 
 
+@app.get("/keepalive")
+async def keepalive():
+    # Supabase'i uyanik tutmak icin hafif bir DB sorgusu calistirir.
+    try:
+        from app.db.session import get_pool
+        pool = await get_pool()
+        async with pool.acquire() as conn:
+            await conn.execute("SELECT 1")
+        return {"status": "ok", "db": True}
+    except Exception:  # noqa
+        return {"status": "ok", "db": False}
+
+
 app.include_router(auth.router)
 app.include_router(documents.router)
 app.include_router(chat.router)
