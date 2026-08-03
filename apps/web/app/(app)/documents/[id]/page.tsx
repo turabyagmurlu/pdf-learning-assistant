@@ -200,12 +200,12 @@ export default function DocumentPage({ params }: { params: { id: string } }) {
         {focus && leftOpen && !showLeft && (
           <button onMouseEnter={() => setPeek("left")} onClick={() => setPeek("left")}
                   aria-label="Sol paneli göster"
-                  className="absolute left-0 top-1/2 z-20 h-24 w-2 -translate-y-1/2 rounded-r-full bg-accent-purple/25 transition hover:w-3 hover:bg-accent-purple/60" />
+                  className="absolute left-0 top-1/2 z-20 h-32 w-4 -translate-y-1/2 rounded-r-full bg-accent-purple/25 transition hover:w-3 hover:bg-accent-purple/60" />
         )}
         {focus && rightOpen && !showRight && (
           <button onMouseEnter={() => setPeek("right")} onClick={() => setPeek("right")}
                   aria-label="Sağ paneli göster"
-                  className="absolute right-0 top-1/2 z-20 h-24 w-2 -translate-y-1/2 rounded-l-full bg-accent-purple/25 transition hover:w-3 hover:bg-accent-purple/60" />
+                  className="absolute right-0 top-1/2 z-20 h-32 w-4 -translate-y-1/2 rounded-l-full bg-accent-purple/25 transition hover:w-3 hover:bg-accent-purple/60" />
         )}
         {/* LEFT study panel */}
         {showLeft && (
@@ -246,7 +246,8 @@ export default function DocumentPage({ params }: { params: { id: string } }) {
         )}
 
         {/* CENTER reader */}
-        <main className="relative flex-1 overflow-hidden">
+        <main className="relative flex-1 overflow-hidden"
+              onPointerDown={() => { if (focus && peek) setPeek(null); }}>
           {fileUrl ? (
           <PdfReader
             fileUrl={fileUrl} page={page} scale={scale} spread={spread} tool={tool}
