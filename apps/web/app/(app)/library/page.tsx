@@ -2,7 +2,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { api, API, getToken } from "@/lib/api";
-import { UploadCloud, Search, Star, Trash2, Pencil, LayoutGrid, List, MoreVertical, X, FileText, FolderOpen, FolderPlus, Check } from "lucide-react";
+import { UploadCloud, Search, Star, Trash2, Pencil, LayoutGrid, List, MoreVertical, X, FileText, FolderOpen, FolderPlus, Check, BookOpen } from "lucide-react";
 
 type Doc = {
   id: string; title: string; status: string; processing_stage?: string | null;
@@ -115,7 +115,7 @@ export default function LibraryPage() {
     try { const r = await fetch(API + "/documents/" + id, { method: "DELETE", headers: { Authorization: "Bearer " + getToken() } }); if (!r.ok) setDocs(prevDocs); } catch { setDocs(prevDocs); }
   }
 
-  async function createFolder() { const t = newFolder.trim(); if (!t) { setCreatingFolder(false); return; } try { const r = await fetch(API + "/collections", { method: "POST", headers: { Authorization: "Bearer " + getToken(), "Content-Type": "application/json" }, body: JSON.stringify({ title: t }) }); if (r.ok) { setNewFolder(""); setCreatingFolder(false); reload(); } } catch {} }
+  async function createFolder() { const t = newFolder.trim(); if (!t) { setCreatingFolder(false); return; } try { const r = await fetch(API + "/collections", { method: "POST", headers: { Authorization: "Bearer " + getToken(), "Content-Type": "application/json" }, body: JSON.stringify({ title: t }) }); if (r.ok) { const j = await r.json().catch(() => null); setNewFolder(""); setCreatingFolder(false); reload(); if (j?.id) router.push("/collections/" + j.id); } } catch {} }
 
   const gap = density === "compact" ? "gap-2" : "gap-4";
   const pad = density === "compact" ? "p-3" : "p-4";
@@ -166,7 +166,15 @@ export default function LibraryPage() {
         <span className="mr-1 flex items-center gap-1 text-xs text-text-secondary"><FolderOpen size={13} /> Klasörler:</span>
         <button onClick={() => setFolder("")} className={cx("rounded-full px-2.5 py-1 text-xs", folder === "" ? "bg-accent-purple/15 text-accent-purple" : "border bg-surface text-text-secondary")}>Tümü</button>
         {collections.map((c) => (
-          <button key={c.id} onClick={() => setFolder(c.id)} className={cx("rounded-full px-2.5 py-1 text-xs", folder === c.id ? "bg-accent-purple/15 text-accent-purple" : "border bg-surface text-text-secondary hover:border-accent-purple/50")}>{c.title}</button>
+          <span key={c.id} className={cx("inline-flex items-center overflow-hidden rounded-full", folder === c.id ? "bg-accent-purple/15" : "border bg-surface")}>
+            <button onClick={() => setFolder(folder === c.id ? "" : c.id)} title="Sadece bunları göster"
+                    className={cx("px-2.5 py-1 text-xs", folder === c.id ? "text-accent-purple" : "text-text-secondary hover:text-accent-purple")}>{c.title}</button>
+            <button onClick={() => router.push("/collections/" + c.id)} title={c.title + " çalışma kitabını aç"}
+                    aria-label={c.title + " çalışma kitabını aç"}
+                    className={cx("border-l px-1.5 py-1", folder === c.id ? "border-accent-purple/30 text-accent-purple" : "text-text-secondary hover:text-accent-purple")}>
+              <BookOpen size={12} />
+            </button>
+          </span>
         ))}
         {creatingFolder ? (
           <span className="flex items-center gap-1">
