@@ -219,10 +219,10 @@ export default function LibraryPage() {
                   <h3 className="truncate font-medium text-text-primary">{d.title}</h3>
                 </div>
                 <div className="flex shrink-0 items-center gap-0.5">
-                  <button onClick={(e) => { e.stopPropagation(); patchDoc(d.id, { is_favorite: !d.is_favorite }); }} aria-label={d.is_favorite ? "Favoriden çıkar" : "Favori yap"} className={cx("rounded-md p-1", d.is_favorite ? "text-accent-amber" : "text-text-secondary opacity-0 group-hover:opacity-100")}>
+                  <button onClick={(e) => { e.stopPropagation(); patchDoc(d.id, { is_favorite: !d.is_favorite }); }} aria-label={d.is_favorite ? "Favoriden çıkar" : "Favori yap"} className={cx("rounded-md p-1", d.is_favorite ? "text-accent-amber" : "text-text-secondary/70 hover:text-accent-amber")}>
                     <Star size={15} className={d.is_favorite ? "fill-current" : ""} />
                   </button>
-                  <button onClick={(e) => { e.stopPropagation(); setMenuFor(menuFor === d.id ? null : d.id); }} aria-label="Belge menüsü" className="rounded-md p-1 text-text-secondary opacity-0 group-hover:opacity-100">
+                  <button onClick={(e) => { e.stopPropagation(); setMenuFor(menuFor === d.id ? null : d.id); }} aria-label="Belge menüsü" title="Düzenle, klasöre taşı, sil" className="rounded-md p-1 text-text-secondary/70 hover:bg-surface-muted hover:text-text-primary">
                     <MoreVertical size={15} />
                   </button>
                 </div>

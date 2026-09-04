@@ -4,7 +4,7 @@ import { useRouter } from "next/navigation";
 import { api, API, getToken } from "@/lib/api";
 import {
   BookOpen, Sparkles, GraduationCap, FileText, ArrowLeft,
-  Loader2, Send, Pencil, Check, Mic, Headphones,
+  Loader2, Send, Pencil, Check, Mic, Headphones, Plus, X, Square, CheckSquare,
 } from "lucide-react";
 
 type Doc = {
@@ -77,6 +77,38 @@ export default function CollectionPage({ params }: { params: { id: string } }) {
   // kartlar
   const [genBusy, setGenBusy] = useState(false);
   const [genMsg, setGenMsg] = useState("");
+
+  // belge ekleme (kutuphaneden sec)
+  const [picker, setPicker] = useState(false);
+  const [allDocs, setAllDocs] = useState<Doc[] | null>(null);
+  const [picked, setPicked] = useState<Record<string, boolean>>({});
+  const [addBusy, setAddBusy] = useState(false);
+  const [pickQ, setPickQ] = useState("");
+
+  async function openPicker() {
+    setPicker(true); setPicked({}); setPickQ(""); setAllDocs(null);
+    try { setAllDocs((await api("/documents")) as Doc[]); } catch { setAllDocs([]); }
+  }
+  async function addPicked() {
+    const ids = Object.keys(picked).filter((k) => picked[k]);
+    if (!ids.length) { setPicker(false); return; }
+    setAddBusy(true);
+    try {
+      await Promise.all(ids.map((docId) =>
+        api("/documents/" + docId, { method: "PATCH", body: JSON.stringify({ collection_id: id }) })
+      ));
+      setPicker(false);
+      await load();
+    } catch (e: any) {
+      setErr(e?.message || "Belgeler eklenemedi.");
+    } finally { setAddBusy(false); }
+  }
+  async function removeFromCollection(docId: string) {
+    try {
+      await api("/documents/" + docId, { method: "PATCH", body: JSON.stringify({ collection_id: "" }) });
+      await load();
+    } catch {}
+  }
 
   async function load() {
     try {
@@ -335,15 +367,22 @@ export default function CollectionPage({ params }: { params: { id: string } }) {
           {docs.length === 0 ? (
             <div className="rounded-2xl border border-dashed p-10 text-center">
               <p className="text-text-secondary">
-                Bu çalışma kitabı boş. Kütüphaneden bir belgeyi düzenleyip bu kitaba ekleyebilirsin.
+                Bu çalışma kitabı boş. Kütüphanendeki belgeleri buraya ekleyebilirsin.
               </p>
-              <button onClick={() => router.push("/library")}
-                      className="mt-3 rounded-xl bg-accent-purple px-4 py-2 text-sm text-white">
-                Kütüphaneye git
+              <button onClick={openPicker}
+                      className="mt-3 inline-flex items-center gap-1.5 rounded-xl bg-accent-purple px-4 py-2 text-sm text-white">
+                <Plus size={15} /> Belge ekle
               </button>
             </div>
           ) : (
             <div className="rounded-2xl border bg-surface-muted/40 p-4">
+              <div className="mb-3 flex items-center justify-between">
+                <p className="text-sm text-text-secondary">{docs.length} belge</p>
+                <button onClick={openPicker}
+                        className="inline-flex items-center gap-1.5 rounded-lg border bg-surface px-3 py-1.5 text-sm text-accent-purple hover:border-accent-purple/50">
+                  <Plus size={15} /> Belge ekle
+                </button>
+              </div>
               <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
                 {docs.map((d) => {
                   const p = prog[d.id];
@@ -351,11 +390,16 @@ export default function CollectionPage({ params }: { params: { id: string } }) {
                     <div key={d.id} role="button" tabIndex={0}
                          onClick={() => router.push("/documents/" + d.id)}
                          onKeyDown={(e) => { if (e.key === "Enter") router.push("/documents/" + d.id); }}
-                         className="group cursor-pointer rounded-xl border bg-surface p-3 transition hover:border-accent-purple/50 hover:shadow-sm">
+                         className="group relative cursor-pointer rounded-xl border bg-surface p-3 transition hover:border-accent-purple/50 hover:shadow-sm">
+                      <button onClick={(e) => { e.stopPropagation(); removeFromCollection(d.id); }}
+                              aria-label="Bu kitaptan çıkar" title="Bu kitaptan çıkar"
+                              className="absolute right-2 top-2 rounded-md p-1 text-text-secondary hover:bg-surface-muted hover:text-danger">
+                        <X size={14} />
+                      </button>
                       <div className="flex items-start gap-2">
                         <div className="mt-0.5 h-10 w-1.5 shrink-0 rounded-full bg-accent-purple/70" />
                         <div className="min-w-0 flex-1">
-                          <h3 className="truncate text-sm font-medium">{d.title}</h3>
+                          <h3 className="truncate pr-6 text-sm font-medium">{d.title}</h3>
                           {d.short_summary && (
                             <p className="mt-0.5 line-clamp-2 text-xs text-text-secondary">{d.short_summary}</p>
                           )}
@@ -539,6 +583,80 @@ export default function CollectionPage({ params }: { params: { id: string } }) {
           <p className="mt-4 text-sm text-text-secondary">
             Şu an bu kitapta <b>{st.cards || 0}</b> kart var.
           </p>
+        </div>
+      )}
+
+      {/* BELGE SECICI */}
+      {picker && (
+        <div className="fixed inset-0 z-50 flex items-end justify-center bg-black/40 p-0 sm:items-center sm:p-4"
+             onClick={() => !addBusy && setPicker(false)}>
+          <div onClick={(e) => e.stopPropagation()}
+               className="flex max-h-[85vh] w-full max-w-lg flex-col rounded-t-2xl border bg-surface sm:rounded-2xl">
+            <div className="flex items-center justify-between border-b px-4 py-3">
+              <h3 className="font-medium">Kütüphaneden belge ekle</h3>
+              <button onClick={() => setPicker(false)} aria-label="Kapat"
+                      className="rounded-md p-1 text-text-secondary hover:bg-surface-muted">
+                <X size={18} />
+              </button>
+            </div>
+
+            <div className="border-b px-4 py-2.5">
+              <input value={pickQ} onChange={(e) => setPickQ(e.target.value)}
+                     placeholder="Belge ara…"
+                     className="w-full rounded-lg border bg-surface px-3 py-2 text-sm outline-none focus:border-accent-purple" />
+            </div>
+
+            <div className="flex-1 overflow-y-auto p-2">
+              {allDocs === null ? (
+                <p className="p-6 text-center text-sm text-text-secondary">Yükleniyor…</p>
+              ) : (() => {
+                const mine = new Set(docs.map((d) => d.id));
+                const list = allDocs
+                  .filter((d) => !mine.has(d.id))
+                  .filter((d) => !pickQ.trim() || (d.title || "").toLowerCase().includes(pickQ.trim().toLowerCase()));
+                if (!list.length) {
+                  return (
+                    <p className="p-6 text-center text-sm text-text-secondary">
+                      {allDocs.length === 0
+                        ? "Kütüphanende hiç belge yok."
+                        : pickQ.trim()
+                          ? "Aramayla eşleşen belge yok."
+                          : "Kütüphanendeki tüm belgeler zaten bu kitapta."}
+                    </p>
+                  );
+                }
+                return list.map((d) => {
+                  const on = !!picked[d.id];
+                  return (
+                    <button key={d.id} onClick={() => setPicked((p) => ({ ...p, [d.id]: !on }))}
+                            className={cx("flex w-full items-start gap-2.5 rounded-xl px-3 py-2.5 text-left transition",
+                              on ? "bg-accent-purple/10" : "hover:bg-surface-muted")}>
+                      {on ? <CheckSquare size={17} className="mt-0.5 shrink-0 text-accent-purple" />
+                          : <Square size={17} className="mt-0.5 shrink-0 text-text-secondary" />}
+                      <span className="min-w-0 flex-1">
+                        <span className="block truncate text-sm font-medium">{d.title}</span>
+                        {d.short_summary && (
+                          <span className="mt-0.5 block line-clamp-1 text-xs text-text-secondary">{d.short_summary}</span>
+                        )}
+                      </span>
+                    </button>
+                  );
+                });
+              })()}
+            </div>
+
+            <div className="flex items-center justify-end gap-2 border-t px-4 py-3">
+              <button onClick={() => setPicker(false)} disabled={addBusy}
+                      className="rounded-lg px-3 py-1.5 text-sm text-text-secondary hover:bg-surface-muted disabled:opacity-60">
+                Vazgeç
+              </button>
+              <button onClick={addPicked} disabled={addBusy || !Object.values(picked).some(Boolean)}
+                      className="flex items-center gap-1.5 rounded-lg bg-accent-purple px-4 py-1.5 text-sm text-white disabled:opacity-50">
+                {addBusy && <Loader2 size={14} className="animate-spin" />}
+                {Object.values(picked).filter(Boolean).length || ""} belge ekle
+              </button>
+            </div>
+          </div>
         </div>
       )}
     </div>
