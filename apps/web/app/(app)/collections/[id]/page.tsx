@@ -4,7 +4,8 @@ import { useRouter } from "next/navigation";
 import { api, API, getToken } from "@/lib/api";
 import {
   BookOpen, Sparkles, GraduationCap, FileText, ArrowLeft,
-  Loader2, Send, Pencil, Check, Mic, Headphones, Plus, X, Square, CheckSquare, Trash2,
+  Loader2, Send, Pencil, Check, Headphones, Plus, X, Square, CheckSquare, Trash2,
+  BookMarked, Search, RefreshCw,
 } from "lucide-react";
 
 type Doc = {
@@ -12,6 +13,21 @@ type Doc = {
   short_summary?: string | null; category?: string | null;
 };
 type Prog = { page: number; numPages: number; pct: number };
+type GItem = {
+  term: string; kind: string; definition: string;
+  mentions: { document_id: string; title: string; pages: number[] }[];
+};
+const KIND_LABEL: Record<string, string> = {
+  kisi: "Kişi", yer: "Yer", olay: "Olay", antlasma: "Antlaşma", kurum: "Kurum", kavram: "Kavram",
+};
+const KIND_STYLE: Record<string, string> = {
+  kisi: "bg-accent-purple/10 text-accent-purple",
+  yer: "bg-green-100 text-green-700",
+  olay: "bg-red-100 text-red-700",
+  antlasma: "bg-amber-100 text-amber-700",
+  kurum: "bg-sky-100 text-sky-700",
+  kavram: "bg-surface-muted text-text-secondary",
+};
 
 function cx(...a: (string | false | null | undefined)[]) {
   return a.filter(Boolean).join(" ");
@@ -48,13 +64,15 @@ export default function CollectionPage({ params }: { params: { id: string } }) {
   const router = useRouter();
   const [data, setData] = useState<any>(null);
   const [err, setErr] = useState("");
-  const [tab, setTab] = useState<"raf" | "sor" | "anlat" | "ders" | "kart">("raf");
+  const [tab, setTab] = useState<"raf" | "sor" | "sozluk" | "ders" | "kart">("raf");
 
-  // Anlat Bakalim (Feynman)
-  const [fConcept, setFConcept] = useState("");
-  const [fText, setFText] = useState("");
-  const [fBusy, setFBusy] = useState(false);
-  const [fResult, setFResult] = useState<{ review: string; sources: any[] } | null>(null);
+  // Sozluk (kisiler & kavramlar)
+  const [gItems, setGItems] = useState<GItem[] | null>(null);
+  const [gAt, setGAt] = useState<string | null>(null);
+  const [gBusy, setGBusy] = useState(false);
+  const [gErr, setGErr] = useState("");
+  const [gQ, setGQ] = useState("");
+  const [gKind, setGKind] = useState("");
 
   // Sesli ders
   const [lecBusy, setLecBusy] = useState(false);
@@ -165,18 +183,24 @@ export default function CollectionPage({ params }: { params: { id: string } }) {
     } finally { setGenBusy(false); }
   }
 
-  async function sendFeynman() {
-    if (fConcept.trim().length < 2 || fText.trim().length < 20) return;
-    setFBusy(true); setFResult(null);
+  async function loadGlossary() {
     try {
-      const r = await api(`/collections/${id}/feynman`, {
-        method: "POST",
-        body: JSON.stringify({ concept: fConcept.trim(), explanation: fText.trim() }),
-      });
-      setFResult(r);
+      const r = await api(`/collections/${id}/glossary`);
+      setGItems(r?.items || []); setGAt(r?.generated_at || null);
+    } catch { setGItems([]); }
+  }
+  useEffect(() => { if (tab === "sozluk" && gItems === null) loadGlossary(); }, [tab]);
+
+  async function buildGlossary() {
+    setGBusy(true); setGErr("");
+    try {
+      const r = await api(`/collections/${id}/glossary`, { method: "POST" });
+      setGItems(r?.items || []); setGAt(r?.generated_at || null);
+      if (!(r?.items || []).length) setGErr("Belgelerden madde çıkarılamadı.");
     } catch (e: any) {
-      setFResult({ review: e?.message || "Değerlendirilemedi.", sources: [] });
-    } finally { setFBusy(false); }
+      setGErr(e?.message || "Sözlük oluşturulamadı.");
+      if (gItems === null) setGItems([]);
+    } finally { setGBusy(false); }
   }
 
   function stopAudio() {
@@ -236,6 +260,7 @@ export default function CollectionPage({ params }: { params: { id: string } }) {
   const col = data.collection;
   const docs: Doc[] = data.documents || [];
   const st = data.stats || {};
+  const glist: GItem[] = gItems || [];
   const read = docs.filter((d) => (prog[d.id]?.pct || 0) >= 95).length;
   const overall = docs.length
     ? Math.round(docs.reduce((s, d) => s + (prog[d.id]?.pct || 0), 0) / docs.length)
@@ -364,7 +389,7 @@ export default function CollectionPage({ params }: { params: { id: string } }) {
 
       {/* sekmeler */}
       <div className="mt-6 flex gap-1 border-b">
-        {([["raf", "Raf", FileText], ["sor", "Konuya sor", Sparkles], ["anlat", "Anlat bakalım", Mic],
+        {([["raf", "Raf", FileText], ["sor", "Konuya sor", Sparkles], ["sozluk", "Sözlük", BookMarked],
            ["ders", "Sesli ders", Headphones], ["kart", "Kartlar", GraduationCap]] as const).map(
           ([k, label, Icon]) => (
             <button key={k} onClick={() => setTab(k as any)}
@@ -489,49 +514,106 @@ export default function CollectionPage({ params }: { params: { id: string } }) {
         </div>
       )}
 
-      {/* ANLAT BAKALIM (Feynman) */}
-      {tab === "anlat" && (
-        <div className="mt-5 max-w-3xl">
-          <div className="rounded-2xl border border-accent-purple/30 bg-accent-purple/5 p-4">
-            <p className="text-sm leading-relaxed">
-              Bir kavramı <b>kendi cümlelerinle</b> anlat. Kaynakla karşılaştırıp neyi doğru
-              kavradığını, nerede eksiğin olduğunu göstereyim. Bir şeyi gerçekten anlayıp
-              anlamadığın, ancak anlatmaya çalışınca ortaya çıkar.
-            </p>
-          </div>
+      {/* SOZLUK: kisiler ve kavramlar */}
+      {tab === "sozluk" && (
+        <div className="mt-5">
+          {gItems === null ? (
+            <p className="text-sm text-text-secondary">Yükleniyor…</p>
+          ) : gItems.length === 0 ? (
+            <div className="max-w-3xl rounded-2xl border border-dashed p-8 text-center">
+              <BookMarked size={28} className="mx-auto text-accent-purple" />
+              <p className="mt-3 text-sm text-text-secondary">
+                Kitaptaki tüm belgelerden <b>kişi, yer, olay, antlaşma, kurum ve kavramları</b> çıkarır;
+                her biri için kısa açıklama ve hangi belgede hangi sayfada geçtiğini gösterir.
+              </p>
+              <button onClick={buildGlossary} disabled={gBusy}
+                      className="mx-auto mt-4 flex items-center gap-1.5 rounded-xl bg-accent-purple px-4 py-2 text-sm text-white disabled:opacity-60">
+                {gBusy ? <Loader2 size={15} className="animate-spin" /> : <Sparkles size={15} />}
+                {gBusy ? "Çıkarılıyor… (belge başına ~15 sn)" : "Sözlüğü oluştur"}
+              </button>
+              {gErr && <p className="mt-3 text-sm text-danger">{gErr}</p>}
+            </div>
+          ) : (
+            <>
+              <div className="flex flex-wrap items-center gap-2">
+                <div className="flex min-w-[220px] flex-1 items-center gap-2 rounded-xl border bg-surface px-3">
+                  <Search size={15} className="text-text-secondary" />
+                  <input value={gQ} onChange={(e) => setGQ(e.target.value)} placeholder="Ara: ad, kavram, açıklama…"
+                         className="w-full bg-transparent py-2 text-sm outline-none" />
+                </div>
+                <button onClick={buildGlossary} disabled={gBusy} title="Belgeler değiştiyse yeniden çıkar"
+                        className="flex items-center gap-1.5 rounded-xl border px-3 py-2 text-sm text-text-secondary hover:border-accent-purple/50 disabled:opacity-60">
+                  {gBusy ? <Loader2 size={14} className="animate-spin" /> : <RefreshCw size={14} />} Yenile
+                </button>
+              </div>
 
-          <input value={fConcept} onChange={(e) => setFConcept(e.target.value)}
-                 placeholder="Hangi kavram? Örn: süperkompanzasyon"
-                 className="mt-4 w-full rounded-xl border bg-surface px-3 py-2.5 text-sm outline-none focus:border-accent-purple" />
-          <textarea value={fText} onChange={(e) => setFText(e.target.value)} rows={7}
-                    placeholder="Şimdi anlat… Kitaptaki cümleleri kopyalama, kendi kelimelerinle söyle. Bir arkadaşına anlatır gibi."
-                    className="mt-2 w-full rounded-xl border bg-surface p-3 text-sm leading-relaxed outline-none focus:border-accent-purple" />
-          <div className="mt-2 flex items-center justify-between">
-            <span className="text-xs text-text-secondary">{fText.trim().length} karakter</span>
-            <button onClick={sendFeynman} disabled={fBusy || fText.trim().length < 20}
-                    className="flex items-center gap-1.5 rounded-xl bg-accent-purple px-4 py-2 text-sm text-white disabled:opacity-50">
-              {fBusy ? <Loader2 size={15} className="animate-spin" /> : <Mic size={15} />}
-              {fBusy ? "Değerlendiriliyor…" : "Anlatımımı değerlendir"}
-            </button>
-          </div>
+              <div className="mt-3 flex flex-wrap gap-1.5">
+                {([["", "Tümü"], ["kisi", "Kişi"], ["yer", "Yer"], ["olay", "Olay"], ["antlasma", "Antlaşma"],
+                   ["kurum", "Kurum"], ["kavram", "Kavram"]] as const).map(([k, label]) => {
+                  const n = k ? glist.filter((g) => g.kind === k).length : glist.length;
+                  if (k && n === 0) return null;
+                  return (
+                    <button key={k} onClick={() => setGKind(k)}
+                            className={cx("rounded-full px-2.5 py-1 text-xs",
+                              gKind === k ? "bg-accent-purple/15 text-accent-purple" : "border bg-surface text-text-secondary hover:border-accent-purple/50")}>
+                      {label} <span className="opacity-60">{n}</span>
+                    </button>
+                  );
+                })}
+                {gAt && <span className="ml-auto self-center text-[11px] text-text-secondary">{new Date(gAt).toLocaleDateString("tr-TR")}</span>}
+              </div>
 
-          {fResult && (
-            <div className="mt-5 rounded-2xl border bg-surface p-4">
-              <p className="whitespace-pre-wrap text-sm leading-relaxed">{fResult.review}</p>
-              {fResult.sources?.length > 0 && (
-                <div className="mt-4 border-t pt-3">
-                  <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-text-secondary">Kaynaklar</p>
-                  <div className="flex flex-wrap gap-1.5">
-                    {fResult.sources.map((s: any, i: number) => (
-                      <button key={i} onClick={() => router.push("/documents/" + s.document_id)}
-                              className="rounded-full border bg-surface px-2.5 py-1 text-xs text-text-secondary hover:border-accent-purple/50">
-                        {s.title} · s.{s.page}
-                      </button>
+              {(() => {
+                const q = gQ.trim().toLowerCase();
+                const list = glist
+                  .filter((g) => !gKind || g.kind === gKind)
+                  .filter((g) => !q || g.term.toLowerCase().includes(q) || g.definition.toLowerCase().includes(q));
+                if (!list.length) return <p className="mt-6 text-sm text-text-secondary">Eşleşen madde yok.</p>;
+                // harf gruplari
+                const groups: Record<string, typeof list> = {};
+                for (const g of list) {
+                  const ch = (g.term[0] || "#").toLocaleUpperCase("tr-TR");
+                  (groups[ch] ||= []).push(g);
+                }
+                const keys = Object.keys(groups).sort((a, b) => a.localeCompare(b, "tr"));
+                return (
+                  <div className="mt-4 space-y-5">
+                    {keys.map((ch) => (
+                      <div key={ch}>
+                        <div className="mb-2 flex items-center gap-2">
+                          <span className="font-heading text-lg text-accent-purple">{ch}</span>
+                          <span className="h-px flex-1 bg-black/10" />
+                        </div>
+                        <div className="grid grid-cols-1 gap-2 md:grid-cols-2">
+                          {groups[ch].map((g, i) => (
+                            <div key={i} className="rounded-xl border bg-surface p-3">
+                              <div className="flex items-start justify-between gap-2">
+                                <h4 className="font-medium">{g.term}</h4>
+                                <span className={cx("shrink-0 rounded-full px-2 py-0.5 text-[10px] uppercase tracking-wide", KIND_STYLE[g.kind] || KIND_STYLE.kavram)}>
+                                  {KIND_LABEL[g.kind] || g.kind}
+                                </span>
+                              </div>
+                              <p className="mt-1 text-sm leading-relaxed text-text-secondary">{g.definition}</p>
+                              <div className="mt-2 flex flex-wrap gap-1">
+                                {g.mentions.map((m, j) =>
+                                  (m.pages.length ? m.pages.slice(0, 4) : [0]).map((pg, k) => (
+                                    <button key={j + "-" + k}
+                                            onClick={() => router.push("/documents/" + m.document_id + (pg ? "?page=" + pg : ""))}
+                                            title={m.title + (pg ? " · sayfa " + pg : "")}
+                                            className="max-w-[200px] truncate rounded-full border bg-surface px-2 py-0.5 text-[11px] text-text-secondary hover:border-accent-purple/50 hover:text-accent-purple">
+                                      {m.title}{pg ? " · s." + pg : ""}
+                                    </button>
+                                  )))}
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
                     ))}
                   </div>
-                </div>
-              )}
-            </div>
+                );
+              })()}
+            </>
           )}
         </div>
       )}

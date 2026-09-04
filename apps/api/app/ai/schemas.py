@@ -53,3 +53,29 @@ STUDY_ITEMS_SCHEMA = {
         "required": ["items"],
     },
 }
+
+GLOSSARY_SCHEMA = {
+    "name": "glossary",
+    "strict": True,
+    "schema": {
+        "type": "object",
+        "additionalProperties": False,
+        "properties": {
+            "items": {
+                "type": "array",
+                "items": {
+                    "type": "object", "additionalProperties": False,
+                    "properties": {
+                        "term": {"type": "string"},
+                        "kind": {"type": "string",
+                                 "enum": ["kisi", "yer", "olay", "antlasma", "kurum", "kavram"]},
+                        "definition": {"type": "string"},
+                        "pages": {"type": "array", "items": {"type": "integer"}},
+                    },
+                    "required": ["term", "kind", "definition", "pages"],
+                },
+            }
+        },
+        "required": ["items"],
+    },
+}

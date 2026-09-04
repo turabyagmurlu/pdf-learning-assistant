@@ -1,10 +1,11 @@
+import json
 import uuid
 from datetime import datetime, timezone
 from fastapi import APIRouter, Depends
 from pydantic import BaseModel
 from app.deps import db, current_user
 from app.services import rag_service
-from app.services.analysis_service import generate_study_items, feynman_review, lecture_script
+from app.services.analysis_service import generate_study_items, feynman_review, lecture_script, extract_glossary
 from app.ai.factory import get_embeddings, get_llm
 from app.core.errors import NotFound, AppError
 from app.config import settings
@@ -207,6 +208,83 @@ async def lecture(cid: str, conn=Depends(db), user=Depends(current_user)):
         raise AppError("Ders oluşturmak için yeterli içerik yok.")
     script = lecture_script(context, col["title"])
     return {"script": script, "title": col["title"], "documents": len(docs)}
+
+
+def _norm_term(t: str) -> str:
+    t = t.strip().lower()
+    for a, b in (("â", "a"), ("î", "i"), ("û", "u"), ("’", "'"), ("‘", "'")):
+        t = t.replace(a, b)
+    return " ".join(t.split())
+
+
+def _glossary_context(rows, max_chunks: int = 45) -> str:
+    rows = list(rows)
+    n = len(rows)
+    if n == 0:
+        return ""
+    skip = min(2, n // 12) if n >= 8 else 0
+    pool = rows[skip:] if n - skip >= 3 else rows
+    if len(pool) > max_chunks:
+        step = len(pool) / max_chunks
+        pool = [pool[int(i * step)] for i in range(max_chunks)]
+    return "\n\n".join((f"[s.{r['page_number']}] " if r["page_number"] else "") + (r["content"] or "")
+                       for r in pool)
+
+
+@router.get("/collections/{cid}/glossary")
+async def get_glossary(cid: str, conn=Depends(db), user=Depends(current_user)):
+    col = await conn.fetchrow("SELECT id, glossary, glossary_at FROM collections WHERE id=$1 AND user_id=$2",
+                              cid, user["id"])
+    if not col:
+        raise NotFound("Çalışma kitabı bulunamadı.")
+    g = col["glossary"]
+    if isinstance(g, str):
+        try:
+            g = json.loads(g)
+        except Exception:
+            g = None
+    return {"items": (g or {}).get("items", []) if isinstance(g, dict) else [],
+            "generated_at": col["glossary_at"].isoformat() if col["glossary_at"] else None}
+
+
+@router.post("/collections/{cid}/glossary")
+async def build_glossary(cid: str, conn=Depends(db), user=Depends(current_user)):
+    """Kitaptaki tum belgelerden kisi / yer / olay / antlasma / kurum / kavram sozlugu cikarir."""
+    col = await conn.fetchrow("SELECT id, title FROM collections WHERE id=$1 AND user_id=$2", cid, user["id"])
+    if not col:
+        raise NotFound("Çalışma kitabı bulunamadı.")
+    docs = await conn.fetch(
+        "SELECT id, title FROM documents WHERE user_id=$1 AND collection_id=$2 AND status='ready' ORDER BY created_at",
+        user["id"], cid)
+    if not docs:
+        raise AppError("Bu çalışma kitabında hazır belge yok.")
+
+    merged: dict[str, dict] = {}
+    for d in docs:
+        rows = await conn.fetch(
+            "SELECT content, page_number FROM document_chunks WHERE document_id=$1 ORDER BY chunk_index", d["id"])
+        ctx = _glossary_context(rows)
+        if len(ctx) < 200:
+            continue
+        try:
+            items = extract_glossary(ctx, d["title"])
+        except Exception:
+            continue
+        for it in items:
+            key = _norm_term(it["term"])
+            entry = merged.get(key)
+            if not entry:
+                entry = {"term": it["term"], "kind": it["kind"], "definition": it["definition"], "mentions": []}
+                merged[key] = entry
+            elif len(it["definition"]) > len(entry["definition"]):
+                entry["definition"] = it["definition"]
+            entry["mentions"].append({"document_id": str(d["id"]), "title": d["title"], "pages": it["pages"]})
+
+    items = sorted(merged.values(), key=lambda x: _norm_term(x["term"]))
+    payload = {"items": items}
+    now = datetime.now(timezone.utc)
+    await conn.execute("UPDATE collections SET glossary=$1, glossary_at=$2 WHERE id=$3", payload, now, cid)
+    return {"items": items, "generated_at": now.isoformat(), "documents": len(docs)}
 
 
 class ColStudyIn(BaseModel):

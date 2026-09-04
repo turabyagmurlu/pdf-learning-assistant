@@ -95,8 +95,14 @@ export default function DocumentPage({ params }: { params: { id: string } }) {
   useEffect(() => {
     if (!numPages || restored) return;
     try {
-      const saved = parseInt(localStorage.getItem(`reader.pos.${id}`) || "", 10);
-      if (!isNaN(saved) && saved > 1 && saved <= numPages) setPage(saved);
+      // URL'de ?page=N varsa (sozluk / baglanti / kaynak tiklamasi) o sayfaya git
+      const want = parseInt(new URLSearchParams(window.location.search).get("page") || "", 10);
+      if (!isNaN(want) && want >= 1 && want <= numPages) {
+        setPage(want);
+      } else {
+        const saved = parseInt(localStorage.getItem(`reader.pos.${id}`) || "", 10);
+        if (!isNaN(saved) && saved > 1 && saved <= numPages) setPage(saved);
+      }
     } catch {}
     setRestored(true);
   }, [numPages, restored, id]);

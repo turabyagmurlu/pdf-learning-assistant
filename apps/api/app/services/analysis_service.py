@@ -1,7 +1,42 @@
 import json
 from app.ai.factory import get_llm
-from app.ai.schemas import DOCUMENT_ANALYSIS_SCHEMA, STUDY_ITEMS_SCHEMA
+from app.ai.schemas import DOCUMENT_ANALYSIS_SCHEMA, STUDY_ITEMS_SCHEMA, GLOSSARY_SCHEMA
 from app.config import settings
+
+
+def extract_glossary(context: str, doc_title: str, max_items: int = 40) -> list[dict]:
+    """Bir belgeden kisi / yer / olay / antlasma / kurum / kavram listesi cikarir."""
+    llm = get_llm()
+    messages = [
+        {"role": "system", "content":
+            "Sen bir tarih ve sosyal bilimler editörüsün. Verilen metinden bir öğrencinin sınav için "
+            "bilmesi gereken özel adları ve kavramları çıkarırsın. Türkçe yaz, kaynağa sadık kal.\n\n"
+            "KURALLAR:\n"
+            "1. kind: kisi (insan), yer (şehir/bölge/ülke/cephe), olay (savaş, isyan, kongre, seçim…), "
+            "antlasma (antlaşma, sözleşme, mütareke, kararname), kurum (hükümet, parti, cemiyet, ordu, "
+            "gazete, meclis), kavram (ideoloji, politika, terim).\n"
+            "2. term: metindeki en yaygın biçimiyle, kısa ve temiz (örn. 'Enver Paşa', 'Sakarya Meydan "
+            "Muharebesi', 'Ankara Antlaşması'). Unvan varsa koru.\n"
+            "3. definition: 1-2 cümle; KİM/NE olduğu + bu metinde NEDEN önemli olduğu. "
+            "'Metinde geçen', 'yazara göre' gibi ifadeler kullanma.\n"
+            "4. pages: terimin geçtiği sayfa numaraları (parçalarda [s.N] etiketi var). En fazla 6 sayfa.\n"
+            "5. Belgenin yazarı, yayınlandığı üniversite/dergi, kaynakçadaki eser adları ve yazarları DAHİL DEĞİL. "
+            "Yalnızca konunun içindeki adlar ve kavramlar.\n"
+            "6. Aynı şeyi iki kez yazma; önemsiz/tek geçen ayrıntıları atla. "
+            f"En fazla {max_items} madde; önem sırasına göre."},
+        {"role": "user", "content": f"BELGE: {doc_title}\n\n{context[:22000]}"},
+    ]
+    raw = llm.structured(messages, GLOSSARY_SCHEMA, model=settings.active_llm_model)
+    items = json.loads(raw).get("items", [])
+    out = []
+    for it in items:
+        t = (it.get("term") or "").strip()
+        if len(t) < 2:
+            continue
+        pages = sorted({int(p) for p in (it.get("pages") or []) if isinstance(p, (int, float)) and p > 0})[:6]
+        out.append({"term": t, "kind": it.get("kind") or "kavram",
+                    "definition": (it.get("definition") or "").strip(), "pages": pages})
+    return out
 
 
 def analyze_document(full_text: str) -> dict:
