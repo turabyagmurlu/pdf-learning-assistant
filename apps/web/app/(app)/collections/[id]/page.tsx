@@ -636,7 +636,7 @@ export default function CollectionPage({ params }: { params: { id: string } }) {
                       <span className="min-w-0 flex-1">
                         <span className="block truncate text-sm font-medium">{d.title}</span>
                         {d.short_summary && (
-                          <span className="mt-0.5 block line-clamp-1 text-xs text-text-secondary">{d.short_summary}</span>
+                          <span className="mt-0.5 line-clamp-1 text-xs text-text-secondary">{d.short_summary}</span>
                         )}
                       </span>
                     </button>
