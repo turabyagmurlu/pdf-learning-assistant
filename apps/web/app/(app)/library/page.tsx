@@ -127,7 +127,10 @@ export default function LibraryPage() {
         <p className="mt-1 text-sm text-text-secondary">PDF'lerini yükle, düzenle, kategorilere ayır; sana çalışılabilir hale getireyim.</p>
       </div>
 
-      <div className="mt-5 flex flex-wrap items-center gap-2">
+      <div className="mt-5 flex flex-col gap-6 lg:flex-row">
+      <div className="min-w-0 flex-1">
+
+      <div className="flex flex-wrap items-center gap-2">
         <div className="flex min-w-[220px] flex-1 items-center gap-2 rounded-xl border bg-surface px-3">
           <Search size={16} className="text-text-secondary" />
           <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Ara: başlık, özet, etiket…" aria-label="Belgelerde ara" className="w-full bg-transparent py-2 text-sm outline-none" />
@@ -161,30 +164,6 @@ export default function LibraryPage() {
           ))}
         </div>
       )}
-
-      <div className="mt-3 flex flex-wrap items-center gap-1.5">
-        <span className="mr-1 flex items-center gap-1 text-xs text-text-secondary"><FolderOpen size={13} /> Klasörler:</span>
-        <button onClick={() => setFolder("")} className={cx("rounded-full px-2.5 py-1 text-xs", folder === "" ? "bg-accent-purple/15 text-accent-purple" : "border bg-surface text-text-secondary")}>Tümü</button>
-        {collections.map((c) => (
-          <span key={c.id} className={cx("inline-flex items-center overflow-hidden rounded-full", folder === c.id ? "bg-accent-purple/15" : "border bg-surface")}>
-            <button onClick={() => setFolder(folder === c.id ? "" : c.id)} title="Sadece bunları göster"
-                    className={cx("px-2.5 py-1 text-xs", folder === c.id ? "text-accent-purple" : "text-text-secondary hover:text-accent-purple")}>{c.title}</button>
-            <button onClick={() => router.push("/collections/" + c.id)} title={c.title + " çalışma kitabını aç"}
-                    aria-label={c.title + " çalışma kitabını aç"}
-                    className={cx("border-l px-1.5 py-1", folder === c.id ? "border-accent-purple/30 text-accent-purple" : "text-text-secondary hover:text-accent-purple")}>
-              <BookOpen size={12} />
-            </button>
-          </span>
-        ))}
-        {creatingFolder ? (
-          <span className="flex items-center gap-1">
-            <input autoFocus value={newFolder} onChange={(e) => setNewFolder(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") createFolder(); if (e.key === "Escape") setCreatingFolder(false); }} placeholder="Klasör adı" aria-label="Yeni klasör adı" className="w-28 rounded-full border bg-surface px-2.5 py-1 text-xs outline-none focus:border-accent-purple" />
-            <button onClick={createFolder} aria-label="Klasörü oluştur" className="rounded-full bg-accent-purple p-1 text-white"><Check size={12} /></button>
-          </span>
-        ) : (
-          <button onClick={() => setCreatingFolder(true)} aria-label="Yeni klasör" className="flex items-center gap-1 rounded-full border border-dashed px-2.5 py-1 text-xs text-text-secondary hover:border-accent-purple/50"><FolderPlus size={13} /> Yeni</button>
-        )}
-      </div>
 
       <div
         onDragOver={(e) => { e.preventDefault(); setDrag(true); }}
@@ -255,6 +234,77 @@ export default function LibraryPage() {
           ))}
         </div>
       )}
+
+      </div>
+
+      {/* RAF: klasorler */}
+      <aside className="w-full shrink-0 lg:w-64">
+        <div className="rounded-2xl border bg-surface p-3">
+          <div className="mb-2 flex items-center gap-1.5 px-1 text-sm font-medium text-text-primary">
+            <FolderOpen size={15} className="text-accent-purple" /> Raf
+          </div>
+
+          <button onClick={() => setFolder("")}
+                  className={cx("flex w-full items-center justify-between rounded-lg px-2.5 py-2 text-sm",
+                    folder === "" ? "bg-accent-purple/10 text-accent-purple" : "text-text-secondary hover:bg-surface-muted")}>
+            <span>Tüm belgeler</span>
+            <span className="text-xs">{docs.length}</span>
+          </button>
+
+          <div className="mt-1 space-y-0.5">
+            {collections.map((c) => {
+              const n = docs.filter((d) => d.collection_id === c.id).length;
+              const on = folder === c.id;
+              return (
+                <div key={c.id}
+                     className={cx("group flex items-center rounded-lg", on ? "bg-accent-purple/10" : "hover:bg-surface-muted")}>
+                  <button onClick={() => setFolder(on ? "" : c.id)} title="Sadece bunları göster"
+                          className={cx("flex min-w-0 flex-1 items-center gap-2 px-2.5 py-2 text-left text-sm",
+                            on ? "text-accent-purple" : "text-text-secondary")}>
+                    <FolderOpen size={14} className="shrink-0 opacity-70" />
+                    <span className="truncate">{c.title}</span>
+                  </button>
+                  <span className={cx("px-1 text-xs", on ? "text-accent-purple" : "text-text-secondary")}>{n}</span>
+                  <button onClick={() => router.push("/collections/" + c.id)}
+                          title={c.title + " çalışma kitabını aç"} aria-label={c.title + " çalışma kitabını aç"}
+                          className="rounded-md px-2 py-2 text-text-secondary hover:text-accent-purple">
+                    <BookOpen size={14} />
+                  </button>
+                </div>
+              );
+            })}
+          </div>
+
+          {(() => {
+            const loose = docs.filter((d) => !d.collection_id).length;
+            return loose > 0 ? (
+              <p className="mt-2 px-2.5 text-xs text-text-secondary">{loose} belge hiçbir klasörde değil</p>
+            ) : null;
+          })()}
+
+          <div className="mt-2 border-t pt-2">
+            {creatingFolder ? (
+              <div className="flex items-center gap-1">
+                <input autoFocus value={newFolder} onChange={(e) => setNewFolder(e.target.value)}
+                       onKeyDown={(e) => { if (e.key === "Enter") createFolder(); if (e.key === "Escape") setCreatingFolder(false); }}
+                       placeholder="Klasör adı" aria-label="Yeni klasör adı"
+                       className="min-w-0 flex-1 rounded-lg border bg-surface px-2.5 py-1.5 text-sm outline-none focus:border-accent-purple" />
+                <button onClick={createFolder} aria-label="Klasörü oluştur" className="rounded-lg bg-accent-purple p-1.5 text-white"><Check size={14} /></button>
+              </div>
+            ) : (
+              <button onClick={() => setCreatingFolder(true)}
+                      className="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-sm text-text-secondary hover:bg-surface-muted hover:text-accent-purple">
+                <FolderPlus size={14} /> Yeni klasör
+              </button>
+            )}
+          </div>
+        </div>
+
+        <p className="mt-2 px-1 text-xs text-text-secondary">
+          Klasöre belge eklemek için 📖 ile çalışma kitabını aç → <b>Belge ekle</b>.
+        </p>
+      </aside>
+      </div>
 
       {editing && <EditModal doc={editing} collections={collections} onClose={() => setEditing(null)} onSave={(b) => { patchDoc(editing.id, b); setEditing(null); }} />}
     </div>

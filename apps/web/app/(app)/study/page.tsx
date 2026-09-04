@@ -19,16 +19,23 @@ export default function StudyPage() {
   const [items, setItems] = useState<Item[]>([]);
   const [loading, setLoading] = useState(true);
   const [tab, setTab] = useState<"overview" | "cards" | "quiz">("overview");
+  const [focusDoc, setFocusDoc] = useState(""); // "" = tum belgeler
 
   async function loadDocs() { try { const d = await api("/documents"); setDocs((d as Doc[]).filter((x) => x.status === "ready")); } catch {} }
   async function loadItems() { try { const r = await fetch(API + "/study/items", { headers: H() }); if (r.ok) setItems(await r.json()); } catch {} setLoading(false); }
   useEffect(() => { loadDocs(); loadItems(); }, []);
 
   const now = Date.now();
-  const flashcards = useMemo(() => items.filter((i) => i.type === "flashcard" || i.type === "open_question"), [items]);
-  const quizzes = useMemo(() => items.filter((i) => i.type === "quiz"), [items]);
+  const scoped = useMemo(() => (focusDoc ? items.filter((i) => i.document_id === focusDoc) : items), [items, focusDoc]);
+  const flashcards = useMemo(() => scoped.filter((i) => i.type === "flashcard" || i.type === "open_question"), [scoped]);
+  const quizzes = useMemo(() => scoped.filter((i) => i.type === "quiz"), [scoped]);
   const due = useMemo(() => flashcards.filter((i) => !i.due_at || new Date(i.due_at).getTime() <= now), [flashcards, now]);
   const mastered = useMemo(() => flashcards.filter((i) => (i.interval_days || 0) >= 21), [flashcards]);
+  const titleOf = useMemo(() => {
+    const m: Record<string, string> = {};
+    for (const d of docs) m[d.id] = d.title;
+    return m;
+  }, [docs]);
 
   return (
     <div className="mx-auto w-full max-w-5xl px-6 py-8">
@@ -37,11 +44,28 @@ export default function StudyPage() {
         <p className="mt-1 text-sm text-text-secondary">Belgelerinden AI ile flashcard ve quiz üret; aralıklı tekrarla kalıcı öğren.</p>
       </div>
 
+      {/* kapsam secici: tum sayfayi etkiler */}
+      <div className="mb-4 flex flex-wrap items-center gap-2 rounded-xl border bg-surface px-3 py-2">
+        <span className="text-xs text-text-secondary">Çalışılan:</span>
+        <select value={focusDoc} onChange={(e) => setFocusDoc(e.target.value)} aria-label="Hangi belge"
+                className="min-w-[180px] rounded-lg border bg-surface-muted px-2.5 py-1.5 text-sm">
+          <option value="">Tüm belgeler</option>
+          {docs.map((d) => <option key={d.id} value={d.id}>{d.title}</option>)}
+        </select>
+        {focusDoc && (
+          <button onClick={() => setFocusDoc("")} className="text-xs text-accent-purple hover:underline">temizle</button>
+        )}
+      </div>
+
       <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
-        <Stat icon={<Clock size={16} />} label="Bugün tekrar" value={due.length} accent />
-        <Stat icon={<Layers size={16} />} label="Toplam kart" value={flashcards.length} />
-        <Stat icon={<Trophy size={16} />} label="Öğrenilen" value={mastered.length} />
-        <Stat icon={<BookOpen size={16} />} label="Quiz sorusu" value={quizzes.length} />
+        <Stat icon={<Clock size={16} />} label="Bugün tekrar" value={due.length} accent
+              hint="Aralıklı tekrar planına göre bugün görmen gereken kart sayısı." />
+        <Stat icon={<Layers size={16} />} label="Toplam kart" value={flashcards.length}
+              hint="Flashcard + açık uçlu soruların toplamı." />
+        <Stat icon={<Trophy size={16} />} label="Öğrenilen" value={mastered.length}
+              hint="Tekrar aralığı 21 güne çıkmış, yani oturmuş kartlar." />
+        <Stat icon={<BookOpen size={16} />} label="Quiz sorusu" value={quizzes.length}
+              hint="Çoktan seçmeli soru sayısı." />
       </div>
 
       <div className="mt-6 flex w-fit gap-1 rounded-xl border bg-surface p-1">
@@ -52,47 +76,60 @@ export default function StudyPage() {
 
       <div className="mt-5">
         {loading ? (<p className="text-sm text-text-secondary">Yükleniyor…</p>) :
-         tab === "overview" ? <Overview docs={docs} items={items} onChanged={loadItems} /> :
-         tab === "cards" ? <Cards items={flashcards} due={due} onReview={loadItems} /> :
-         <Quiz docs={docs} items={quizzes} />}
+         tab === "overview" ? (
+           <Overview docs={docs} items={items} onChanged={loadItems}
+                     onStudy={(id) => { setFocusDoc(id); setTab("cards"); }}
+                     onQuiz={(id) => { setFocusDoc(id); setTab("quiz"); }} />
+         ) :
+         tab === "cards" ? <Cards items={flashcards} due={due} onReview={loadItems} titleOf={titleOf} /> :
+         <Quiz items={quizzes} titleOf={titleOf} />}
       </div>
     </div>
   );
 }
 
-function Stat({ icon, label, value, accent }: { icon: any; label: string; value: number; accent?: boolean }) {
+function Stat({ icon, label, value, accent, hint }: { icon: any; label: string; value: number; accent?: boolean; hint?: string }) {
   return (
-    <div className={cx("rounded-2xl border p-4", accent ? "border-accent-purple/40 bg-accent-purple/5" : "bg-surface")}>
+    <div title={hint} className={cx("rounded-2xl border p-4", accent ? "border-accent-purple/40 bg-accent-purple/5" : "bg-surface")}>
       <div className="flex items-center gap-1.5 text-text-secondary">{icon}<span className="text-xs">{label}</span></div>
       <div className={cx("mt-1 text-2xl font-semibold", accent ? "text-accent-purple" : "text-text-primary")}>{value}</div>
     </div>
   );
 }
 
-function Overview({ docs, items, onChanged }: { docs: Doc[]; items: Item[]; onChanged: () => void }) {
+function Overview({ docs, items, onChanged, onStudy, onQuiz }: {
+  docs: Doc[]; items: Item[]; onChanged: () => void;
+  onStudy: (id: string) => void; onQuiz: (id: string) => void;
+}) {
   const [docId, setDocId] = useState("");
   const [type, setType] = useState("flashcard");
   const [count, setCount] = useState(8);
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState("");
+  const [lastOk, setLastOk] = useState<{ docId: string; type: string } | null>(null);
   useEffect(() => { if (!docId && docs.length) setDocId(docs[0].id); }, [docs, docId]);
 
   async function generate() {
     if (!docId) return;
-    setBusy(true); setMsg("");
+    setBusy(true); setMsg(""); setLastOk(null);
     try {
       const r = await fetch(API + "/documents/" + docId + "/study/generate", { method: "POST", headers: H(), body: JSON.stringify({ type, count }) });
       const j = await r.json();
-      if (r.ok) { setMsg((j.created || 0) + " öğe üretildi."); onChanged(); } else { setMsg("Üretilemedi."); }
+      if (r.ok) { setMsg((j.created || 0) + " öğe üretildi."); setLastOk({ docId, type }); onChanged(); } else { setMsg("Üretilemedi."); }
     } catch { setMsg("Hata oluştu."); }
     setBusy(false);
   }
 
   const byDoc = useMemo(() => {
-    const m: Record<string, { title: string; total: number; fc: number; qz: number }> = {};
-    for (const d of docs) m[d.id] = { title: d.title, total: 0, fc: 0, qz: 0 };
+    const m: Record<string, { id: string; title: string; total: number; fc: number; qz: number }> = {};
+    for (const d of docs) m[d.id] = { id: d.id, title: d.title, total: 0, fc: 0, qz: 0 };
     for (const it of items) { const e = m[it.document_id]; if (!e) continue; e.total++; if (it.type === "quiz") e.qz++; else e.fc++; }
     return Object.values(m).filter((x) => x.total > 0);
+  }, [docs, items]);
+
+  const emptyDocs = useMemo(() => {
+    const has = new Set(items.map((i) => i.document_id));
+    return docs.filter((d) => !has.has(d.id));
   }, [docs, items]);
 
   return (
@@ -117,6 +154,12 @@ function Overview({ docs, items, onChanged }: { docs: Doc[]; items: Item[]; onCh
           {msg && <span className="text-sm text-text-secondary">{msg}</span>}
         </div>
         <p className="mt-2 text-xs text-text-secondary">Materyal belgenin içeriğinden AI ile üretilir; birkaç saniye sürebilir.</p>
+        {lastOk && (
+          <button onClick={() => (lastOk.type === "quiz" ? onQuiz(lastOk.docId) : onStudy(lastOk.docId))}
+                  className="mt-3 flex items-center gap-1.5 rounded-lg border border-accent-purple/40 bg-accent-purple/5 px-3 py-1.5 text-sm text-accent-purple">
+            <Play size={14} /> Şimdi çalış
+          </button>
+        )}
       </div>
 
       <div>
@@ -125,12 +168,45 @@ function Overview({ docs, items, onChanged }: { docs: Doc[]; items: Item[]; onCh
           <div className="rounded-2xl border bg-surface p-8 text-center text-sm text-text-secondary">Henüz materyal yok. Yukarıdan bir belge seçip üret.</div>
         ) : (
           <div className="grid gap-2 sm:grid-cols-2">
-            {byDoc.map((x, i) => (
-              <div key={i} className="flex items-center justify-between rounded-xl border bg-surface p-3">
-                <span className="truncate font-medium text-text-primary">{x.title}</span>
-                <span className="shrink-0 text-xs text-text-secondary">{x.fc} kart · {x.qz} quiz</span>
+            {byDoc.map((x) => (
+              <div key={x.id} className="rounded-xl border bg-surface p-3">
+                <div className="flex items-center justify-between gap-2">
+                  <span className="truncate font-medium text-text-primary">{x.title}</span>
+                  <span className="shrink-0 text-xs text-text-secondary">{x.fc} kart · {x.qz} quiz</span>
+                </div>
+                <div className="mt-2.5 flex gap-2">
+                  <button onClick={() => onStudy(x.id)} disabled={x.fc === 0}
+                          className="flex items-center gap-1.5 rounded-lg bg-accent-purple px-3 py-1.5 text-xs text-white disabled:opacity-40">
+                    <Play size={13} /> Kart çalış
+                  </button>
+                  <button onClick={() => onQuiz(x.id)} disabled={x.qz === 0}
+                          className="flex items-center gap-1.5 rounded-lg border px-3 py-1.5 text-xs text-text-secondary hover:border-accent-purple/50 disabled:opacity-40">
+                    <BookOpen size={13} /> Quiz çöz
+                  </button>
+                  <button onClick={() => { setDocId(x.id); }}
+                          title="Bu belge için yeni materyal üret"
+                          className="ml-auto rounded-lg border px-2.5 py-1.5 text-xs text-text-secondary hover:border-accent-purple/50">
+                    <Sparkles size={13} />
+                  </button>
+                </div>
               </div>
             ))}
+          </div>
+        )}
+
+        {emptyDocs.length > 0 && (
+          <div className="mt-3 rounded-xl border border-dashed p-3">
+            <p className="text-xs text-text-secondary">
+              Bu belgelerden henüz materyal üretilmedi:
+            </p>
+            <div className="mt-1.5 flex flex-wrap gap-1.5">
+              {emptyDocs.map((d) => (
+                <button key={d.id} onClick={() => setDocId(d.id)}
+                        className="rounded-full border bg-surface px-2.5 py-1 text-xs text-text-secondary hover:border-accent-purple/50 hover:text-accent-purple">
+                  {d.title}
+                </button>
+              ))}
+            </div>
           </div>
         )}
       </div>
@@ -138,7 +214,7 @@ function Overview({ docs, items, onChanged }: { docs: Doc[]; items: Item[]; onCh
   );
 }
 
-function Cards({ items, due, onReview }: { items: Item[]; due: Item[]; onReview: () => void }) {
+function Cards({ items, due, onReview, titleOf }: { items: Item[]; due: Item[]; onReview: () => void; titleOf: Record<string, string> }) {
   const [mode, setMode] = useState<"due" | "all">("due");
   const [queue, setQueue] = useState<Item[]>([]);
   const [idx, setIdx] = useState(0);
@@ -185,9 +261,9 @@ function Cards({ items, due, onReview }: { items: Item[]; due: Item[]; onReview:
   const it = queue[idx];
   return (
     <div>
-      <div className="mb-3 flex items-center justify-between text-xs text-text-secondary">
-        <span>{idx + 1} / {queue.length}</span>
-        <span>{mode === "due" ? "Bugünkü tekrar" : "Karışık"}</span>
+      <div className="mb-3 flex items-center justify-between gap-2 text-xs text-text-secondary">
+        <span className="truncate">{idx + 1} / {queue.length} · {titleOf[it?.document_id] || "belge"}</span>
+        <span className="shrink-0">{mode === "due" ? "Bugünkü tekrar" : "Karışık"}</span>
       </div>
       <div className="mb-4 h-1 w-full overflow-hidden rounded-full bg-surface-muted"><div className="h-full bg-accent-purple transition-all" style={{ width: (idx / queue.length * 100) + "%" }} /></div>
 
@@ -220,15 +296,13 @@ function Cards({ items, due, onReview }: { items: Item[]; due: Item[]; onReview:
   );
 }
 
-function Quiz({ docs, items }: { docs: Doc[]; items: Item[] }) {
-  const [docId, setDocId] = useState("");
+function Quiz({ items, titleOf }: { items: Item[]; titleOf: Record<string, string> }) {
   const [session, setSession] = useState<Item[] | null>(null);
   const [idx, setIdx] = useState(0);
   const [picked, setPicked] = useState<string | null>(null);
   const [answers, setAnswers] = useState<{ q: Item; choice: string; correct: boolean }[]>([]);
-  useEffect(() => { if (!docId && docs.length) setDocId(docs[0].id); }, [docs, docId]);
 
-  const pool = useMemo(() => docId ? items.filter((i) => i.document_id === docId) : items, [items, docId]);
+  const pool = items;
 
   function start() { const s = [...pool].sort(() => Math.random() - 0.5).slice(0, 10); setSession(s); setIdx(0); setPicked(null); setAnswers([]); }
 
@@ -243,15 +317,16 @@ function Quiz({ docs, items }: { docs: Doc[]; items: Item[] }) {
 
   if (!session) {
     return (
-      <div className="rounded-2xl border bg-surface p-6">
-        <h3 className="mb-3 font-medium">Quiz başlat</h3>
-        <div className="flex flex-wrap items-center gap-2">
-          <select value={docId} onChange={(e) => setDocId(e.target.value)} aria-label="Belge" className="min-w-[180px] rounded-lg border bg-surface-muted px-3 py-2 text-sm">
-            {docs.map((d) => <option key={d.id} value={d.id}>{d.title}</option>)}
-          </select>
-          <button onClick={start} disabled={pool.length === 0} className="flex items-center gap-1.5 rounded-lg bg-accent-purple px-4 py-2 text-sm text-white disabled:opacity-50"><Play size={15} /> Başla ({pool.length})</button>
-        </div>
-        {pool.length === 0 && <p className="mt-3 text-sm text-text-secondary">Bu belge için quiz sorusu yok. Genel Bakış'tan "Quiz" üret.</p>}
+      <div className="rounded-2xl border bg-surface p-6 text-center">
+        <BookOpen size={26} className="mx-auto text-accent-purple" />
+        <p className="mt-2 text-sm text-text-secondary">
+          {pool.length === 0
+            ? "Burada quiz sorusu yok. Genel Bakış'tan \"Quiz\" üret ya da yukarıdan başka belge seç."
+            : `${pool.length} soru hazır. Her turda en fazla 10 soru karışık gelir.`}
+        </p>
+        <button onClick={start} disabled={pool.length === 0} className="mx-auto mt-4 flex items-center gap-1.5 rounded-lg bg-accent-purple px-4 py-2 text-sm text-white disabled:opacity-50">
+          <Play size={15} /> Başla
+        </button>
       </div>
     );
   }
@@ -285,7 +360,7 @@ function Quiz({ docs, items }: { docs: Doc[]; items: Item[] }) {
   const opts = toArr(q.options);
   return (
     <div>
-      <div className="mb-3 flex items-center justify-between text-xs text-text-secondary"><span>Soru {idx + 1} / {session.length}</span><span>Doğru: {answers.filter((a) => a.correct).length}</span></div>
+      <div className="mb-3 flex items-center justify-between gap-2 text-xs text-text-secondary"><span className="truncate">Soru {idx + 1} / {session.length} · {titleOf[q?.document_id] || "belge"}</span><span className="shrink-0">Doğru: {answers.filter((a) => a.correct).length}</span></div>
       <div className="rounded-2xl border bg-surface p-6">
         <p className="text-lg text-text-primary">{q.question}</p>
         <div className="mt-4 space-y-2">
