@@ -40,6 +40,42 @@ def explain_page(text: str) -> str:
     return llm.complete(messages, model=settings.active_llm_model)
 
 
+def feynman_review(concept: str, explanation: str, context: str) -> str:
+    """Kullanicinin kendi anlatimini kaynakla karsilastirir (Feynman teknigi)."""
+    llm = get_llm()
+    messages = [
+        {"role": "system", "content":
+            "Sen sabirli bir ogretmensin. Ogrenci bir kavrami kendi cumleleriyle anlatti. "
+            "Gorevin: SADECE verilen kaynaklara dayanarak anlatimini degerlendirmek. "
+            "Su yapida, Turkce, sicak ve cesaretlendirici yaz:\n"
+            "1) DOGRU KAVRADIKLARIN: kisa madde madde.\n"
+            "2) EKSIK VEYA KARISTIRDIKLARIN: nazikce, her biri icin kaynaktaki dogrusunu yaz.\n"
+            "3) BUNU DA EKLESEYDIN: anlatimini tamamlayacak 1-2 onemli nokta.\n"
+            "4) TEK CUMLELIK OZET: kavramin en sade hali.\n"
+            "Kaynakta olmayan bilgi uydurma. Ogrenci hicbir sey bilmiyorsa bile kucuk dusurme."},
+        {"role": "user", "content":
+            f"Kavram: {concept}\n\nOgrencinin anlatimi:\n{explanation[:3000]}\n\n"
+            f"Kaynaklar:\n{context[:9000]}"},
+    ]
+    return llm.complete(messages, model=settings.active_llm_model)
+
+
+def lecture_script(context: str, title: str) -> str:
+    """Koleksiyon icerigini sesli dinlenebilir akici bir derse cevirir."""
+    llm = get_llm()
+    messages = [
+        {"role": "system", "content":
+            "Sen bir konuyu sesli anlatan ogretmensin. Metin SESLI OKUNACAK: baslik, madde "
+            "isareti, yildiz, numara veya bicimlendirme KULLANMA. Sadece duz, akici cumleler. "
+            "Dinleyiciyi 'sen' diye kabul et. Once konuya kisa bir giris yap, sonra ana "
+            "fikirleri birbirine baglayarak anlat, aralarda 'simdi sunu dusun' gibi kucuk "
+            "duraklamalar koy, sonunda kisa bir toparlama yap. Yaklasik 900-1200 kelime."},
+        {"role": "user", "content":
+            f"Konu: {title}\n\nAsagidaki kaynaklardan yararlanarak dersi anlat:\n\n{context[:14000]}"},
+    ]
+    return llm.complete(messages, model=settings.active_llm_model)
+
+
 def generate_study_items(context: str, kind: str, count: int = 8) -> list[dict]:
     llm = get_llm()
     instr = {

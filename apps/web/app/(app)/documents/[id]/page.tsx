@@ -7,8 +7,9 @@ import { useAnnotations } from "@/hooks/useAnnotations";
 import ReaderToolbar from "@/components/reader/ReaderToolbar";
 import NotesPanel from "@/components/reader/NotesPanel";
 import ExplainPanel from "@/components/reader/ExplainPanel";
+import ConnectionsPanel from "@/components/reader/ConnectionsPanel";
 import { ChatPanel } from "@/components/chat/ChatPanel";
-import { X, Sparkles, StickyNote, Volume2 } from "lucide-react";
+import { X, Sparkles, StickyNote, Volume2, Link2 } from "lucide-react";
 
 // react-pdf must be client-only (no SSR)
 const PdfReader = dynamic(() => import("@/components/reader/PdfReader"), { ssr: false });
@@ -35,7 +36,7 @@ export default function DocumentPage({ params }: { params: { id: string } }) {
   const [focus, setFocus] = useState(false);
   const [leftOpen, setLeftOpen] = useState(true);
   const [rightOpen, setRightOpen] = useState(true);
-  const [rightTab, setRightTab] = useState<"ai" | "notes" | "explain">("ai");
+  const [rightTab, setRightTab] = useState<"ai" | "notes" | "explain" | "links">("ai");
   const [peek, setPeek] = useState<"left" | "right" | null>(null);
   const [restored, setRestored] = useState(false);
   const [cardMsg, setCardMsg] = useState("");
@@ -284,15 +285,19 @@ export default function DocumentPage({ params }: { params: { id: string } }) {
             <div className="flex border-b">
               <button onClick={() => setRightTab("ai")} title="AI Asistan"
                       className={`flex flex-1 items-center justify-center gap-1.5 py-2.5 text-sm ${rightTab === "ai" ? "border-b-2 border-accent-purple text-accent-purple" : "text-text-secondary"}`}>
-                <Sparkles size={15} /> Asistan
+                <Sparkles size={15} /> AI
               </button>
               <button onClick={() => setRightTab("explain")} title="Bu sayfayı anlat ve sesli oku"
                       className={`flex flex-1 items-center justify-center gap-1.5 py-2.5 text-sm ${rightTab === "explain" ? "border-b-2 border-accent-purple text-accent-purple" : "text-text-secondary"}`}>
-                <Volume2 size={15} /> Anlat
+                <Volume2 size={15} /> Sesli
+              </button>
+              <button onClick={() => setRightTab("links")} title="Bu sayfayla bağlantılı diğer belgeler"
+                      className={`flex flex-1 items-center justify-center gap-1.5 py-2.5 text-sm ${rightTab === "links" ? "border-b-2 border-accent-purple text-accent-purple" : "text-text-secondary"}`}>
+                <Link2 size={15} /> Bağ
               </button>
               <button onClick={() => setRightTab("notes")} title="Notlar"
                       className={`flex flex-1 items-center justify-center gap-1.5 py-2.5 text-sm ${rightTab === "notes" ? "border-b-2 border-accent-purple text-accent-purple" : "text-text-secondary"}`}>
-                <StickyNote size={15} /> Notlar {annotations.length > 0 && <span className="rounded-full bg-accent-purple/15 px-1.5 text-xs text-accent-purple">{annotations.length}</span>}
+                <StickyNote size={15} /> Not {annotations.length > 0 && <span className="rounded-full bg-accent-purple/15 px-1.5 text-xs text-accent-purple">{annotations.length}</span>}
               </button>
             </div>
             <div className="min-h-0 flex-1">
@@ -300,6 +305,9 @@ export default function DocumentPage({ params }: { params: { id: string } }) {
                 <ChatPanel documentId={id} />
               ) : rightTab === "explain" ? (
                 <ExplainPanel documentId={id} page={page} getPageText={getPageText} />
+              ) : rightTab === "links" ? (
+                <ConnectionsPanel documentId={id} page={page}
+                                  onOpen={(docId) => { window.location.href = "/documents/" + docId; }} />
               ) : (
                 <NotesPanel annotations={annotations}
                             onJump={(a) => setPage(a.page_number)}

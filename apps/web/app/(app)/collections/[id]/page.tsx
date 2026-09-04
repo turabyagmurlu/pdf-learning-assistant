@@ -1,10 +1,10 @@
 "use client";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
-import { api } from "@/lib/api";
+import { api, API, getToken } from "@/lib/api";
 import {
   BookOpen, Sparkles, GraduationCap, FileText, ArrowLeft,
-  Loader2, Send, Pencil, Check,
+  Loader2, Send, Pencil, Check, Mic, Headphones,
 } from "lucide-react";
 
 type Doc = {
@@ -48,7 +48,22 @@ export default function CollectionPage({ params }: { params: { id: string } }) {
   const router = useRouter();
   const [data, setData] = useState<any>(null);
   const [err, setErr] = useState("");
-  const [tab, setTab] = useState<"raf" | "sor" | "kart">("raf");
+  const [tab, setTab] = useState<"raf" | "sor" | "anlat" | "ders" | "kart">("raf");
+
+  // Anlat Bakalim (Feynman)
+  const [fConcept, setFConcept] = useState("");
+  const [fText, setFText] = useState("");
+  const [fBusy, setFBusy] = useState(false);
+  const [fResult, setFResult] = useState<{ review: string; sources: any[] } | null>(null);
+
+  // Sesli ders
+  const [lecBusy, setLecBusy] = useState(false);
+  const [lecture, setLecture] = useState("");
+  const [lecErr, setLecErr] = useState("");
+  const [audioBusy, setAudioBusy] = useState(false);
+  const [playing, setPlaying] = useState(false);
+  const audioRef = useRef<HTMLAudioElement | null>(null);
+  const audioUrlRef = useRef<string>("");
   const [prog, setProg] = useState<Record<string, Prog>>({});
 
   const [renaming, setRenaming] = useState(false);
@@ -116,6 +131,62 @@ export default function CollectionPage({ params }: { params: { id: string } }) {
     } catch (e: any) {
       setGenMsg(e?.message || "Üretilemedi.");
     } finally { setGenBusy(false); }
+  }
+
+  async function sendFeynman() {
+    if (fConcept.trim().length < 2 || fText.trim().length < 20) return;
+    setFBusy(true); setFResult(null);
+    try {
+      const r = await api(`/collections/${id}/feynman`, {
+        method: "POST",
+        body: JSON.stringify({ concept: fConcept.trim(), explanation: fText.trim() }),
+      });
+      setFResult(r);
+    } catch (e: any) {
+      setFResult({ review: e?.message || "Değerlendirilemedi.", sources: [] });
+    } finally { setFBusy(false); }
+  }
+
+  function stopAudio() {
+    try {
+      if (audioRef.current) { audioRef.current.pause(); audioRef.current.src = ""; }
+      if (audioUrlRef.current) { URL.revokeObjectURL(audioUrlRef.current); audioUrlRef.current = ""; }
+    } catch {}
+    setPlaying(false);
+  }
+  useEffect(() => () => { stopAudio(); }, []);
+
+  async function makeLecture() {
+    setLecBusy(true); setLecErr(""); setLecture(""); stopAudio();
+    try {
+      const r = await api(`/collections/${id}/lecture`, { method: "POST" });
+      setLecture(r.script || "");
+    } catch (e: any) {
+      setLecErr(e?.message || "Ders oluşturulamadı.");
+    } finally { setLecBusy(false); }
+  }
+
+  async function playLecture() {
+    if (!lecture) return;
+    setAudioBusy(true); setLecErr(""); stopAudio();
+    try {
+      const res = await fetch(`${API}/tts`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Authorization: "Bearer " + getToken() },
+        body: JSON.stringify({ text: lecture.slice(0, 5500) }),
+      });
+      if (!res.ok) throw new Error("Seslendirme yapılamadı.");
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      audioUrlRef.current = url;
+      const a = new Audio(url);
+      a.onended = () => setPlaying(false);
+      audioRef.current = a;
+      await a.play();
+      setPlaying(true);
+    } catch (e: any) {
+      setLecErr(e?.message || "Seslendirme yapılamadı.");
+    } finally { setAudioBusy(false); }
   }
 
   async function saveTitle() {
@@ -247,7 +318,8 @@ export default function CollectionPage({ params }: { params: { id: string } }) {
 
       {/* sekmeler */}
       <div className="mt-6 flex gap-1 border-b">
-        {([["raf", "Raf", FileText], ["sor", "Konuya sor", Sparkles], ["kart", "Kartlar", GraduationCap]] as const).map(
+        {([["raf", "Raf", FileText], ["sor", "Konuya sor", Sparkles], ["anlat", "Anlat bakalım", Mic],
+           ["ders", "Sesli ders", Headphones], ["kart", "Kartlar", GraduationCap]] as const).map(
           ([k, label, Icon]) => (
             <button key={k} onClick={() => setTab(k as any)}
                     className={cx("flex items-center gap-1.5 px-4 py-2.5 text-sm",
@@ -354,6 +426,90 @@ export default function CollectionPage({ params }: { params: { id: string } }) {
                   </div>
                 </div>
               )}
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* ANLAT BAKALIM (Feynman) */}
+      {tab === "anlat" && (
+        <div className="mt-5 max-w-3xl">
+          <div className="rounded-2xl border border-accent-purple/30 bg-accent-purple/5 p-4">
+            <p className="text-sm leading-relaxed">
+              Bir kavramı <b>kendi cümlelerinle</b> anlat. Kaynakla karşılaştırıp neyi doğru
+              kavradığını, nerede eksiğin olduğunu göstereyim. Bir şeyi gerçekten anlayıp
+              anlamadığın, ancak anlatmaya çalışınca ortaya çıkar.
+            </p>
+          </div>
+
+          <input value={fConcept} onChange={(e) => setFConcept(e.target.value)}
+                 placeholder="Hangi kavram? Örn: süperkompanzasyon"
+                 className="mt-4 w-full rounded-xl border bg-surface px-3 py-2.5 text-sm outline-none focus:border-accent-purple" />
+          <textarea value={fText} onChange={(e) => setFText(e.target.value)} rows={7}
+                    placeholder="Şimdi anlat… Kitaptaki cümleleri kopyalama, kendi kelimelerinle söyle. Bir arkadaşına anlatır gibi."
+                    className="mt-2 w-full rounded-xl border bg-surface p-3 text-sm leading-relaxed outline-none focus:border-accent-purple" />
+          <div className="mt-2 flex items-center justify-between">
+            <span className="text-xs text-text-secondary">{fText.trim().length} karakter</span>
+            <button onClick={sendFeynman} disabled={fBusy || fText.trim().length < 20}
+                    className="flex items-center gap-1.5 rounded-xl bg-accent-purple px-4 py-2 text-sm text-white disabled:opacity-50">
+              {fBusy ? <Loader2 size={15} className="animate-spin" /> : <Mic size={15} />}
+              {fBusy ? "Değerlendiriliyor…" : "Anlatımımı değerlendir"}
+            </button>
+          </div>
+
+          {fResult && (
+            <div className="mt-5 rounded-2xl border bg-surface p-4">
+              <p className="whitespace-pre-wrap text-sm leading-relaxed">{fResult.review}</p>
+              {fResult.sources?.length > 0 && (
+                <div className="mt-4 border-t pt-3">
+                  <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-text-secondary">Kaynaklar</p>
+                  <div className="flex flex-wrap gap-1.5">
+                    {fResult.sources.map((s: any, i: number) => (
+                      <button key={i} onClick={() => router.push("/documents/" + s.document_id)}
+                              className="rounded-full border bg-surface px-2.5 py-1 text-xs text-text-secondary hover:border-accent-purple/50">
+                        {s.title} · s.{s.page}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* SESLI DERS */}
+      {tab === "ders" && (
+        <div className="mt-5 max-w-3xl">
+          <p className="text-sm text-text-secondary">
+            Bu çalışma kitabındaki {st.ready || st.documents} belgeyi tek bir akıcı derse çeviririm;
+            yolda, sporda dinlersin.
+          </p>
+          <div className="mt-3 flex flex-wrap gap-2">
+            <button onClick={makeLecture} disabled={lecBusy}
+                    className="flex items-center gap-1.5 rounded-xl bg-accent-purple px-4 py-2.5 text-sm text-white disabled:opacity-60">
+              {lecBusy ? <Loader2 size={15} className="animate-spin" /> : <Headphones size={15} />}
+              {lecBusy ? "Ders hazırlanıyor…" : lecture ? "Yeniden hazırla" : "Dersi hazırla"}
+            </button>
+            {lecture && (
+              <>
+                <button onClick={playLecture} disabled={audioBusy}
+                        className="flex items-center gap-1.5 rounded-xl border px-4 py-2.5 text-sm hover:bg-black/5 disabled:opacity-60">
+                  {audioBusy ? <Loader2 size={15} className="animate-spin" /> : <Headphones size={15} />}
+                  {audioBusy ? "Ses hazırlanıyor…" : "Dinle"}
+                </button>
+                {playing && (
+                  <button onClick={stopAudio} className="rounded-xl border px-4 py-2.5 text-sm hover:bg-black/5">
+                    Durdur
+                  </button>
+                )}
+              </>
+            )}
+          </div>
+          {lecErr && <p className="mt-3 text-sm text-danger">{lecErr}</p>}
+          {lecture && (
+            <div className="mt-4 rounded-2xl border bg-surface p-4">
+              <p className="whitespace-pre-wrap text-sm leading-relaxed">{lecture}</p>
             </div>
           )}
         </div>

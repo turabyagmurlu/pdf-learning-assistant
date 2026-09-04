@@ -4,7 +4,7 @@ from fastapi import APIRouter, Depends
 from pydantic import BaseModel
 from app.deps import db, current_user
 from app.services import rag_service
-from app.services.analysis_service import generate_study_items
+from app.services.analysis_service import generate_study_items, feynman_review, lecture_script
 from app.ai.factory import get_embeddings, get_llm
 from app.core.errors import NotFound, AppError
 from app.config import settings
@@ -152,6 +152,63 @@ async def ask_collection(cid: str, body: AskIn, conn=Depends(db), user=Depends(c
     return {"answer": answer, "sources": sources}
 
 
+class FeynmanIn(BaseModel):
+    concept: str
+    explanation: str
+
+
+@router.post("/collections/{cid}/feynman")
+async def feynman(cid: str, body: FeynmanIn, conn=Depends(db), user=Depends(current_user)):
+    """Anlat Bakalim: kullanicinin anlatimini kaynakla karsilastirir."""
+    col = await conn.fetchrow("SELECT id FROM collections WHERE id=$1 AND user_id=$2", cid, user["id"])
+    if not col:
+        raise NotFound("Çalışma kitabı bulunamadı.")
+    concept = (body.concept or "").strip()
+    expl = (body.explanation or "").strip()
+    if len(concept) < 2:
+        raise AppError("Hangi kavramı anlattığını yaz.")
+    if len(expl) < 20:
+        raise AppError("Biraz daha uzun anlat; en az birkaç cümle olsun.")
+    rows = await conn.fetch(
+        "SELECT id FROM documents WHERE user_id=$1 AND collection_id=$2 AND status='ready'",
+        user["id"], cid)
+    ids = [str(r["id"]) for r in rows]
+    if not ids:
+        raise AppError("Bu çalışma kitabında hazır belge yok.")
+    chunks = await rag_service.retrieve_many(conn, ids, concept + "\n" + expl[:500], get_embeddings(), k=10)
+    if not chunks:
+        raise AppError("Bu kavramla ilgili kaynak bulamadım. Farklı bir kavram dene.")
+    ctx = rag_service.build_context(chunks)
+    review = feynman_review(concept, expl, ctx)
+    sources = [{"document_id": str(c["document_id"]), "title": c.get("doc_title"),
+                "page": c["page_number"]} for c in chunks[:5]]
+    return {"review": review, "sources": sources}
+
+
+@router.post("/collections/{cid}/lecture")
+async def lecture(cid: str, conn=Depends(db), user=Depends(current_user)):
+    """Sesli Ders: koleksiyonu akici bir anlatim metnine cevirir."""
+    col = await conn.fetchrow("SELECT id, title FROM collections WHERE id=$1 AND user_id=$2",
+                              cid, user["id"])
+    if not col:
+        raise NotFound("Çalışma kitabı bulunamadı.")
+    docs = await conn.fetch(
+        "SELECT id, title, short_summary FROM documents WHERE user_id=$1 AND collection_id=$2 AND status='ready'",
+        user["id"], cid)
+    if not docs:
+        raise AppError("Bu çalışma kitabında hazır belge yok.")
+    ids = [str(d["id"]) for d in docs]
+    rows = await conn.fetch(
+        """SELECT content FROM document_chunks WHERE document_id = ANY($1::uuid[])
+           ORDER BY document_id, chunk_index LIMIT 40""", ids)
+    parts = [f"{d['title']}: {d['short_summary']}" for d in docs if d["short_summary"]]
+    context = "\n".join(parts) + "\n\n" + "\n\n".join(r["content"] for r in rows)
+    if len(context) < 200:
+        raise AppError("Ders oluşturmak için yeterli içerik yok.")
+    script = lecture_script(context, col["title"])
+    return {"script": script, "title": col["title"], "documents": len(docs)}
+
+
 class ColStudyIn(BaseModel):
     type: str = "flashcard"
     count: int = 10
@@ -218,6 +275,48 @@ async def search(body: SearchIn, conn=Depends(db), user=Depends(current_user)):
                ORDER BY dc.embedding <=> $1 LIMIT 15""",
             emb, user["id"])
     return [dict(r) for r in rows]
+
+
+@router.get("/documents/{doc_id}/connections")
+async def connections(doc_id: str, page: int, conn=Depends(db), user=Depends(current_user)):
+    """Baglanti Kesfi: bu sayfadaki icerigin DIGER belgelerdeki karsiliklarini bulur."""
+    doc = await conn.fetchrow("SELECT id FROM documents WHERE id=$1 AND user_id=$2", doc_id, user["id"])
+    if not doc:
+        raise NotFound("Belge bulunamadı.")
+    src = await conn.fetch(
+        """SELECT content, embedding FROM document_chunks
+           WHERE document_id=$1 AND page_number=$2 AND embedding IS NOT NULL
+           ORDER BY chunk_index LIMIT 3""", doc_id, page)
+    if not src:
+        return {"connections": []}
+    seen, out = set(), []
+    for s in src:
+        rows = await conn.fetch(
+            """SELECT dc.document_id, dc.page_number, dc.section_title, dc.content,
+                      d.title AS doc_title, 1 - (dc.embedding <=> $1) AS score
+               FROM document_chunks dc
+               JOIN documents d ON d.id = dc.document_id
+               WHERE d.user_id=$2 AND dc.document_id <> $3 AND dc.embedding IS NOT NULL
+               ORDER BY dc.embedding <=> $1 LIMIT 5""",
+            s["embedding"], user["id"], doc_id)
+        for r in rows:
+            score = float(r["score"])
+            if score < 0.55:
+                continue
+            key = (str(r["document_id"]), r["page_number"])
+            if key in seen:
+                continue
+            seen.add(key)
+            out.append({
+                "document_id": str(r["document_id"]),
+                "title": r["doc_title"],
+                "page": r["page_number"],
+                "section": r["section_title"],
+                "excerpt": (r["content"] or "")[:220],
+                "score": round(score, 3),
+            })
+    out.sort(key=lambda x: x["score"], reverse=True)
+    return {"connections": out[:6]}
 
 
 @router.get("/graph")
