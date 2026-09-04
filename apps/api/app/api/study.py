@@ -16,15 +16,51 @@ class GenerateIn(BaseModel):
     count: int = 8
 
 
+def _sample_context(rows, max_chunks: int = 28) -> str:
+    """Belgenin geneline yayilmis parca secer; kapak/ozet agirlikli ilk parcalari atlar."""
+    rows = list(rows)
+    n = len(rows)
+    if n == 0:
+        return ""
+    # 8+ parcali belgelerde ilk %8 (kapak, kunye, ozet) atlanir
+    skip = min(2, n // 12) if n >= 8 else 0
+    pool = rows[skip:] if n - skip >= 3 else rows
+    if len(pool) > max_chunks:
+        step = len(pool) / max_chunks
+        pool = [pool[int(i * step)] for i in range(max_chunks)]
+    parts = []
+    for r in pool:
+        pg = r["page_number"]
+        tag = f"[s.{pg}] " if pg else ""
+        parts.append(tag + (r["content"] or ""))
+    return "\n\n".join(parts)
+
+
 @router.post("/documents/{doc_id}/study/generate")
 async def generate(doc_id: str, body: GenerateIn, conn=Depends(db), user=Depends(current_user)):
-    doc = await conn.fetchrow("SELECT id FROM documents WHERE id=$1 AND user_id=$2", doc_id, user["id"])
+    doc = await conn.fetchrow(
+        "SELECT id, title, short_summary, key_concepts FROM documents WHERE id=$1 AND user_id=$2",
+        doc_id, user["id"])
     if not doc:
         raise NotFound("Belge bulunamadı.")
     rows = await conn.fetch(
-        "SELECT content, page_number FROM document_chunks WHERE document_id=$1 ORDER BY chunk_index LIMIT 25", doc_id)
-    context = "\n\n".join(r["content"] for r in rows)
-    items = generate_study_items(context, body.type, body.count)
+        "SELECT content, page_number FROM document_chunks WHERE document_id=$1 ORDER BY chunk_index", doc_id)
+    context = _sample_context(rows)
+    if not context.strip():
+        raise AppError("Bu belgenin metni henüz çıkarılmamış. Belge 'Hazır' olunca tekrar dene.")
+    existing_rows = await conn.fetch(
+        "SELECT question FROM study_items WHERE document_id=$1 AND user_id=$2 ORDER BY created_at DESC LIMIT 60",
+        doc_id, user["id"])
+    existing = [r["question"] for r in existing_rows if r["question"]]
+    kc = doc["key_concepts"]
+    if isinstance(kc, str):
+        try:
+            kc = json.loads(kc)
+        except Exception:
+            kc = []
+    kc_txt = ", ".join(str(k.get("term") if isinstance(k, dict) else k) for k in (kc or [])[:15])
+    hint = f"Başlık: {doc['title']}\nÖzet: {doc['short_summary'] or ''}\nKavramlar: {kc_txt}"
+    items = generate_study_items(context, body.type, max(1, min(20, body.count)), existing=existing, topic_hint=hint)
     created = []
     for it in items:
         sid = str(uuid.uuid4())
@@ -127,6 +163,78 @@ async def list_items(document_id: str | None = None, type: str | None = None,
     sql += " ORDER BY created_at DESC"
     rows = await conn.fetch(sql, *args)
     return [dict(r) for r in rows]
+
+
+class ItemPatch(BaseModel):
+    question: str | None = None
+    answer: str | None = None
+
+
+@router.patch("/study/items/{item_id}")
+async def patch_item(item_id: str, body: ItemPatch, conn=Depends(db), user=Depends(current_user)):
+    row = await conn.fetchrow("SELECT id FROM study_items WHERE id=$1 AND user_id=$2", item_id, user["id"])
+    if not row:
+        raise NotFound("Öğe bulunamadı.")
+    if body.question is not None:
+        q = body.question.strip()
+        if len(q) < 3:
+            raise AppError("Soru çok kısa.")
+        await conn.execute("UPDATE study_items SET question=$1 WHERE id=$2", q, item_id)
+    if body.answer is not None:
+        await conn.execute("UPDATE study_items SET answer=$1 WHERE id=$2", body.answer.strip(), item_id)
+    return {"ok": True}
+
+
+@router.delete("/study/items/{item_id}")
+async def delete_item(item_id: str, conn=Depends(db), user=Depends(current_user)):
+    r = await conn.execute("DELETE FROM study_items WHERE id=$1 AND user_id=$2", item_id, user["id"])
+    if r.endswith(" 0"):
+        raise NotFound("Öğe bulunamadı.")
+    return {"ok": True}
+
+
+@router.delete("/study/items")
+async def delete_items(document_id: str, type: str | None = None,
+                       conn=Depends(db), user=Depends(current_user)):
+    """Bir belgenin tum (ya da belli turdeki) kartlarini siler."""
+    if type:
+        r = await conn.execute("DELETE FROM study_items WHERE document_id=$1 AND user_id=$2 AND type=$3",
+                               document_id, user["id"], type)
+    else:
+        r = await conn.execute("DELETE FROM study_items WHERE document_id=$1 AND user_id=$2",
+                               document_id, user["id"])
+    try:
+        n = int(r.split()[-1])
+    except Exception:
+        n = 0
+    return {"deleted": n}
+
+
+class ItemCreate(BaseModel):
+    document_id: str
+    question: str
+    answer: str
+    type: str = "flashcard"
+    source_page: int | None = None
+
+
+@router.post("/study/items")
+async def create_item(body: ItemCreate, conn=Depends(db), user=Depends(current_user)):
+    """Elle kart olusturma (ve yanlis quiz sorusunu karta cevirme)."""
+    doc = await conn.fetchrow("SELECT id FROM documents WHERE id=$1 AND user_id=$2", body.document_id, user["id"])
+    if not doc:
+        raise NotFound("Belge bulunamadı.")
+    q, a = body.question.strip(), body.answer.strip()
+    if len(q) < 3 or len(a) < 1:
+        raise AppError("Soru ve cevap boş olamaz.")
+    sid = str(uuid.uuid4())
+    await conn.execute(
+        """INSERT INTO study_items (id, user_id, document_id, type, question, answer, options,
+                                    source_page, difficulty, due_at)
+           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)""",
+        sid, user["id"], body.document_id, body.type if body.type in ("flashcard", "open_question") else "flashcard",
+        q, a, [], body.source_page, "medium", datetime.now(timezone.utc))
+    return {"id": sid}
 
 
 class ReviewIn(BaseModel):

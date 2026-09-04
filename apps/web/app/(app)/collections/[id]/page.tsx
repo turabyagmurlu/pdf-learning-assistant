@@ -4,7 +4,7 @@ import { useRouter } from "next/navigation";
 import { api, API, getToken } from "@/lib/api";
 import {
   BookOpen, Sparkles, GraduationCap, FileText, ArrowLeft,
-  Loader2, Send, Pencil, Check, Mic, Headphones, Plus, X, Square, CheckSquare,
+  Loader2, Send, Pencil, Check, Mic, Headphones, Plus, X, Square, CheckSquare, Trash2,
 } from "lucide-react";
 
 type Doc = {
@@ -282,6 +282,20 @@ export default function CollectionPage({ params }: { params: { id: string } }) {
             {st.documents} belge · {st.pages || 0} sayfa · {st.cards || 0} kart
           </p>
         </div>
+        <button
+          onClick={async () => {
+            const n = docs.length;
+            const msg = n > 0
+              ? `"${col.title}" kitabını silmek istiyor musun?\n\nİçindeki ${n} belge silinmez, klasörsüz kalır.`
+              : `"${col.title}" kitabını silmek istiyor musun?`;
+            if (!window.confirm(msg)) return;
+            try { await api("/collections/" + id, { method: "DELETE" }); router.push("/library"); }
+            catch (e: any) { setErr(e?.message || "Silinemedi."); }
+          }}
+          title="Kitabı sil" aria-label="Kitabı sil"
+          className="shrink-0 rounded-lg border px-3 py-1.5 text-sm text-text-secondary hover:border-danger/50 hover:text-danger">
+          <Trash2 size={15} />
+        </button>
       </div>
 
       {/* DASHBOARD */}

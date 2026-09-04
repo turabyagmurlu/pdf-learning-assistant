@@ -40,7 +40,30 @@ export default function LibraryPage() {
   const [folder, setFolder] = useState("");
   const [creatingFolder, setCreatingFolder] = useState(false);
   const [newFolder, setNewFolder] = useState("");
+  const [renamingId, setRenamingId] = useState<string | null>(null);
+  const [renameVal, setRenameVal] = useState("");
+  const [folderMenu, setFolderMenu] = useState<string | null>(null);
   const fileRef = useRef<HTMLInputElement>(null);
+
+  async function renameFolder(id: string) {
+    const t = renameVal.trim();
+    setRenamingId(null);
+    if (!t) return;
+    setCollections((cs) => cs.map((c) => (c.id === id ? { ...c, title: t } : c)));
+    try { await api("/collections/" + id, { method: "PATCH", body: JSON.stringify({ title: t }) }); } catch { reload(); }
+  }
+  async function deleteFolder(id: string, title: string) {
+    const n = docs.filter((d) => d.collection_id === id).length;
+    const msg = n > 0
+      ? `"${title}" klasörünü silmek istiyor musun?\n\nİçindeki ${n} belge silinmez, sadece klasörsüz kalır.`
+      : `"${title}" klasörünü silmek istiyor musun?`;
+    if (!window.confirm(msg)) return;
+    setFolderMenu(null);
+    if (folder === id) setFolder("");
+    setCollections((cs) => cs.filter((c) => c.id !== id));
+    setDocs((ds) => ds.map((d) => (d.collection_id === id ? { ...d, collection_id: null } : d)));
+    try { await api("/collections/" + id, { method: "DELETE" }); } catch { reload(); }
+  }
 
   async function reload() { try { const d = await api("/documents"); setDocs(d as Doc[]); } catch {} try { const cs = await fetch(API + "/collections", { headers: { Authorization: "Bearer " + getToken() } }); if (cs.ok) setCollections(await cs.json()); } catch {} setLoading(false); }
   useEffect(() => { reload(); }, []);
@@ -83,7 +106,8 @@ export default function LibraryPage() {
     if (favOnly) list = list.filter((d) => d.is_favorite);
     if (cat) list = list.filter((d) => d.category === cat);
     if (tag) list = list.filter((d) => toArr(d.tags).map(String).includes(tag));
-    if (folder) list = list.filter((d) => d.collection_id === folder);
+    if (folder === "__none__") list = list.filter((d) => !d.collection_id);
+    else if (folder) list = list.filter((d) => d.collection_id === folder);
     if (q.trim()) {
       const s = q.toLowerCase();
       list = list.filter((d) => (d.title || "").toLowerCase().includes(s) || (d.short_summary || "").toLowerCase().includes(s) || toArr(d.tags).some((t) => String(t).toLowerCase().includes(s)));
@@ -121,7 +145,7 @@ export default function LibraryPage() {
   const pad = density === "compact" ? "p-3" : "p-4";
 
   return (
-    <div className="mx-auto w-full max-w-6xl px-6 py-8" onClick={() => setMenuFor(null)}>
+    <div className="mx-auto w-full max-w-6xl px-6 py-8" onClick={() => { setMenuFor(null); setFolderMenu(null); }}>
       <div className="mb-1">
         <h1 className="font-heading text-3xl">Kütüphane</h1>
         <p className="mt-1 text-sm text-text-secondary">PDF'lerini yükle, düzenle, kategorilere ayır; sana çalışılabilir hale getireyim.</p>
@@ -255,9 +279,22 @@ export default function LibraryPage() {
             {collections.map((c) => {
               const n = docs.filter((d) => d.collection_id === c.id).length;
               const on = folder === c.id;
+              if (renamingId === c.id) {
+                return (
+                  <div key={c.id} className="flex items-center gap-1 px-1 py-1">
+                    <input autoFocus value={renameVal} onChange={(e) => setRenameVal(e.target.value)}
+                           onKeyDown={(e) => { if (e.key === "Enter") renameFolder(c.id); if (e.key === "Escape") setRenamingId(null); }}
+                           onBlur={() => renameFolder(c.id)}
+                           aria-label="Klasör adı"
+                           className="min-w-0 flex-1 rounded-lg border bg-surface px-2.5 py-1.5 text-sm outline-none focus:border-accent-purple" />
+                    <button onMouseDown={(e) => e.preventDefault()} onClick={() => renameFolder(c.id)}
+                            aria-label="Kaydet" className="rounded-lg bg-accent-purple p-1.5 text-white"><Check size={14} /></button>
+                  </div>
+                );
+              }
               return (
                 <div key={c.id}
-                     className={cx("group flex items-center rounded-lg", on ? "bg-accent-purple/10" : "hover:bg-surface-muted")}>
+                     className={cx("group relative flex items-center rounded-lg", on ? "bg-accent-purple/10" : "hover:bg-surface-muted")}>
                   <button onClick={() => setFolder(on ? "" : c.id)} title="Sadece bunları göster"
                           className={cx("flex min-w-0 flex-1 items-center gap-2 px-2.5 py-2 text-left text-sm",
                             on ? "text-accent-purple" : "text-text-secondary")}>
@@ -266,10 +303,32 @@ export default function LibraryPage() {
                   </button>
                   <span className={cx("px-1 text-xs", on ? "text-accent-purple" : "text-text-secondary")}>{n}</span>
                   <button onClick={() => router.push("/collections/" + c.id)}
-                          title={c.title + " çalışma kitabını aç"} aria-label={c.title + " çalışma kitabını aç"}
-                          className="rounded-md px-2 py-2 text-text-secondary hover:text-accent-purple">
+                          title="Çalışma kitabını aç" aria-label={c.title + " çalışma kitabını aç"}
+                          className="rounded-md px-1.5 py-2 text-text-secondary hover:text-accent-purple">
                     <BookOpen size={14} />
                   </button>
+                  <button onClick={(e) => { e.stopPropagation(); setFolderMenu(folderMenu === c.id ? null : c.id); }}
+                          title="Klasör seçenekleri" aria-label="Klasör seçenekleri"
+                          className="rounded-md px-1.5 py-2 text-text-secondary hover:text-text-primary">
+                    <MoreVertical size={14} />
+                  </button>
+                  {folderMenu === c.id && (
+                    <div onClick={(e) => e.stopPropagation()}
+                         className="absolute right-0 top-9 z-20 w-40 overflow-hidden rounded-xl border bg-surface shadow-lg">
+                      <button onClick={() => { setFolderMenu(null); setRenameVal(c.title); setRenamingId(c.id); }}
+                              className="flex w-full items-center gap-2 px-3 py-2 text-left text-sm hover:bg-surface-muted">
+                        <Pencil size={14} /> Adını değiştir
+                      </button>
+                      <button onClick={() => { setFolderMenu(null); router.push("/collections/" + c.id); }}
+                              className="flex w-full items-center gap-2 px-3 py-2 text-left text-sm hover:bg-surface-muted">
+                        <BookOpen size={14} /> Kitabı aç
+                      </button>
+                      <button onClick={() => deleteFolder(c.id, c.title)}
+                              className="flex w-full items-center gap-2 px-3 py-2 text-left text-sm text-danger hover:bg-surface-muted">
+                        <Trash2 size={14} /> Sil
+                      </button>
+                    </div>
+                  )}
                 </div>
               );
             })}
@@ -277,9 +336,16 @@ export default function LibraryPage() {
 
           {(() => {
             const loose = docs.filter((d) => !d.collection_id).length;
-            return loose > 0 ? (
-              <p className="mt-2 px-2.5 text-xs text-text-secondary">{loose} belge hiçbir klasörde değil</p>
-            ) : null;
+            if (loose === 0) return null;
+            const on = folder === "__none__";
+            return (
+              <button onClick={() => setFolder(on ? "" : "__none__")}
+                      className={cx("mt-1 flex w-full items-center justify-between rounded-lg px-2.5 py-2 text-sm",
+                        on ? "bg-accent-amber/15 text-accent-amber" : "text-text-secondary hover:bg-surface-muted")}>
+                <span className="flex items-center gap-2"><FolderOpen size={14} className="opacity-50" /> Klasörsüz</span>
+                <span className="text-xs">{loose}</span>
+              </button>
+            );
           })()}
 
           <div className="mt-2 border-t pt-2">

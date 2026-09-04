@@ -1,7 +1,7 @@
 "use client";
 import { useEffect, useMemo, useState } from "react";
 import { api, API, getToken } from "@/lib/api";
-import { GraduationCap, Layers, Trophy, Clock, Sparkles, RotateCcw, ChevronRight, Check, X, Play, BookOpen } from "lucide-react";
+import { GraduationCap, Layers, Trophy, Clock, Sparkles, RotateCcw, ChevronRight, Check, X, Play, BookOpen, Trash2, Pencil, Plus } from "lucide-react";
 
 type Doc = { id: string; title: string; status: string };
 type Item = {
@@ -82,7 +82,7 @@ export default function StudyPage() {
                      onQuiz={(id) => { setFocusDoc(id); setTab("quiz"); }} />
          ) :
          tab === "cards" ? <Cards items={flashcards} due={due} onReview={loadItems} titleOf={titleOf} /> :
-         <Quiz items={quizzes} titleOf={titleOf} />}
+         <Quiz items={quizzes} titleOf={titleOf} onChanged={loadItems} />}
       </div>
     </div>
   );
@@ -132,6 +132,25 @@ function Overview({ docs, items, onChanged, onStudy, onQuiz }: {
     return docs.filter((d) => !has.has(d.id));
   }, [docs, items]);
 
+  async function clearDoc(id: string, title: string, total: number) {
+    if (!window.confirm(`"${title}" belgesinin ${total} kart/sorusunu silmek istiyor musun?\n\nSonra daha kaliteli yenilerini üretebilirsin.`)) return;
+    try { await api("/study/items?document_id=" + encodeURIComponent(id), { method: "DELETE" }); onChanged(); } catch {}
+  }
+
+  // elle kart
+  const [manual, setManual] = useState(false);
+  const [mq, setMq] = useState(""); const [ma, setMa] = useState("");
+  const [mBusy, setMBusy] = useState(false);
+  async function addManual() {
+    if (!docId || mq.trim().length < 3 || !ma.trim()) return;
+    setMBusy(true);
+    try {
+      await api("/study/items", { method: "POST", body: JSON.stringify({ document_id: docId, question: mq.trim(), answer: ma.trim() }) });
+      setMq(""); setMa(""); setManual(false); onChanged();
+    } catch {}
+    setMBusy(false);
+  }
+
   return (
     <div className="space-y-6">
       <div className="rounded-2xl border bg-surface p-4">
@@ -153,12 +172,35 @@ function Overview({ docs, items, onChanged, onStudy, onQuiz }: {
           </button>
           {msg && <span className="text-sm text-text-secondary">{msg}</span>}
         </div>
-        <p className="mt-2 text-xs text-text-secondary">Materyal belgenin içeriğinden AI ile üretilir; birkaç saniye sürebilir.</p>
-        {lastOk && (
-          <button onClick={() => (lastOk.type === "quiz" ? onQuiz(lastOk.docId) : onStudy(lastOk.docId))}
-                  className="mt-3 flex items-center gap-1.5 rounded-lg border border-accent-purple/40 bg-accent-purple/5 px-3 py-1.5 text-sm text-accent-purple">
-            <Play size={14} /> Şimdi çalış
+        <p className="mt-2 text-xs text-text-secondary">
+          Sorular belgenin geneline yayılarak üretilir; kapak/künye bilgisi sorulmaz, mevcut kartlar tekrarlanmaz.
+        </p>
+        <div className="mt-3 flex flex-wrap items-center gap-2">
+          {lastOk && (
+            <button onClick={() => (lastOk.type === "quiz" ? onQuiz(lastOk.docId) : onStudy(lastOk.docId))}
+                    className="flex items-center gap-1.5 rounded-lg border border-accent-purple/40 bg-accent-purple/5 px-3 py-1.5 text-sm text-accent-purple">
+              <Play size={14} /> Şimdi çalış
+            </button>
+          )}
+          <button onClick={() => setManual((v) => !v)}
+                  className="flex items-center gap-1.5 rounded-lg border px-3 py-1.5 text-sm text-text-secondary hover:border-accent-purple/50">
+            <Plus size={14} /> Kendi kartını yaz
           </button>
+        </div>
+        {manual && (
+          <div className="mt-3 space-y-2 rounded-xl border bg-surface-muted/40 p-3">
+            <input value={mq} onChange={(e) => setMq(e.target.value)} placeholder="Soru"
+                   className="w-full rounded-lg border bg-surface px-3 py-2 text-sm outline-none focus:border-accent-purple" />
+            <textarea value={ma} onChange={(e) => setMa(e.target.value)} placeholder="Cevap" rows={2}
+                      className="w-full rounded-lg border bg-surface px-3 py-2 text-sm outline-none focus:border-accent-purple" />
+            <div className="flex items-center gap-2">
+              <button onClick={addManual} disabled={mBusy || mq.trim().length < 3 || !ma.trim()}
+                      className="rounded-lg bg-accent-purple px-3 py-1.5 text-sm text-white disabled:opacity-50">
+                {mBusy ? "Ekleniyor…" : "Kartı ekle"}
+              </button>
+              <span className="text-xs text-text-secondary">Seçili belgeye eklenir: <b>{docs.find((d) => d.id === docId)?.title || "—"}</b></span>
+            </div>
+          </div>
         )}
       </div>
 
@@ -183,10 +225,15 @@ function Overview({ docs, items, onChanged, onStudy, onQuiz }: {
                           className="flex items-center gap-1.5 rounded-lg border px-3 py-1.5 text-xs text-text-secondary hover:border-accent-purple/50 disabled:opacity-40">
                     <BookOpen size={13} /> Quiz çöz
                   </button>
-                  <button onClick={() => { setDocId(x.id); }}
+                  <button onClick={() => { setDocId(x.id); window.scrollTo({ top: 0, behavior: "smooth" }); }}
                           title="Bu belge için yeni materyal üret"
                           className="ml-auto rounded-lg border px-2.5 py-1.5 text-xs text-text-secondary hover:border-accent-purple/50">
                     <Sparkles size={13} />
+                  </button>
+                  <button onClick={() => clearDoc(x.id, x.title, x.total)}
+                          title="Bu belgenin tüm kartlarını sil"
+                          className="rounded-lg border px-2.5 py-1.5 text-xs text-text-secondary hover:border-danger/50 hover:text-danger">
+                    <Trash2 size={13} />
                   </button>
                 </div>
               </div>
@@ -228,22 +275,48 @@ function Cards({ items, due, onReview, titleOf }: { items: Item[]; due: Item[]; 
     setMode(m); setQueue(shuffled); setIdx(0); setFlipped(false); setDone(0); setActive(shuffled.length > 0);
   }
 
+  const [editing, setEditing] = useState(false);
+  const [eq, setEq] = useState(""); const [ea, setEa] = useState("");
+
   async function grade(quality: number) {
     const it = queue[idx];
     if (it) { try { await fetch(API + "/study/items/" + it.id + "/review", { method: "POST", headers: H(), body: JSON.stringify({ quality }) }); } catch {} }
     setDone((d) => d + 1);
+    advance();
+  }
+  function advance() {
+    setEditing(false);
     if (idx + 1 < queue.length) { setIdx(idx + 1); setFlipped(false); } else { setActive(false); onReview(); }
+  }
+  async function removeCurrent() {
+    const it = queue[idx];
+    if (!it) return;
+    if (!window.confirm("Bu kartı silmek istiyor musun?")) return;
+    try { await api("/study/items/" + it.id, { method: "DELETE" }); } catch {}
+    const q2 = queue.filter((_, i) => i !== idx);
+    setQueue(q2); setFlipped(false); setEditing(false);
+    if (q2.length === 0 || idx >= q2.length) { setActive(false); onReview(); }
+  }
+  async function saveEdit() {
+    const it = queue[idx];
+    if (!it) return;
+    const q = eq.trim(), a = ea.trim();
+    if (q.length < 3 || !a) return;
+    try { await api("/study/items/" + it.id, { method: "PATCH", body: JSON.stringify({ question: q, answer: a }) }); } catch {}
+    setQueue((qs) => qs.map((x, i) => (i === idx ? { ...x, question: q, answer: a } : x)));
+    setEditing(false);
   }
 
   useEffect(() => {
-    if (!active) return;
+    if (!active || editing) return;
     const onKey = (e: KeyboardEvent) => {
+      if ((e.target as HTMLElement)?.tagName === "INPUT" || (e.target as HTMLElement)?.tagName === "TEXTAREA") return;
       if (e.key === " ") { e.preventDefault(); setFlipped((f) => !f); }
       else if (flipped && ["1", "2", "3", "4"].indexOf(e.key) >= 0) grade([1, 3, 4, 5][parseInt(e.key) - 1]);
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [active, flipped, idx, queue]);
+  }, [active, flipped, idx, queue, editing]);
 
   if (!active) {
     return (
@@ -263,8 +336,28 @@ function Cards({ items, due, onReview, titleOf }: { items: Item[]; due: Item[]; 
     <div>
       <div className="mb-3 flex items-center justify-between gap-2 text-xs text-text-secondary">
         <span className="truncate">{idx + 1} / {queue.length} · {titleOf[it?.document_id] || "belge"}</span>
-        <span className="shrink-0">{mode === "due" ? "Bugünkü tekrar" : "Karışık"}</span>
+        <span className="flex shrink-0 items-center gap-1">
+          <span className="mr-1">{mode === "due" ? "Bugünkü tekrar" : "Karışık"}</span>
+          <button onClick={() => { setEq(it.question); setEa(it.answer); setEditing(true); }}
+                  title="Kartı düzenle" aria-label="Kartı düzenle"
+                  className="rounded-md p-1 hover:bg-surface-muted hover:text-text-primary"><Pencil size={13} /></button>
+          <button onClick={removeCurrent} title="Kartı sil (kötü soru)" aria-label="Kartı sil"
+                  className="rounded-md p-1 hover:bg-surface-muted hover:text-danger"><Trash2 size={13} /></button>
+        </span>
       </div>
+
+      {editing && (
+        <div className="mb-4 space-y-2 rounded-2xl border bg-surface p-4">
+          <input value={eq} onChange={(e) => setEq(e.target.value)} placeholder="Soru" autoFocus
+                 className="w-full rounded-lg border bg-surface-muted px-3 py-2 text-sm outline-none focus:border-accent-purple" />
+          <textarea value={ea} onChange={(e) => setEa(e.target.value)} placeholder="Cevap" rows={3}
+                    className="w-full rounded-lg border bg-surface-muted px-3 py-2 text-sm outline-none focus:border-accent-purple" />
+          <div className="flex gap-2">
+            <button onClick={saveEdit} className="rounded-lg bg-accent-purple px-3 py-1.5 text-sm text-white">Kaydet</button>
+            <button onClick={() => setEditing(false)} className="rounded-lg border px-3 py-1.5 text-sm text-text-secondary">Vazgeç</button>
+          </div>
+        </div>
+      )}
       <div className="mb-4 h-1 w-full overflow-hidden rounded-full bg-surface-muted"><div className="h-full bg-accent-purple transition-all" style={{ width: (idx / queue.length * 100) + "%" }} /></div>
 
       <div onClick={() => setFlipped((f) => !f)} className="cursor-pointer" style={{ perspective: 1200 }}>
@@ -283,26 +376,53 @@ function Cards({ items, due, onReview, titleOf }: { items: Item[]; due: Item[]; 
       </div>
 
       {flipped ? (
-        <div className="mt-5 grid grid-cols-4 gap-2">
-          <button onClick={() => grade(1)} className="rounded-lg bg-red-100 px-2 py-2.5 text-sm text-red-700">Tekrar</button>
-          <button onClick={() => grade(3)} className="rounded-lg bg-amber-100 px-2 py-2.5 text-sm text-amber-700">Zor</button>
-          <button onClick={() => grade(4)} className="rounded-lg bg-green-100 px-2 py-2.5 text-sm text-green-700">İyi</button>
-          <button onClick={() => grade(5)} className="rounded-lg bg-emerald-100 px-2 py-2.5 text-sm text-emerald-700">Kolay</button>
-        </div>
+        <>
+          <div className="mt-5 grid grid-cols-4 gap-2">
+            <button onClick={() => grade(1)} className="rounded-lg bg-red-100 px-2 py-2.5 text-sm text-red-700">Tekrar <kbd className="ml-1 rounded bg-white/60 px-1 text-[10px]">1</kbd></button>
+            <button onClick={() => grade(3)} className="rounded-lg bg-amber-100 px-2 py-2.5 text-sm text-amber-700">Zor <kbd className="ml-1 rounded bg-white/60 px-1 text-[10px]">2</kbd></button>
+            <button onClick={() => grade(4)} className="rounded-lg bg-green-100 px-2 py-2.5 text-sm text-green-700">İyi <kbd className="ml-1 rounded bg-white/60 px-1 text-[10px]">3</kbd></button>
+            <button onClick={() => grade(5)} className="rounded-lg bg-emerald-100 px-2 py-2.5 text-sm text-emerald-700">Kolay <kbd className="ml-1 rounded bg-white/60 px-1 text-[10px]">4</kbd></button>
+          </div>
+          <p className="mt-2 text-center text-[11px] text-text-secondary">
+            Tekrar: yarın yine gelir · Zor: kısa aralık · İyi: normal aralık · Kolay: uzun aralık
+          </p>
+        </>
       ) : (
-        <button onClick={() => setFlipped(true)} className="mt-5 w-full rounded-lg border py-2.5 text-sm text-text-secondary hover:bg-surface-muted">Cevabı göster</button>
+        <button onClick={() => setFlipped(true)} className="mt-5 w-full rounded-lg border py-2.5 text-sm text-text-secondary hover:bg-surface-muted">
+          Cevabı göster <kbd className="ml-1 rounded border px-1.5 text-[10px]">boşluk</kbd>
+        </button>
       )}
     </div>
   );
 }
 
-function Quiz({ items, titleOf }: { items: Item[]; titleOf: Record<string, string> }) {
+function Quiz({ items, titleOf, onChanged }: { items: Item[]; titleOf: Record<string, string>; onChanged: () => void }) {
   const [session, setSession] = useState<Item[] | null>(null);
   const [idx, setIdx] = useState(0);
   const [picked, setPicked] = useState<string | null>(null);
   const [answers, setAnswers] = useState<{ q: Item; choice: string; correct: boolean }[]>([]);
+  const [convBusy, setConvBusy] = useState(false);
+  const [convMsg, setConvMsg] = useState("");
 
   const pool = items;
+
+  async function wrongToCards() {
+    const wrong = answers.filter((a) => !a.correct);
+    if (!wrong.length) return;
+    setConvBusy(true); setConvMsg("");
+    let n = 0;
+    for (const a of wrong) {
+      try {
+        await api("/study/items", { method: "POST", body: JSON.stringify({
+          document_id: a.q.document_id, question: a.q.question, answer: a.q.answer, source_page: a.q.source_page ?? null,
+        }) });
+        n++;
+      } catch {}
+    }
+    setConvMsg(n + " yanlış soru flashcard olarak eklendi; Kart Çalışması'nda karşına çıkacak.");
+    setConvBusy(false);
+    onChanged();
+  }
 
   function start() { const s = [...pool].sort(() => Math.random() - 0.5).slice(0, 10); setSession(s); setIdx(0); setPicked(null); setAnswers([]); }
 
@@ -351,7 +471,16 @@ function Quiz({ items, titleOf }: { items: Item[]; titleOf: Record<string, strin
             ))}
           </div>
         )}
-        <button onClick={() => setSession(null)} className="mt-5 rounded-lg border px-4 py-2 text-sm text-text-secondary">Yeni quiz</button>
+        <div className="mt-5 flex flex-wrap justify-center gap-2">
+          <button onClick={() => setSession(null)} className="rounded-lg border px-4 py-2 text-sm text-text-secondary">Yeni quiz</button>
+          {wrong.length > 0 && !convMsg && (
+            <button onClick={wrongToCards} disabled={convBusy}
+                    className="flex items-center gap-1.5 rounded-lg bg-accent-purple px-4 py-2 text-sm text-white disabled:opacity-60">
+              <Layers size={15} /> {convBusy ? "Ekleniyor…" : `Yanlışları karta çevir (${wrong.length})`}
+            </button>
+          )}
+        </div>
+        {convMsg && <p className="mt-3 text-sm text-accent-purple">{convMsg}</p>}
       </div>
     );
   }

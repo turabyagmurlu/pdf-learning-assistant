@@ -76,17 +76,59 @@ def lecture_script(context: str, title: str) -> str:
     return llm.complete(messages, model=settings.active_llm_model)
 
 
-def generate_study_items(context: str, kind: str, count: int = 8) -> list[dict]:
+STUDY_QUALITY_RULES = """KALİTE KURALLARI (kesin):
+1. Yalnızca KONUYU öğrenmeye yarayan sorular üret: kavram tanımı, neden-sonuç, karşılaştırma,
+   olay-kişi-tarih ilişkisi, süreç/aşama, bir görüşün gerekçesi, sonuç ve etkileri.
+2. YASAK: belgenin kendisi hakkında üst-veri soruları — yazar adı, üniversite, dergi, yayın yılı,
+   sayfa sayısı, başlık, bölüm adı, kaynakça, "makalenin amacı nedir", "metinde adı geçen ...",
+   "yazara göre ..." kalıpları. Bu tür bir soru üretme; yerine içerikten başka bir nokta seç.
+3. Soru TEK BAŞINA anlaşılır olmalı: "metinde", "bu makalede", "yukarıdaki", "belgede" gibi
+   ifadeler kullanma. Soru, konuyu bilen birinin kaynağa bakmadan cevaplayabileceği biçimde olsun.
+4. Cevap 1-2 cümle, net ve doğrulanabilir. Evet/hayır soruları üretme.
+5. Her soru FARKLI bir noktayı ölçsün; aynı bilgiyi iki kez sorma. Aşağıda "mevcut sorular"
+   verilmişse onlarla aynı ya da benzer soru üretme.
+6. Zorluk dağılımı yaklaşık: %30 easy, %50 medium, %20 hard. hard = neden/nasıl/karşılaştır.
+7. source_page: bilginin geçtiği sayfa numarası (parçalarda [s.N] etiketi var); bilinmiyorsa 0.
+8. quiz: tam 4 şık, tek doğru, çeldiriciler makul ve konuyla ilgili; answer doğru şıkkın
+   metniyle BİREBİR aynı olsun. flashcard/open_question: options boş dizi.
+9. open_question: "Neden…?", "Nasıl…?", "… ile … arasındaki fark nedir?", "… olmasaydı ne olurdu?"
+   gibi düşündüren kalıplar; cevap alanına örnek bir iyi cevap yaz.
+"""
+
+
+def generate_study_items(context: str, kind: str, count: int = 8,
+                         existing: list[str] | None = None,
+                         topic_hint: str = "") -> list[dict]:
     llm = get_llm()
     instr = {
-        "flashcard": "kısa soru-cevap flashcard'ları",
-        "quiz": "çoktan seçmeli quiz soruları (options doldur, answer doğru şıkkı yaz)",
-        "open_question": "açık uçlu düşündürücü sorular",
-    }.get(kind, "flashcard'lar")
+        "flashcard": "soru-cevap flashcard",
+        "quiz": "çoktan seçmeli quiz sorusu",
+        "open_question": "açık uçlu düşündürücü soru",
+    }.get(kind, "flashcard")
+    existing_block = ""
+    if existing:
+        ex = "\n".join(f"- {q}" for q in existing[:60])
+        existing_block = f"\n\nMEVCUT SORULAR (bunları tekrar üretme):\n{ex}"
+    hint_block = f"\n\nKONU ÖZETİ / ANAHTAR KAVRAMLAR:\n{topic_hint[:1500]}" if topic_hint else ""
     messages = [
-        {"role": "system", "content": "Sen bir öğrenme materyali üreticisisin. Türkçe üret, kaynağa sadık kal."},
-        {"role": "user", "content": f"Aşağıdaki içerikten {count} adet {instr} üret. "
-                                     f"Flashcard/açık uçlu için options boş dizi olsun.\n\n{context[:16000]}"},
+        {"role": "system", "content": "Sen deneyimli bir öğretmensin; sınav hazırlığı için yüksek kaliteli "
+                                      "öğrenme materyali üretirsin. Türkçe üret, kaynağa sadık kal.\n\n"
+                                      + STUDY_QUALITY_RULES},
+        {"role": "user", "content": f"Aşağıdaki içerikten tam {count} adet {instr} üret. "
+                                     f"type alanı '{kind}' olsun."
+                                     f"{hint_block}{existing_block}\n\nİÇERİK:\n{context[:18000]}"},
     ]
     raw = llm.structured(messages, STUDY_ITEMS_SCHEMA, model=settings.active_llm_model)
-    return json.loads(raw).get("items", [])
+    items = json.loads(raw).get("items", [])
+    # son savunma: ust-veri kokulu sorulari ele
+    bad = ("üniversitenin adı", "universitenin adi", "yazarın adı", "yazar kimdir", "yazarı kimdir",
+           "makalenin adı", "makalenin başlığı", "makalenin amacı", "hangi dergide", "yayın yılı",
+           "yayin yili", "sayfa sayısı", "metinde adı geçen", "metinde geçen", "bu makalede",
+           "bu metinde", "bu belgede", "yazara göre", "kaynakça")
+    out = []
+    for it in items:
+        q = (it.get("question") or "").lower()
+        if any(b in q for b in bad):
+            continue
+        out.append(it)
+    return out
