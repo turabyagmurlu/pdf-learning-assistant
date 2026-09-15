@@ -15,7 +15,6 @@ export default function Icon() {
           alignItems: "center",
           justifyContent: "center",
           background: "linear-gradient(135deg, #6d5ee0 0%, #8b7cf0 100%)",
-          borderRadius: 96,
         }}
       >
         <div
