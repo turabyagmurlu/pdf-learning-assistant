@@ -1,6 +1,7 @@
 import "../styles/globals.css";
 import type { Metadata, Viewport } from "next";
 import PwaRegister from "@/components/PwaRegister";
+import { THEME_BOOT_SCRIPT } from "@/lib/theme-boot";
 
 export const metadata: Metadata = {
   title: "TY PDF — Öğrenme Asistanı",
@@ -16,7 +17,7 @@ export const metadata: Metadata = {
 };
 
 export const viewport: Viewport = {
-  themeColor: "#6d5ee0",
+  themeColor: "#f6b45c",
   width: "device-width",
   initialScale: 1,
   viewportFit: "cover",
@@ -24,7 +25,10 @@ export const viewport: Viewport = {
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
-    <html lang="tr">
+    <html lang="tr" suppressHydrationWarning>
+      <head>
+        <script dangerouslySetInnerHTML={{ __html: THEME_BOOT_SCRIPT }} />
+      </head>
       <body>
         {children}
         <PwaRegister />

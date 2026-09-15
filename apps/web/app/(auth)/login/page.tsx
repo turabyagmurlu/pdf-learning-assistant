@@ -2,9 +2,12 @@
 import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { api, setToken } from "@/lib/api";
+import { BrandMarkSvg } from "@/components/BrandMark";
+import { useTheme } from "@/components/ThemeToggle";
 
 export default function LoginPage() {
   const router = useRouter();
+  const { dark } = useTheme();
   const [mode, setMode] = useState<"login" | "register">("login");
   const [name, setName] = useState("");
   const [email, setEmail] = useState("");
@@ -25,7 +28,13 @@ export default function LoginPage() {
   return (
     <div className="min-h-screen flex items-center justify-center px-4">
       <div className="w-full max-w-sm rounded-xl border bg-surface p-8 shadow-soft">
-        <h1 className="font-heading text-2xl mb-1">PDF Öğrenme Asistanı</h1>
+        <div className="mb-3 flex items-center gap-3">
+          <BrandMarkSvg variant={dark ? "night" : "day"} size={52} title="TY PDF" />
+          <div>
+            <h1 className="font-heading text-2xl leading-tight">TY PDF</h1>
+            <p className="text-xs text-text-secondary">Öğrenme Asistanı</p>
+          </div>
+        </div>
         <p className="text-text-secondary text-sm mb-6">
           {mode === "login" ? "Hesabına giriş yap." : "Yeni hesap oluştur."}
         </p>
