@@ -2,10 +2,11 @@
 import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { api, API, getToken } from "@/lib/api";
+import PodcastPlayer from "@/components/PodcastPlayer";
 import {
   BookOpen, Sparkles, GraduationCap, FileText, ArrowLeft,
   Loader2, Send, Pencil, Check, Headphones, Plus, X, Square, CheckSquare, Trash2,
-  BookMarked, Search, RefreshCw,
+  BookMarked, Search, RefreshCw, Clock,
 } from "lucide-react";
 
 type Doc = {
@@ -16,6 +17,14 @@ type Prog = { page: number; numPages: number; pct: number };
 type GItem = {
   term: string; kind: string; definition: string;
   mentions: { document_id: string; title: string; pages: number[] }[];
+};
+type TEvent = {
+  date: string; year: number; month: number; day: number; title: string; detail: string;
+  kind: string; page: number | null; document_id: string; document_title: string;
+};
+const TKIND_LABEL: Record<string, string> = { savas: "Savaş", antlasma: "Antlaşma", siyasi: "Siyasi", kisisel: "Kişisel", diger: "Diğer" };
+const TKIND_DOT: Record<string, string> = {
+  savas: "bg-red-500", antlasma: "bg-amber-500", siyasi: "bg-accent-purple", kisisel: "bg-sky-500", diger: "bg-text-secondary",
 };
 const KIND_LABEL: Record<string, string> = {
   kisi: "Kişi", yer: "Yer", olay: "Olay", antlasma: "Antlaşma", kurum: "Kurum", kavram: "Kavram",
@@ -64,7 +73,29 @@ export default function CollectionPage({ params }: { params: { id: string } }) {
   const router = useRouter();
   const [data, setData] = useState<any>(null);
   const [err, setErr] = useState("");
-  const [tab, setTab] = useState<"raf" | "sor" | "sozluk" | "ders" | "kart">("raf");
+  const [tab, setTab] = useState<"raf" | "sor" | "sozluk" | "zaman" | "ders" | "kart">("raf");
+
+  // Zaman cizelgesi
+  const [tEvents, setTEvents] = useState<TEvent[] | null>(null);
+  const [tAt, setTAt] = useState<string | null>(null);
+  const [tBusy, setTBusy] = useState(false);
+  const [tErr, setTErr] = useState("");
+  const [tKind, setTKind] = useState("");
+  const [tDoc, setTDoc] = useState("");
+  async function loadTimeline() {
+    try { const r = await api(`/collections/${id}/timeline`); setTEvents(r?.events || []); setTAt(r?.generated_at || null); }
+    catch { setTEvents([]); }
+  }
+  useEffect(() => { if (tab === "zaman" && tEvents === null) loadTimeline(); }, [tab]);
+  async function buildTimeline() {
+    setTBusy(true); setTErr("");
+    try {
+      const r = await api(`/collections/${id}/timeline`, { method: "POST" });
+      setTEvents(r?.events || []); setTAt(r?.generated_at || null);
+      if (!(r?.events || []).length) setTErr("Belgelerde tarihli olay bulunamadı.");
+    } catch (e: any) { setTErr(e?.message || "Zaman çizelgesi oluşturulamadı."); if (tEvents === null) setTEvents([]); }
+    finally { setTBusy(false); }
+  }
 
   // Sozluk (kisiler & kavramlar)
   const [gItems, setGItems] = useState<GItem[] | null>(null);
@@ -203,20 +234,38 @@ export default function CollectionPage({ params }: { params: { id: string } }) {
     } finally { setGBusy(false); }
   }
 
+  const [audioUrl, setAudioUrl] = useState("");
+  const [audioReady, setAudioReady] = useState(false); // onbellekte ses var mi
+  const LEC_KEY = "lecture.text." + id;
+  const AUDIO_KEY = "/typdf-audio/lecture/" + id;
+
   function stopAudio() {
-    try {
-      if (audioRef.current) { audioRef.current.pause(); audioRef.current.src = ""; }
-      if (audioUrlRef.current) { URL.revokeObjectURL(audioUrlRef.current); audioUrlRef.current = ""; }
-    } catch {}
-    setPlaying(false);
+    try { if (audioUrlRef.current) { URL.revokeObjectURL(audioUrlRef.current); audioUrlRef.current = ""; } } catch {}
+    setAudioUrl(""); setPlaying(false);
   }
   useEffect(() => () => { stopAudio(); }, []);
 
+  // ders metni ve ses onbellegini yukle (sayfaya donunce yeniden uretmeye gerek yok)
+  useEffect(() => {
+    try { const t = localStorage.getItem(LEC_KEY); if (t) setLecture(t); } catch {}
+    (async () => {
+      try {
+        if (!("caches" in window)) return;
+        const c = await caches.open("typdf-audio");
+        const hit = await c.match(AUDIO_KEY);
+        setAudioReady(!!hit);
+      } catch {}
+    })();
+  }, [id]);
+
   async function makeLecture() {
-    setLecBusy(true); setLecErr(""); setLecture(""); stopAudio();
+    setLecBusy(true); setLecErr(""); setLecture(""); stopAudio(); setAudioReady(false);
     try {
       const r = await api(`/collections/${id}/lecture`, { method: "POST" });
-      setLecture(r.script || "");
+      const s = r.script || "";
+      setLecture(s);
+      try { localStorage.setItem(LEC_KEY, s); localStorage.removeItem("lecture.pos." + id); } catch {}
+      try { if ("caches" in window) { const c = await caches.open("typdf-audio"); await c.delete(AUDIO_KEY); } } catch {}
     } catch (e: any) {
       setLecErr(e?.message || "Ders oluşturulamadı.");
     } finally { setLecBusy(false); }
@@ -226,20 +275,35 @@ export default function CollectionPage({ params }: { params: { id: string } }) {
     if (!lecture) return;
     setAudioBusy(true); setLecErr(""); stopAudio();
     try {
-      const res = await fetch(`${API}/tts`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json", Authorization: "Bearer " + getToken() },
-        body: JSON.stringify({ text: lecture.slice(0, 5500) }),
-      });
-      if (!res.ok) throw new Error("Seslendirme yapılamadı.");
-      const blob = await res.blob();
+      let blob: Blob | null = null;
+      // 1) onbellek
+      try {
+        if ("caches" in window) {
+          const c = await caches.open("typdf-audio");
+          const hit = await c.match(AUDIO_KEY);
+          if (hit) blob = await hit.blob();
+        }
+      } catch {}
+      // 2) uret
+      if (!blob) {
+        const res = await fetch(`${API}/tts`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json", Authorization: "Bearer " + getToken() },
+          body: JSON.stringify({ text: lecture.slice(0, 5500) }),
+        });
+        if (!res.ok) throw new Error("Seslendirme yapılamadı.");
+        blob = await res.blob();
+        try {
+          if ("caches" in window) {
+            const c = await caches.open("typdf-audio");
+            await c.put(AUDIO_KEY, new Response(blob, { headers: { "Content-Type": blob.type || "audio/mpeg" } }));
+            setAudioReady(true);
+          }
+        } catch {}
+      }
       const url = URL.createObjectURL(blob);
       audioUrlRef.current = url;
-      const a = new Audio(url);
-      a.onended = () => setPlaying(false);
-      audioRef.current = a;
-      await a.play();
-      setPlaying(true);
+      setAudioUrl(url); setPlaying(true);
     } catch (e: any) {
       setLecErr(e?.message || "Seslendirme yapılamadı.");
     } finally { setAudioBusy(false); }
@@ -389,7 +453,7 @@ export default function CollectionPage({ params }: { params: { id: string } }) {
 
       {/* sekmeler */}
       <div className="mt-6 flex gap-1 border-b">
-        {([["raf", "Raf", FileText], ["sor", "Konuya sor", Sparkles], ["sozluk", "Sözlük", BookMarked],
+        {([["raf", "Raf", FileText], ["sor", "Konuya sor", Sparkles], ["sozluk", "Sözlük", BookMarked], ["zaman", "Zaman", Clock],
            ["ders", "Sesli ders", Headphones], ["kart", "Kartlar", GraduationCap]] as const).map(
           ([k, label, Icon]) => (
             <button key={k} onClick={() => setTab(k as any)}
@@ -618,6 +682,98 @@ export default function CollectionPage({ params }: { params: { id: string } }) {
         </div>
       )}
 
+      {/* ZAMAN CIZELGESI */}
+      {tab === "zaman" && (
+        <div className="mt-5">
+          {tEvents === null ? (
+            <p className="text-sm text-text-secondary">Yükleniyor…</p>
+          ) : tEvents.length === 0 ? (
+            <div className="max-w-3xl rounded-2xl border border-dashed p-8 text-center">
+              <Clock size={28} className="mx-auto text-accent-purple" />
+              <p className="mt-3 text-sm text-text-secondary">
+                Kitaptaki tüm belgelerden <b>tarihli olayları</b> çıkarır, tek bir kronolojik çizgiye dizer.
+                İki belge aynı dönemi anlatıyorsa olaylar iç içe geçer; her olay kaynak sayfasına tıklanır.
+              </p>
+              <button onClick={buildTimeline} disabled={tBusy}
+                      className="mx-auto mt-4 flex items-center gap-1.5 rounded-xl bg-accent-purple px-4 py-2 text-sm text-white disabled:opacity-60">
+                {tBusy ? <Loader2 size={15} className="animate-spin" /> : <Sparkles size={15} />}
+                {tBusy ? "Çıkarılıyor… (belge başına ~15 sn)" : "Zaman çizelgesini oluştur"}
+              </button>
+              {tErr && <p className="mt-3 text-sm text-danger">{tErr}</p>}
+            </div>
+          ) : (() => {
+            const evs = tEvents
+              .filter((e) => !tKind || e.kind === tKind)
+              .filter((e) => !tDoc || e.document_id === tDoc);
+            const docsIn = Array.from(new Map(tEvents.map((e) => [e.document_id, e.document_title])).entries());
+            const byYear: Record<string, TEvent[]> = {};
+            for (const e of evs) (byYear[e.year] ||= []).push(e);
+            const years = Object.keys(byYear).map(Number).sort((a, b) => a - b);
+            return (
+              <>
+                <div className="flex flex-wrap items-center gap-2">
+                  <div className="flex flex-wrap gap-1.5">
+                    {([["", "Tümü"], ["savas", "Savaş"], ["antlasma", "Antlaşma"], ["siyasi", "Siyasi"], ["kisisel", "Kişisel"], ["diger", "Diğer"]] as const).map(([k, label]) => {
+                      const n = k ? tEvents.filter((e) => e.kind === k).length : tEvents.length;
+                      if (k && n === 0) return null;
+                      return (
+                        <button key={k} onClick={() => setTKind(k)}
+                                className={cx("flex items-center gap-1.5 rounded-full px-2.5 py-1 text-xs",
+                                  tKind === k ? "bg-accent-purple/15 text-accent-purple" : "border bg-surface text-text-secondary hover:border-accent-purple/50")}>
+                          {k && <span className={cx("h-2 w-2 rounded-full", TKIND_DOT[k])} />}{label} <span className="opacity-60">{n}</span>
+                        </button>
+                      );
+                    })}
+                  </div>
+                  {docsIn.length > 1 && (
+                    <select value={tDoc} onChange={(e) => setTDoc(e.target.value)} className="rounded-lg border bg-surface px-2.5 py-1.5 text-xs">
+                      <option value="">Tüm belgeler</option>
+                      {docsIn.map(([did, t]) => <option key={did} value={did}>{t}</option>)}
+                    </select>
+                  )}
+                  <button onClick={buildTimeline} disabled={tBusy} title="Belgeler değiştiyse yeniden çıkar"
+                          className="ml-auto flex items-center gap-1.5 rounded-xl border px-3 py-1.5 text-xs text-text-secondary hover:border-accent-purple/50 disabled:opacity-60">
+                    {tBusy ? <Loader2 size={13} className="animate-spin" /> : <RefreshCw size={13} />} Yenile
+                  </button>
+                </div>
+
+                <div className="relative mt-6 pl-6">
+                  <div className="absolute bottom-0 left-[9px] top-0 w-px bg-black/15 dark:bg-white/15" />
+                  {years.map((y) => (
+                    <div key={y} className="relative mb-7">
+                      <div className="absolute -left-6 top-0 flex h-5 w-5 items-center justify-center rounded-full border-2 border-accent-purple bg-surface" />
+                      <div className="mb-2 font-heading text-2xl text-accent-purple">{y}</div>
+                      <div className="space-y-2">
+                        {byYear[y].map((e, i) => (
+                          <div key={i} className="rounded-xl border bg-surface p-3">
+                            <div className="flex items-start gap-2.5">
+                              <span className={cx("mt-1.5 h-2.5 w-2.5 shrink-0 rounded-full", TKIND_DOT[e.kind] || TKIND_DOT.diger)} title={TKIND_LABEL[e.kind] || e.kind} />
+                              <div className="min-w-0 flex-1">
+                                <div className="flex flex-wrap items-baseline gap-x-2">
+                                  <span className="text-xs text-text-secondary">{e.date}</span>
+                                  <h4 className="font-medium">{e.title}</h4>
+                                </div>
+                                {e.detail && <p className="mt-1 text-sm leading-relaxed text-text-secondary">{e.detail}</p>}
+                                <button onClick={() => router.push("/documents/" + e.document_id + (e.page ? "?page=" + e.page : ""))}
+                                        className="mt-2 max-w-full truncate rounded-full border bg-surface px-2 py-0.5 text-[11px] text-text-secondary hover:border-accent-purple/50 hover:text-accent-purple">
+                                  {e.document_title}{e.page ? " · s." + e.page : ""}
+                                </button>
+                              </div>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  ))}
+                  {evs.length === 0 && <p className="text-sm text-text-secondary">Filtreyle eşleşen olay yok.</p>}
+                </div>
+                {tAt && <p className="mt-2 text-[11px] text-text-secondary">Oluşturma: {new Date(tAt).toLocaleDateString("tr-TR")}</p>}
+              </>
+            );
+          })()}
+        </div>
+      )}
+
       {/* SESLI DERS */}
       {tab === "ders" && (
         <div className="mt-5 max-w-3xl">
@@ -631,26 +787,29 @@ export default function CollectionPage({ params }: { params: { id: string } }) {
               {lecBusy ? <Loader2 size={15} className="animate-spin" /> : <Headphones size={15} />}
               {lecBusy ? "Ders hazırlanıyor…" : lecture ? "Yeniden hazırla" : "Dersi hazırla"}
             </button>
-            {lecture && (
-              <>
-                <button onClick={playLecture} disabled={audioBusy}
-                        className="flex items-center gap-1.5 rounded-xl border px-4 py-2.5 text-sm hover:bg-black/5 disabled:opacity-60">
-                  {audioBusy ? <Loader2 size={15} className="animate-spin" /> : <Headphones size={15} />}
-                  {audioBusy ? "Ses hazırlanıyor…" : "Dinle"}
-                </button>
-                {playing && (
-                  <button onClick={stopAudio} className="rounded-xl border px-4 py-2.5 text-sm hover:bg-black/5">
-                    Durdur
-                  </button>
-                )}
-              </>
+            {lecture && !audioUrl && (
+              <button onClick={playLecture} disabled={audioBusy}
+                      className="flex items-center gap-1.5 rounded-xl border px-4 py-2.5 text-sm hover:bg-black/5 disabled:opacity-60">
+                {audioBusy ? <Loader2 size={15} className="animate-spin" /> : <Headphones size={15} />}
+                {audioBusy ? (audioReady ? "Açılıyor…" : "Ses hazırlanıyor… (~20 sn)") : (audioReady ? "Dinle (hazır)" : "Dinle")}
+              </button>
             )}
           </div>
           {lecErr && <p className="mt-3 text-sm text-danger">{lecErr}</p>}
-          {lecture && (
-            <div className="mt-4 rounded-2xl border bg-surface p-4">
-              <p className="whitespace-pre-wrap text-sm leading-relaxed">{lecture}</p>
+          {audioUrl && (
+            <div className="mt-4">
+              <PodcastPlayer src={audioUrl} title={col.title} subtitle={`Sesli ders · ${st.ready || st.documents} belge`}
+                             artwork="/icon" storageKey={"lecture.pos." + id} autoPlay />
+              <p className="mt-2 text-[11px] text-text-secondary">
+                Ekran kilitliyken kulaklık/bildirim tuşlarıyla kontrol edebilirsin. Kaldığın yer hatırlanır; ses cihazda saklanır, tekrar üretilmez.
+              </p>
             </div>
+          )}
+          {lecture && (
+            <details className="mt-4 rounded-2xl border bg-surface p-4" open={!audioUrl}>
+              <summary className="cursor-pointer text-sm font-medium">Ders metni</summary>
+              <p className="mt-3 whitespace-pre-wrap text-sm leading-relaxed">{lecture}</p>
+            </details>
           )}
         </div>
       )}

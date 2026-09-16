@@ -5,7 +5,7 @@ from fastapi import APIRouter, Depends
 from pydantic import BaseModel
 from app.deps import db, current_user
 from app.services import rag_service
-from app.services.analysis_service import generate_study_items, feynman_review, lecture_script, extract_glossary
+from app.services.analysis_service import generate_study_items, feynman_review, lecture_script, extract_glossary, extract_timeline
 from app.ai.factory import get_embeddings, get_llm
 from app.core.errors import NotFound, AppError
 from app.config import settings
@@ -285,6 +285,59 @@ async def build_glossary(cid: str, conn=Depends(db), user=Depends(current_user))
     now = datetime.now(timezone.utc)
     await conn.execute("UPDATE collections SET glossary=$1, glossary_at=$2 WHERE id=$3", payload, now, cid)
     return {"items": items, "generated_at": now.isoformat(), "documents": len(docs)}
+
+
+@router.get("/collections/{cid}/timeline")
+async def get_timeline(cid: str, conn=Depends(db), user=Depends(current_user)):
+    col = await conn.fetchrow("SELECT id, timeline, timeline_at FROM collections WHERE id=$1 AND user_id=$2",
+                              cid, user["id"])
+    if not col:
+        raise NotFound("Çalışma kitabı bulunamadı.")
+    t = col["timeline"]
+    if isinstance(t, str):
+        try:
+            t = json.loads(t)
+        except Exception:
+            t = None
+    return {"events": (t or {}).get("events", []) if isinstance(t, dict) else [],
+            "generated_at": col["timeline_at"].isoformat() if col["timeline_at"] else None}
+
+
+@router.post("/collections/{cid}/timeline")
+async def build_timeline(cid: str, conn=Depends(db), user=Depends(current_user)):
+    """Kitaptaki belgelerden tarihli olaylari cikarip kronolojik birlestirir."""
+    col = await conn.fetchrow("SELECT id, title FROM collections WHERE id=$1 AND user_id=$2", cid, user["id"])
+    if not col:
+        raise NotFound("Çalışma kitabı bulunamadı.")
+    docs = await conn.fetch(
+        "SELECT id, title FROM documents WHERE user_id=$1 AND collection_id=$2 AND status='ready' ORDER BY created_at",
+        user["id"], cid)
+    if not docs:
+        raise AppError("Bu çalışma kitabında hazır belge yok.")
+    events: list[dict] = []
+    seen: set[tuple] = set()
+    for d in docs:
+        rows = await conn.fetch(
+            "SELECT content, page_number FROM document_chunks WHERE document_id=$1 ORDER BY chunk_index", d["id"])
+        ctx = _glossary_context(rows)
+        if len(ctx) < 200:
+            continue
+        try:
+            evs = extract_timeline(ctx, d["title"])
+        except Exception:
+            continue
+        for ev in evs:
+            key = (ev["year"], ev["month"], _norm_term(ev["title"])[:40])
+            if key in seen:
+                continue
+            seen.add(key)
+            ev["document_id"] = str(d["id"]); ev["document_title"] = d["title"]
+            events.append(ev)
+    events.sort(key=lambda e: (e["year"], e["month"] or 0, e["day"] or 0))
+    payload = {"events": events}
+    now = datetime.now(timezone.utc)
+    await conn.execute("UPDATE collections SET timeline=$1, timeline_at=$2 WHERE id=$3", payload, now, cid)
+    return {"events": events, "generated_at": now.isoformat(), "documents": len(docs)}
 
 
 class ColStudyIn(BaseModel):

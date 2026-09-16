@@ -54,6 +54,36 @@ STUDY_ITEMS_SCHEMA = {
     },
 }
 
+TIMELINE_SCHEMA = {
+    "name": "timeline",
+    "strict": True,
+    "schema": {
+        "type": "object",
+        "additionalProperties": False,
+        "properties": {
+            "events": {
+                "type": "array",
+                "items": {
+                    "type": "object", "additionalProperties": False,
+                    "properties": {
+                        "date": {"type": "string"},
+                        "year": {"type": "integer"},
+                        "month": {"type": "integer"},
+                        "day": {"type": "integer"},
+                        "title": {"type": "string"},
+                        "detail": {"type": "string"},
+                        "kind": {"type": "string",
+                                 "enum": ["savas", "antlasma", "siyasi", "kisisel", "diger"]},
+                        "page": {"type": "integer"},
+                    },
+                    "required": ["date", "year", "month", "day", "title", "detail", "kind", "page"],
+                },
+            }
+        },
+        "required": ["events"],
+    },
+}
+
 GLOSSARY_SCHEMA = {
     "name": "glossary",
     "strict": True,

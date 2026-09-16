@@ -1,7 +1,7 @@
 "use client";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { Library, GraduationCap, LogOut, Compass } from "lucide-react";
+import { Library, GraduationCap, LogOut, Compass, Highlighter } from "lucide-react";
 import { clearToken } from "@/lib/api";
 import { BrandMarkSvg } from "@/components/BrandMark";
 import ThemeToggle, { useTheme } from "@/components/ThemeToggle";
@@ -21,6 +21,9 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
         </Link>
         <Link href="/study" className="flex items-center gap-2 rounded-md px-3 py-2 hover:bg-surface-muted">
           <GraduationCap size={18} /> Öğrenme
+        </Link>
+        <Link href="/notes" className="flex items-center gap-2 rounded-md px-3 py-2 hover:bg-surface-muted">
+          <Highlighter size={18} /> Vurgular
         </Link>
         <Link href="/search" className="flex items-center gap-2 rounded-md px-3 py-2 hover:bg-surface-muted">
           <Compass size={18} /> Keşfet

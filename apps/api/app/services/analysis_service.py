@@ -1,7 +1,46 @@
 import json
 from app.ai.factory import get_llm
-from app.ai.schemas import DOCUMENT_ANALYSIS_SCHEMA, STUDY_ITEMS_SCHEMA, GLOSSARY_SCHEMA
+from app.ai.schemas import DOCUMENT_ANALYSIS_SCHEMA, STUDY_ITEMS_SCHEMA, GLOSSARY_SCHEMA, TIMELINE_SCHEMA
 from app.config import settings
+
+
+def extract_timeline(context: str, doc_title: str, max_events: int = 30) -> list[dict]:
+    """Belgeden tarihli olaylari cikarir (zaman cizelgesi)."""
+    llm = get_llm()
+    messages = [
+        {"role": "system", "content":
+            "Sen bir tarih editörüsün. Verilen metinden TARİHİ BELLİ olayları çıkarırsın. Türkçe yaz.\n\n"
+            "KURALLAR:\n"
+            "1. Yalnızca metinde tarihi açıkça geçen ya da kesin çıkarılabilen olayları al. Tarihi belirsiz olanı atla.\n"
+            "2. year zorunlu (örn. 1911). month bilinmiyorsa 0, day bilinmiyorsa 0. Hicri tarih varsa miladiye çevir.\n"
+            "3. date: insan okur biçim — '12 Mart 1921', 'Ekim 1912', '1878'.\n"
+            "4. title: 3-8 kelimelik olay adı (örn. 'Uşi Antlaşması imzalandı'). detail: 1-2 cümle, ne oldu ve neden önemli.\n"
+            "5. kind: savas (muharebe, işgal, isyan), antlasma (antlaşma, mütareke, kararname), siyasi (kongre, seçim, "
+            "hükümet, ilan), kisisel (bir kişinin atanması, gidişi, ölümü, mektubu), diger.\n"
+            "6. page: olayın geçtiği sayfa ([s.N] etiketlerinden); bilinmiyorsa 0.\n"
+            "7. Belgenin yayın yılı, yazarın doğumu, kaynakçadaki eser tarihleri DAHİL DEĞİL — sadece konunun olayları.\n"
+            f"8. Aynı olayı tekrar yazma. En fazla {max_events} olay; önem sırasına göre değil, hepsini ver."},
+        {"role": "user", "content": f"BELGE: {doc_title}\n\n{context[:22000]}"},
+    ]
+    raw = llm.structured(messages, TIMELINE_SCHEMA, model=settings.active_llm_model)
+    out = []
+    for ev in json.loads(raw).get("events", []):
+        y = ev.get("year")
+        if not isinstance(y, int) or y < 100 or y > 2100:
+            continue
+        t = (ev.get("title") or "").strip()
+        if len(t) < 3:
+            continue
+        m = ev.get("month") if isinstance(ev.get("month"), int) else 0
+        d = ev.get("day") if isinstance(ev.get("day"), int) else 0
+        out.append({
+            "date": (ev.get("date") or str(y)).strip(), "year": y,
+            "month": m if 0 <= m <= 12 else 0, "day": d if 0 <= d <= 31 else 0,
+            "title": t, "detail": (ev.get("detail") or "").strip(),
+            "kind": ev.get("kind") or "diger",
+            "page": ev.get("page") if isinstance(ev.get("page"), int) and ev.get("page") > 0 else None,
+        })
+    return out
 
 
 def extract_glossary(context: str, doc_title: str, max_items: int = 40) -> list[dict]:
