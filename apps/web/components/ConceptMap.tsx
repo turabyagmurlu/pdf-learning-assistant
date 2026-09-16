@@ -68,7 +68,7 @@ export default function ConceptMap({ nodes, edges, height = 560 }: { nodes: CMNo
       for (let i = 0; i < ids.length; i++) for (let j = i + 1; j < ids.length; j++) {
         const a = pos[ids[i]], b = pos[ids[j]]; if (!a || !b) continue;
         let dx = b.x - a.x, dy = b.y - a.y; let d2 = dx * dx + dy * dy || 0.01;
-        const f = (2600 / d2) * alpha; const d = Math.sqrt(d2);
+        const f = (7000 / d2) * alpha; const d = Math.sqrt(d2);
         dx /= d; dy /= d;
         if (!a.fixed) { a.vx -= dx * f; a.vy -= dy * f; }
         if (!b.fixed) { b.vx += dx * f; b.vy += dy * f; }
@@ -77,14 +77,14 @@ export default function ConceptMap({ nodes, edges, height = 560 }: { nodes: CMNo
       for (const [s, t] of adj) {
         const a = pos[s], b = pos[t]; if (!a || !b) continue;
         const dx = b.x - a.x, dy = b.y - a.y; const d = Math.sqrt(dx * dx + dy * dy) || 1;
-        const want = 120; const f = ((d - want) / d) * 0.05 * alpha * 4;
+        const want = 170; const f = ((d - want) / d) * 0.04 * alpha * 4;
         if (!a.fixed) { a.vx += dx * f; a.vy += dy * f; }
         if (!b.fixed) { b.vx -= dx * f; b.vy -= dy * f; }
       }
       // merkeze cekim + sonum
       for (const id of ids) {
         const p = pos[id]; if (!p || p.fixed) continue;
-        p.vx += (size.w / 2 - p.x) * 0.002 * alpha * 4; p.vy += (size.h / 2 - p.y) * 0.002 * alpha * 4;
+        p.vx += (size.w / 2 - p.x) * 0.0012 * alpha * 4; p.vy += (size.h / 2 - p.y) * 0.0012 * alpha * 4;
         p.vx *= 0.82; p.vy *= 0.82; p.x += p.vx; p.y += p.vy;
         p.x = Math.max(30, Math.min(size.w - 30, p.x)); p.y = Math.max(30, Math.min(size.h - 30, p.y));
       }
@@ -116,13 +116,21 @@ export default function ConceptMap({ nodes, edges, height = 560 }: { nodes: CMNo
     if (d?.id) { const p = posRef.current[d.id]; if (p) setTimeout(() => { p.fixed = false; }, 400); }
     dragRef.current = null;
   }
-  function onWheel(e: React.WheelEvent) {
-    e.preventDefault();
-    const r = (wrapRef.current as HTMLDivElement).getBoundingClientRect();
-    const mx = e.clientX - r.left, my = e.clientY - r.top;
-    const k2 = Math.max(0.4, Math.min(3, zoom.k * (e.deltaY < 0 ? 1.12 : 0.89)));
-    setZoom({ k: k2, x: mx - (mx - zoom.x) * (k2 / zoom.k), y: my - (my - zoom.y) * (k2 / zoom.k) });
-  }
+  // tekerlek: sayfayi kaydirmasin, haritayi yakinlastirsin (pasif olmayan dinleyici gerekir)
+  useEffect(() => {
+    const el = wrapRef.current; if (!el) return;
+    const h = (e: WheelEvent) => {
+      e.preventDefault();
+      const r = el.getBoundingClientRect();
+      const mx = e.clientX - r.left, my = e.clientY - r.top;
+      setZoom((z) => {
+        const k2 = Math.max(0.4, Math.min(3, z.k * (e.deltaY < 0 ? 1.12 : 0.89)));
+        return { k: k2, x: mx - (mx - z.x) * (k2 / z.k), y: my - (my - z.y) * (k2 / z.k) };
+      });
+    };
+    el.addEventListener("wheel", h, { passive: false });
+    return () => el.removeEventListener("wheel", h);
+  }, []);
 
   const selNode = sel?.type === "node" ? nodes.find((n) => n.id === sel.id) : null;
   const selEdge = sel?.type === "edge" ? edges[sel.i] : null;
@@ -156,7 +164,7 @@ export default function ConceptMap({ nodes, edges, height = 560 }: { nodes: CMNo
       </div>
 
       <div ref={wrapRef} className="relative mt-3 overflow-hidden rounded-2xl border bg-surface" style={{ height, touchAction: "none" }}
-           onPointerMove={onMove} onPointerUp={onUp} onPointerLeave={onUp} onWheel={onWheel}>
+           onPointerMove={onMove} onPointerUp={onUp} onPointerLeave={onUp}>
         <svg width={size.w} height={size.h} onPointerDown={(e) => { onDownBg(e); setSel(null); }} className="cursor-grab">
           <g transform={`translate(${zoom.x},${zoom.y}) scale(${zoom.k})`}>
             {visEdges.map((e, i) => {
