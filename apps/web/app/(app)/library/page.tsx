@@ -2,6 +2,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { api, API, getToken } from "@/lib/api";
+import { CardSkeleton } from "@/components/Skeleton";
 import { UploadCloud, Search, Star, Trash2, Pencil, LayoutGrid, List, MoreVertical, X, FileText, FolderOpen, FolderPlus, Check, BookOpen } from "lucide-react";
 
 type Doc = {
@@ -145,7 +146,7 @@ export default function LibraryPage() {
   const pad = density === "compact" ? "p-3" : "p-4";
 
   return (
-    <div className="mx-auto w-full max-w-6xl px-6 py-8" onClick={() => { setMenuFor(null); setFolderMenu(null); }}>
+    <div className="mx-auto w-full max-w-6xl px-4 py-5 md:px-6 md:py-8" onClick={() => { setMenuFor(null); setFolderMenu(null); }}>
       <div className="mb-1">
         <h1 className="font-heading text-3xl">Kütüphane</h1>
         <p className="mt-1 text-sm text-text-secondary">PDF'lerini yükle, düzenle, kategorilere ayır; sana çalışılabilir hale getireyim.</p>
@@ -205,7 +206,7 @@ export default function LibraryPage() {
       </div>
 
       {loading ? (
-        <p className="mt-8 text-center text-sm text-text-secondary">Yükleniyor…</p>
+        <div className="mt-6"><CardSkeleton n={3} /></div>
       ) : filtered.length === 0 ? (
         <div className="mt-6 rounded-2xl border bg-surface p-10 text-center text-sm text-text-secondary">
           {docs.length === 0 ? "Henüz bir PDF yüklemedin. İlk belgeni yükle; senin için özetleyeyim ve çalışılabilir hale getireyim." : "Filtreyle eşleşen belge yok."}

@@ -19,7 +19,9 @@ def extract_timeline(context: str, doc_title: str, max_events: int = 30) -> list
             "hükümet, ilan), kisisel (bir kişinin atanması, gidişi, ölümü, mektubu), diger.\n"
             "6. page: olayın geçtiği sayfa ([s.N] etiketlerinden); bilinmiyorsa 0.\n"
             "7. Belgenin yayın yılı, yazarın doğumu, kaynakçadaki eser tarihleri DAHİL DEĞİL — sadece konunun olayları.\n"
-            f"8. Aynı olayı tekrar yazma. En fazla {max_events} olay; önem sırasına göre değil, hepsini ver."},
+            f"8. Aynı olayı tekrar yazma. En fazla {max_events} olay; önem sırasına göre değil, hepsini ver.\n"
+            "9. Yalnızca Türkçe yaz; İngilizce, İspanyolca vb. hiçbir yabancı kelime kullanma. "
+            "Özel adlar Türkçe yazımıyla (Sakarya Meydan Muharebesi, Ankara Antlaşması)."},
         {"role": "user", "content": f"BELGE: {doc_title}\n\n{context[:22000]}"},
     ]
     raw = llm.structured(messages, TIMELINE_SCHEMA, model=settings.active_llm_model)
@@ -63,7 +65,8 @@ def extract_glossary(context: str, doc_title: str, max_items: int = 40) -> list[
             "5. Belgenin yazarı, yayınlandığı üniversite/dergi, kaynakçadaki eser adları ve yazarları DAHİL DEĞİL. "
             "Yalnızca konunun içindeki adlar ve kavramlar.\n"
             "6. Aynı şeyi iki kez yazma; önemsiz/tek geçen ayrıntıları atla. "
-            f"En fazla {max_items} madde; önem sırasına göre."},
+            f"En fazla {max_items} madde; önem sırasına göre.\n"
+            "7. Yalnızca Türkçe yaz; hiçbir yabancı kelime kullanma."},
         {"role": "user", "content": f"BELGE: {doc_title}\n\n{context[:22000]}"},
     ]
     raw = llm.structured(messages, GLOSSARY_SCHEMA, model=settings.active_llm_model)
@@ -168,6 +171,7 @@ STUDY_QUALITY_RULES = """KALİTE KURALLARI (kesin):
    metniyle BİREBİR aynı olsun. flashcard/open_question: options boş dizi.
 9. open_question: "Neden…?", "Nasıl…?", "… ile … arasındaki fark nedir?", "… olmasaydı ne olurdu?"
    gibi düşündüren kalıplar; cevap alanına örnek bir iyi cevap yaz.
+10. Yalnızca Türkçe yaz; İngilizce ya da başka dilden tek bir kelime bile kullanma.
 """
 
 

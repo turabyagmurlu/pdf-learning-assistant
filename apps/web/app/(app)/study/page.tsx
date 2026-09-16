@@ -1,6 +1,7 @@
 "use client";
 import { useEffect, useMemo, useState } from "react";
 import { api, API, getToken } from "@/lib/api";
+import { CardSkeleton } from "@/components/Skeleton";
 import { GraduationCap, Layers, Trophy, Clock, Sparkles, RotateCcw, ChevronRight, Check, X, Play, BookOpen, Trash2, Pencil, Plus } from "lucide-react";
 
 type Doc = { id: string; title: string; status: string };
@@ -38,7 +39,7 @@ export default function StudyPage() {
   }, [docs]);
 
   return (
-    <div className="mx-auto w-full max-w-5xl px-6 py-8">
+    <div className="mx-auto w-full max-w-5xl px-4 py-5 md:px-6 md:py-8">
       <div className="mb-5">
         <h1 className="font-heading text-3xl">Öğrenme</h1>
         <p className="mt-1 text-sm text-text-secondary">Belgelerinden AI ile flashcard ve quiz üret; aralıklı tekrarla kalıcı öğren.</p>
@@ -75,7 +76,7 @@ export default function StudyPage() {
       </div>
 
       <div className="mt-5">
-        {loading ? (<p className="text-sm text-text-secondary">Yükleniyor…</p>) :
+        {loading ? (<CardSkeleton n={2} />) :
          tab === "overview" ? (
            <Overview docs={docs} items={items} onChanged={loadItems}
                      onStudy={(id) => { setFocusDoc(id); setTab("cards"); }}

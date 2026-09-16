@@ -3,6 +3,7 @@ import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { api, API, getToken } from "@/lib/api";
 import PodcastPlayer from "@/components/PodcastPlayer";
+import { Skeleton, CardSkeleton } from "@/components/Skeleton";
 import {
   BookOpen, Sparkles, GraduationCap, FileText, ArrowLeft,
   Loader2, Send, Pencil, Check, Headphones, Plus, X, Square, CheckSquare, Trash2,
@@ -319,7 +320,14 @@ export default function CollectionPage({ params }: { params: { id: string } }) {
   }
 
   if (err) return <div className="p-8 text-danger">{err}</div>;
-  if (!data) return <div className="p-8 text-text-secondary">Yükleniyor…</div>;
+  if (!data) return (
+    <div className="mx-auto w-full max-w-6xl px-4 py-5 md:px-6 md:py-8">
+      <Skeleton className="h-4 w-24" />
+      <Skeleton className="mt-4 h-9 w-56" />
+      <Skeleton className="mt-2 h-3 w-40" />
+      <div className="mt-6"><CardSkeleton n={3} /></div>
+    </div>
+  );
 
   const col = data.collection;
   const docs: Doc[] = data.documents || [];
@@ -339,7 +347,7 @@ export default function CollectionPage({ params }: { params: { id: string } }) {
   const etaText = mins >= 60 ? `${Math.round(mins / 60)} saat` : `${mins} dk`;
 
   return (
-    <div className="mx-auto w-full max-w-6xl px-6 py-8">
+    <div className="mx-auto w-full max-w-6xl px-4 py-5 md:px-6 md:py-8">
       <button onClick={() => router.push("/library")}
               className="mb-4 flex items-center gap-1.5 text-sm text-text-secondary hover:text-accent-purple">
         <ArrowLeft size={15} /> Kütüphane
@@ -452,12 +460,12 @@ export default function CollectionPage({ params }: { params: { id: string } }) {
       )}
 
       {/* sekmeler */}
-      <div className="mt-6 flex gap-1 border-b">
+      <div className="mt-6 flex gap-1 overflow-x-auto border-b [-ms-overflow-style:none] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
         {([["raf", "Raf", FileText], ["sor", "Konuya sor", Sparkles], ["sozluk", "Sözlük", BookMarked], ["zaman", "Zaman", Clock],
            ["ders", "Sesli ders", Headphones], ["kart", "Kartlar", GraduationCap]] as const).map(
           ([k, label, Icon]) => (
             <button key={k} onClick={() => setTab(k as any)}
-                    className={cx("flex items-center gap-1.5 px-4 py-2.5 text-sm",
+                    className={cx("flex shrink-0 items-center gap-1.5 whitespace-nowrap px-3 py-2.5 text-sm md:px-4",
                       tab === k ? "border-b-2 border-accent-purple text-accent-purple" : "text-text-secondary")}>
               <Icon size={15} /> {label}
             </button>
