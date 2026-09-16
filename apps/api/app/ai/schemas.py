@@ -54,6 +54,32 @@ STUDY_ITEMS_SCHEMA = {
     },
 }
 
+RELATIONS_SCHEMA = {
+    "name": "relations",
+    "strict": True,
+    "schema": {
+        "type": "object",
+        "additionalProperties": False,
+        "properties": {
+            "relations": {
+                "type": "array",
+                "items": {
+                    "type": "object", "additionalProperties": False,
+                    "properties": {
+                        "source": {"type": "string"},
+                        "target": {"type": "string"},
+                        "label": {"type": "string"},
+                        "sentence": {"type": "string"},
+                        "page": {"type": "integer"},
+                    },
+                    "required": ["source", "target", "label", "sentence", "page"],
+                },
+            }
+        },
+        "required": ["relations"],
+    },
+}
+
 TIMELINE_SCHEMA = {
     "name": "timeline",
     "strict": True,

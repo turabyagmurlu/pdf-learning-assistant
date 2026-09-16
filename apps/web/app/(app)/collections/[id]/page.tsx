@@ -4,10 +4,11 @@ import { useRouter } from "next/navigation";
 import { api, API, getToken } from "@/lib/api";
 import PodcastPlayer from "@/components/PodcastPlayer";
 import { Skeleton, CardSkeleton } from "@/components/Skeleton";
+import ConceptMap, { CMNode, CMEdge } from "@/components/ConceptMap";
 import {
   BookOpen, Sparkles, GraduationCap, FileText, ArrowLeft,
   Loader2, Send, Pencil, Check, Headphones, Plus, X, Square, CheckSquare, Trash2,
-  BookMarked, Search, RefreshCw, Clock,
+  BookMarked, Search, RefreshCw, Clock, Share2,
 } from "lucide-react";
 
 type Doc = {
@@ -74,7 +75,27 @@ export default function CollectionPage({ params }: { params: { id: string } }) {
   const router = useRouter();
   const [data, setData] = useState<any>(null);
   const [err, setErr] = useState("");
-  const [tab, setTab] = useState<"raf" | "sor" | "sozluk" | "zaman" | "ders" | "kart">("raf");
+  const [tab, setTab] = useState<"raf" | "sor" | "sozluk" | "harita" | "zaman" | "ders" | "kart">("raf");
+
+  // Kavram haritasi
+  const [cm, setCm] = useState<{ nodes: CMNode[]; edges: CMEdge[] } | null>(null);
+  const [cmAt, setCmAt] = useState<string | null>(null);
+  const [cmBusy, setCmBusy] = useState(false);
+  const [cmErr, setCmErr] = useState("");
+  async function loadMap() {
+    try { const r = await api(`/collections/${id}/concept-map`); setCm({ nodes: r?.nodes || [], edges: r?.edges || [] }); setCmAt(r?.generated_at || null); }
+    catch { setCm({ nodes: [], edges: [] }); }
+  }
+  useEffect(() => { if (tab === "harita" && cm === null) loadMap(); }, [tab]);
+  async function buildMap() {
+    setCmBusy(true); setCmErr("");
+    try {
+      const r = await api(`/collections/${id}/concept-map`, { method: "POST" });
+      setCm({ nodes: r?.nodes || [], edges: r?.edges || [] }); setCmAt(r?.generated_at || null);
+      if (!(r?.nodes || []).length) setCmErr("Harita için madde bulunamadı.");
+    } catch (e: any) { setCmErr(e?.message || "Harita oluşturulamadı."); if (cm === null) setCm({ nodes: [], edges: [] }); }
+    finally { setCmBusy(false); }
+  }
 
   // Zaman cizelgesi
   const [tEvents, setTEvents] = useState<TEvent[] | null>(null);
@@ -461,7 +482,7 @@ export default function CollectionPage({ params }: { params: { id: string } }) {
 
       {/* sekmeler */}
       <div className="mt-6 flex gap-1 overflow-x-auto border-b [-ms-overflow-style:none] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
-        {([["raf", "Raf", FileText], ["sor", "Konuya sor", Sparkles], ["sozluk", "Sözlük", BookMarked], ["zaman", "Zaman", Clock],
+        {([["raf", "Raf", FileText], ["sor", "Konuya sor", Sparkles], ["sozluk", "Sözlük", BookMarked], ["harita", "Harita", Share2], ["zaman", "Zaman", Clock],
            ["ders", "Sesli ders", Headphones], ["kart", "Kartlar", GraduationCap]] as const).map(
           ([k, label, Icon]) => (
             <button key={k} onClick={() => setTab(k as any)}
@@ -685,6 +706,41 @@ export default function CollectionPage({ params }: { params: { id: string } }) {
                   </div>
                 );
               })()}
+            </>
+          )}
+        </div>
+      )}
+
+      {/* KAVRAM HARITASI */}
+      {tab === "harita" && (
+        <div className="mt-5">
+          {cm === null ? (
+            <Skeleton className="h-[560px] w-full rounded-2xl" />
+          ) : cm.nodes.length === 0 ? (
+            <div className="max-w-3xl rounded-2xl border border-dashed p-8 text-center">
+              <Share2 size={28} className="mx-auto text-accent-purple" />
+              <p className="mt-3 text-sm text-text-secondary">
+                Sözlükteki <b>kişi, olay, antlaşma ve kurumları</b> metindeki ilişkilerle birbirine bağlar:
+                kim kimi komuta etti, kim neyi imzaladı, kim kime mektup yazdı. Düğüme tıkla → sayfa; çizgiye tıkla → kaynak cümle.
+              </p>
+              <button onClick={buildMap} disabled={cmBusy}
+                      className="mx-auto mt-4 flex items-center gap-1.5 rounded-xl bg-accent-purple px-4 py-2 text-sm text-white disabled:opacity-60">
+                {cmBusy ? <Loader2 size={15} className="animate-spin" /> : <Sparkles size={15} />}
+                {cmBusy ? "Haritalanıyor… (belge başına ~20 sn)" : "Haritayı oluştur"}
+              </button>
+              {cmErr && <p className="mt-3 text-sm text-danger">{cmErr}</p>}
+            </div>
+          ) : (
+            <>
+              <div className="mb-2 flex items-center justify-between">
+                <p className="text-sm text-text-secondary">{cm.nodes.length} madde · {cm.edges.length} ilişki</p>
+                <button onClick={buildMap} disabled={cmBusy} title="Belgeler değiştiyse yeniden çıkar"
+                        className="flex items-center gap-1.5 rounded-xl border px-3 py-1.5 text-xs text-text-secondary hover:border-accent-purple/50 disabled:opacity-60">
+                  {cmBusy ? <Loader2 size={13} className="animate-spin" /> : <RefreshCw size={13} />} Yenile
+                </button>
+              </div>
+              <ConceptMap nodes={cm.nodes} edges={cm.edges} height={Math.max(420, Math.min(720, 300 + cm.nodes.length * 8))} />
+              {cmAt && <p className="mt-1 text-[11px] text-text-secondary">Oluşturma: {new Date(cmAt).toLocaleDateString("tr-TR")}</p>}
             </>
           )}
         </div>

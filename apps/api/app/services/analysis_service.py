@@ -1,7 +1,44 @@
 import json
 from app.ai.factory import get_llm
-from app.ai.schemas import DOCUMENT_ANALYSIS_SCHEMA, STUDY_ITEMS_SCHEMA, GLOSSARY_SCHEMA, TIMELINE_SCHEMA
+from app.ai.schemas import DOCUMENT_ANALYSIS_SCHEMA, STUDY_ITEMS_SCHEMA, GLOSSARY_SCHEMA, TIMELINE_SCHEMA, RELATIONS_SCHEMA
 from app.config import settings
+
+
+def extract_relations(context: str, doc_title: str, terms: list[str], max_relations: int = 40) -> list[dict]:
+    """Sozluk maddeleri arasindaki iliskileri cikarir (kavram haritasi kenarlari)."""
+    llm = get_llm()
+    term_list = "\n".join(f"- {t}" for t in terms[:60])
+    messages = [
+        {"role": "system", "content":
+            "Sen bir tarih editörüsün. Verilen metinde, aşağıdaki MADDELER arasındaki somut ilişkileri çıkarırsın. "
+            "Yalnızca Türkçe yaz.\n\n"
+            "KURALLAR:\n"
+            "1. source ve target listedeki maddelerden BİREBİR aynı yazımla seçilir; listede olmayan ad kullanma.\n"
+            "2. label: 1-3 kelimelik ilişki adı, source → target yönünde okunur. Örnekler: 'komuta etti', 'imzaladı', "
+            "'karşı savaştı', 'mektup yazdı', 'yasakladı', 'kurdu', 'katıldı', 'ziyaret etti', 'kaybedildi', 'amcası'.\n"
+            "3. sentence: ilişkiyi metne dayanarak anlatan 1 cümle (kaynağa sadık, uydurma yok).\n"
+            "4. page: cümlenin geçtiği sayfa ([s.N]); bilinmiyorsa 0.\n"
+            "5. Aynı çifti tek kez yaz; zayıf/çıkarımsal bağları atla, metinde açıkça geçenleri al.\n"
+            f"6. En fazla {max_relations} ilişki. Yabancı kelime yok."},
+        {"role": "user", "content": f"BELGE: {doc_title}\n\nMADDELER:\n{term_list}\n\nMETİN:\n{context[:20000]}"},
+    ]
+    raw = llm.structured(messages, RELATIONS_SCHEMA, model=settings.active_llm_model)
+    allowed = {t.strip().lower(): t for t in terms}
+    out, seen = [], set()
+    for r in json.loads(raw).get("relations", []):
+        s = allowed.get((r.get("source") or "").strip().lower())
+        t = allowed.get((r.get("target") or "").strip().lower())
+        if not s or not t or s == t:
+            continue
+        key = (s, t, (r.get("label") or "").strip().lower())
+        if key in seen:
+            continue
+        seen.add(key)
+        pg = r.get("page")
+        out.append({"source": s, "target": t, "label": (r.get("label") or "ilişkili").strip(),
+                    "sentence": (r.get("sentence") or "").strip(),
+                    "page": pg if isinstance(pg, int) and pg > 0 else None})
+    return out
 
 
 def extract_timeline(context: str, doc_title: str, max_events: int = 30) -> list[dict]:

@@ -5,7 +5,8 @@ from fastapi import APIRouter, Depends
 from pydantic import BaseModel
 from app.deps import db, current_user
 from app.services import rag_service
-from app.services.analysis_service import generate_study_items, feynman_review, lecture_script, extract_glossary, extract_timeline
+from app.services.analysis_service import (generate_study_items, feynman_review, lecture_script,
+                                           extract_glossary, extract_timeline, extract_relations)
 from app.ai.factory import get_embeddings, get_llm
 from app.core.errors import NotFound, AppError
 from app.config import settings
@@ -285,6 +286,78 @@ async def build_glossary(cid: str, conn=Depends(db), user=Depends(current_user))
     now = datetime.now(timezone.utc)
     await conn.execute("UPDATE collections SET glossary=$1, glossary_at=$2 WHERE id=$3", payload, now, cid)
     return {"items": items, "generated_at": now.isoformat(), "documents": len(docs)}
+
+
+@router.get("/collections/{cid}/concept-map")
+async def get_concept_map(cid: str, conn=Depends(db), user=Depends(current_user)):
+    col = await conn.fetchrow("SELECT id, concept_map, concept_map_at FROM collections WHERE id=$1 AND user_id=$2",
+                              cid, user["id"])
+    if not col:
+        raise NotFound("Çalışma kitabı bulunamadı.")
+    m = col["concept_map"]
+    if isinstance(m, str):
+        try:
+            m = json.loads(m)
+        except Exception:
+            m = None
+    m = m if isinstance(m, dict) else {}
+    return {"nodes": m.get("nodes", []), "edges": m.get("edges", []),
+            "generated_at": col["concept_map_at"].isoformat() if col["concept_map_at"] else None}
+
+
+@router.post("/collections/{cid}/concept-map")
+async def build_concept_map(cid: str, conn=Depends(db), user=Depends(current_user)):
+    """Sozluk maddelerini dugum, metindeki iliskileri kenar yaparak kavram haritasi kurar.
+    Sozluk yoksa once onu uretir."""
+    col = await conn.fetchrow("SELECT id, title, glossary FROM collections WHERE id=$1 AND user_id=$2", cid, user["id"])
+    if not col:
+        raise NotFound("Çalışma kitabı bulunamadı.")
+    g = col["glossary"]
+    if isinstance(g, str):
+        try:
+            g = json.loads(g)
+        except Exception:
+            g = None
+    items = (g or {}).get("items", []) if isinstance(g, dict) else []
+    if not items:
+        r = await build_glossary(cid, conn, user)  # type: ignore[arg-type]
+        items = r["items"]
+    if not items:
+        raise AppError("Sözlük boş; önce belge ekle.")
+    terms = [it["term"] for it in items]
+    nodes = [{"id": it["term"], "kind": it["kind"], "definition": it["definition"], "mentions": it["mentions"]}
+             for it in items]
+
+    docs = await conn.fetch(
+        "SELECT id, title FROM documents WHERE user_id=$1 AND collection_id=$2 AND status='ready' ORDER BY created_at",
+        user["id"], cid)
+    edges: list[dict] = []
+    seen: set[tuple] = set()
+    for d in docs:
+        rows = await conn.fetch(
+            "SELECT content, page_number FROM document_chunks WHERE document_id=$1 ORDER BY chunk_index", d["id"])
+        ctx = _glossary_context(rows)
+        if len(ctx) < 200:
+            continue
+        # bu belgede gecen maddelerle sinirla
+        doc_terms = [it["term"] for it in items
+                     if any(m.get("document_id") == str(d["id"]) for m in it.get("mentions", []))] or terms
+        try:
+            rels = extract_relations(ctx, d["title"], doc_terms)
+        except Exception:
+            continue
+        for r in rels:
+            key = (r["source"], r["target"], r["label"].lower())
+            if key in seen:
+                continue
+            seen.add(key)
+            r["document_id"] = str(d["id"]); r["document_title"] = d["title"]
+            edges.append(r)
+    # kenari olmayan dugumleri de tut ama sona koy
+    payload = {"nodes": nodes, "edges": edges}
+    now = datetime.now(timezone.utc)
+    await conn.execute("UPDATE collections SET concept_map=$1, concept_map_at=$2 WHERE id=$3", payload, now, cid)
+    return {"nodes": nodes, "edges": edges, "generated_at": now.isoformat()}
 
 
 @router.get("/collections/{cid}/timeline")
