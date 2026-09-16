@@ -14,8 +14,18 @@ export function BrandMarkSvg({ variant = "day", size = 32, rounded = true, title
         </defs>
       )}
       <g clipPath={rounded ? `url(#${id})` : undefined}>
-        {variant === "day" ? <Day /> : <Night />}
+        {variant === "day" ? <Day letters /> : <Night letters />}
       </g>
+    </svg>
+  );
+}
+
+/** Tam alan kaplayan sahne (giris ekrani sol panel gibi). Harfsiz; kenarlari kirpar. */
+export function BrandScene({ variant = "day", className = "" }: { variant?: BrandVariant; className?: string }) {
+  return (
+    <svg className={className} viewBox="0 0 200 200" preserveAspectRatio="xMidYMid slice"
+         width="100%" height="100%" aria-hidden="true">
+      {variant === "day" ? <Day letters={false} /> : <Night letters={false} />}
     </svg>
   );
 }
@@ -33,7 +43,7 @@ function Doors({ paper, edge, line }: { paper: string; edge: string; line: strin
   );
 }
 
-function Day() {
+function Day({ letters = true }: { letters?: boolean }) {
   return (
     <>
       <rect width="200" height="200" fill="#f6b45c" />
@@ -51,12 +61,12 @@ function Day() {
       <path d="M0 200 L0 166 Q100 146 200 170 L200 200 Z" fill="#7a2f12" />
       <path d="M0 200 L0 184 Q100 172 200 186 L200 200 Z" fill="#4e1c0a" />
       <Doors paper="#fbf6ea" edge="#dcc9a2" line="#e6d3b3" />
-      <text x="100" y="188" textAnchor="middle" fontFamily="Georgia, serif" fontSize="22" fontWeight="700" fill="#ffe1a8" letterSpacing="5">TY</text>
+      {letters && <text x="100" y="188" textAnchor="middle" fontFamily="Georgia, serif" fontSize="22" fontWeight="700" fill="#ffe1a8" letterSpacing="5">TY</text>}
     </>
   );
 }
 
-function Night() {
+function Night({ letters = true }: { letters?: boolean }) {
   return (
     <>
       <rect width="200" height="200" fill="#1c1747" />
@@ -75,7 +85,7 @@ function Night() {
       <path d="M0 200 L0 150 L40 132 L80 150 L120 128 L164 148 L200 134 L200 200 Z" fill="#341a44" />
       <path d="M0 200 L0 172 L60 160 L120 172 L200 158 L200 200 Z" fill="#1a0f2a" />
       <Doors paper="#ecdfc4" edge="#c9b48c" line="#d6c39c" />
-      <text x="100" y="188" textAnchor="middle" fontFamily="Georgia, serif" fontSize="22" fontWeight="700" fill="#ffb347" letterSpacing="5">TY</text>
+      {letters && <text x="100" y="188" textAnchor="middle" fontFamily="Georgia, serif" fontSize="22" fontWeight="700" fill="#ffb347" letterSpacing="5">TY</text>}
     </>
   );
 }
