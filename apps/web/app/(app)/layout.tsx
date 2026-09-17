@@ -7,6 +7,8 @@ import { clearToken } from "@/lib/api";
 import { BrandMarkSvg } from "@/components/BrandMark";
 import ThemeToggle, { useTheme } from "@/components/ThemeToggle";
 import Shortcuts from "@/components/Shortcuts";
+import BackButton, { isSubPage, parentOf } from "@/components/BackButton";
+import { useRef } from "react";
 
 const NAV = [
   { href: "/notebooks", label: "Defterler", Icon: Notebook, title: "Defterler" },
@@ -21,6 +23,15 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
   const { dark, mode, set } = useTheme();
   const isReader = pathname.startsWith("/documents/");
   const active = (href: string) => pathname === href || pathname.startsWith(href + "/");
+  const sub = isSubPage(pathname);
+  const parent = parentOf(pathname);
+
+  // Ilk sayfadan sonra yapilan her gecis "uygulama ici gezinti"dir -> geri tusu gercek geri gider.
+  const firstPath = useRef<string | null>(null);
+  useEffect(() => {
+    if (firstPath.current === null) { firstPath.current = pathname; return; }
+    if (pathname !== firstPath.current) { try { sessionStorage.setItem("typdf.nav", "1"); } catch {} }
+  }, [pathname]);
 
   // sekme basligi rotaya gore
   useEffect(() => {
@@ -40,6 +51,10 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
           <BrandMarkSvg variant={dark ? "night" : "day"} size={34} title="TY PDF" />
           <span className="font-heading text-lg leading-tight">TY PDF</span>
         </Link>
+        {sub && (
+          <BackButton fallback={parent.href} label={"Geri · " + parent.label}
+                      className="mb-1 flex items-center gap-2 rounded-md border border-dashed px-3 py-2 text-sm text-text-secondary hover:border-accent-purple/50 hover:bg-surface-muted hover:text-text" />
+        )}
         {NAV.map(({ href, label, Icon }) => (
           <Link key={href} href={href}
                 className={cx("flex items-center gap-2 rounded-md px-3 py-2 hover:bg-surface-muted",
@@ -65,10 +80,15 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
         {!isReader && (
           <header className="sticky top-0 z-30 flex items-center justify-between border-b bg-surface/95 px-4 backdrop-blur md:hidden"
                   style={{ paddingTop: "max(env(safe-area-inset-top), 8px)", paddingBottom: 8 }}>
-            <Link href="/notebooks" className="flex items-center gap-2">
-              <BrandMarkSvg variant={dark ? "night" : "day"} size={28} title="TY PDF" />
-              <span className="font-heading text-base">TY PDF</span>
-            </Link>
+            {sub ? (
+              <BackButton fallback={parent.href} label={parent.label}
+                          className="-ml-2 flex min-h-[44px] items-center gap-1.5 rounded-md px-2 text-sm text-accent-purple active:bg-surface-muted" />
+            ) : (
+              <Link href="/notebooks" className="flex items-center gap-2">
+                <BrandMarkSvg variant={dark ? "night" : "day"} size={28} title="TY PDF" />
+                <span className="font-heading text-base">TY PDF</span>
+              </Link>
+            )}
             <div className="flex items-center gap-1">
               <button onClick={() => set(nextMode as any)} aria-label="Tema" className="rounded-md p-2 text-text-secondary hover:bg-surface-muted">
                 <ModeIcon size={18} />

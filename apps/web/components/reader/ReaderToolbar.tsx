@@ -2,8 +2,9 @@
 import {
   ChevronLeft, ChevronRight, Minus, Plus, Highlighter, StickyNote,
   BookOpen, FileText, Maximize2, Minimize2, Sun, Contrast, Moon, PanelLeft, PanelRight, Download,
-  Undo2, Redo2,
+  Undo2, Redo2, ArrowLeft,
 } from "lucide-react";
+import { useGoBack } from "@/components/BackButton";
 
 type Theme = "light" | "sepia" | "dark";
 interface Props {
@@ -22,8 +23,14 @@ interface Props {
 export default function ReaderToolbar(p: Props) {
   const btn = "flex h-8 w-8 items-center justify-center rounded-lg hover:bg-black/5 disabled:opacity-40";
   const active = "bg-[#6D5DF6]/12 text-[#6D5DF6]";
+  const goBack = useGoBack("/library");
   return (
     <div className="reader-toolbar pointer-events-auto flex items-center gap-1 rounded-2xl px-2 py-1.5 shadow-md">
+      {/* Geri: odak modunda bile kalir; uygulama modunda tek cikis yolu bu */}
+      <button className={`${btn} text-[#6D5DF6]`} aria-label="Geri" title="Geri (Kütüphane)" onClick={goBack}>
+        <ArrowLeft size={17} />
+      </button>
+      <Sep />
       {!p.focus && (
         <>
           <button className={btn} aria-label="Sol paneli aç/kapat" title="Sol panel"
