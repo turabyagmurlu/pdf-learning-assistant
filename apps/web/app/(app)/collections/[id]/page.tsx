@@ -327,26 +327,39 @@ export default function CollectionPage({ params }: { params: { id: string } }) {
   const sampleRef = useRef<HTMLAudioElement | null>(null);
   async function sampleVoice(v: string) {
     setSampling(v); setLecErr("");
+    // Ne olursa olsun buton 45 sn icinde serbest kalsin.
+    const guard = setTimeout(() => setSampling(""), 45000);
+    const ac = new AbortController();
+    const netTimer = setTimeout(() => ac.abort(), 40000);
     try {
       const res = await fetch(`${API}/tts`, {
         method: "POST",
+        signal: ac.signal,
         headers: { "Content-Type": "application/json", Authorization: "Bearer " + getToken() },
         body: JSON.stringify({ text: "Merhaba, bu defterdeki kaynakları sana bu sesle anlatacağım.", voice: v }),
       });
+      clearTimeout(netTimer);
       if (!res.ok) {
         let m = "Örnek dinlenemedi.";
         try { const j = await res.json(); m = j?.error?.user_message || j?.detail || m; } catch {}
         if (res.status === 429) setQuotaOut(true);
         throw new Error(m);
       }
-      const url = URL.createObjectURL(await res.blob());
+      const blob = await res.blob();
+      if (blob.size < 1000) throw new Error("Ses verisi boş geldi; tekrar dene.");
+      const url = URL.createObjectURL(blob);
       try { sampleRef.current?.pause(); } catch {}
       const a = new Audio(url); sampleRef.current = a;
       a.onended = () => URL.revokeObjectURL(url);
-      await a.play();
+      // play() bazi tarayicilarda ne cozulur ne reddedilir; beklemiyoruz.
+      a.play().catch(() => setLecErr("Tarayıcı sesi engelledi; sayfaya bir kez tıklayıp tekrar dene."));
     } catch (e: any) {
-      setLecErr(e?.message || "Örnek dinlenemedi.");
-    } finally { setSampling(""); }
+      const msg = e?.name === "AbortError" ? "Örnek zaman aşımına uğradı; tekrar dene."
+                                           : (e?.message || "Örnek dinlenemedi.");
+      setLecErr(msg);
+    } finally {
+      clearTimeout(netTimer); clearTimeout(guard); setSampling("");
+    }
   }
   useEffect(() => () => { try { sampleRef.current?.pause(); } catch {} }, []);
 
