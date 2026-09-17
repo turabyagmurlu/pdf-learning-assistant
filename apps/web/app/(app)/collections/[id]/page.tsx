@@ -277,21 +277,28 @@ export default function CollectionPage({ params }: { params: { id: string } }) {
     })();
   }, [id]);
 
-  async function makeLecture() {
-    setLecBusy(true); setLecErr(""); setLecture(""); stopAudio(); setAudioReady(false);
+  async function makeLecture(refresh = false) {
+    setLecBusy(true); setLecErr(""); setLecture(""); stopAudio();
+    setUseBrowserVoice(false); setQuotaOut(false);
+    if (refresh) setAudioReady(false);
     try {
+      const path = `/collections/${id}/lecture` + (refresh ? "?refresh=1" : "");
       let r: any = null, lastErr: any = null;
       for (let attempt = 0; attempt < 3 && !r; attempt++) {
         try { if (attempt > 0) { setLecErr(`Sunucu uyanıyor, tekrar deniyorum… (${attempt + 1}/3)`); await new Promise((x) => setTimeout(x, 4000 * attempt)); }
-              r = await api(`/collections/${id}/lecture`, { method: "POST" }); }
+              r = await api(path, { method: "POST" }); }
         catch (e: any) { lastErr = e; if (!/fetch|bağlan|network|502|503|504/i.test(String(e?.message))) break; }
       }
       if (!r) throw lastErr || new Error("Özet oluşturulamadı.");
       setLecErr("");
       const s = r.script || "";
       setLecture(s);
-      try { localStorage.setItem(LEC_KEY, s); localStorage.removeItem("lecture.pos." + id); } catch {}
-      try { if ("caches" in window) { const c = await caches.open("typdf-audio"); await c.delete(AUDIO_KEY); } } catch {}
+      try { localStorage.setItem(LEC_KEY, s); } catch {}
+      // Metin gercekten degistiyse eski ses gecersiz; ayni metinse ses korunur.
+      if (refresh) {
+        try { localStorage.removeItem("lecture.pos." + id); } catch {}
+        try { if ("caches" in window) { const c = await caches.open("typdf-audio"); await c.delete(AUDIO_KEY); } } catch {}
+      }
     } catch (e: any) {
       setLecErr(e?.message || "Ders oluşturulamadı.");
     } finally { setLecBusy(false); }
@@ -880,7 +887,8 @@ export default function CollectionPage({ params }: { params: { id: string } }) {
             yolda dinlersin.
           </p>
           <div className="mt-3 flex flex-wrap gap-2">
-            <button onClick={makeLecture} disabled={lecBusy}
+            <button onClick={() => makeLecture(!!lecture)} disabled={lecBusy}
+                    title={lecture ? "Özeti sıfırdan yeniden yazar; ses de yeniden üretilir." : ""}
                     className="flex items-center gap-1.5 rounded-xl bg-accent-purple px-4 py-2.5 text-sm text-white disabled:opacity-60">
               {lecBusy ? <Loader2 size={15} className="animate-spin" /> : <Headphones size={15} />}
               {lecBusy ? "Özet hazırlanıyor…" : lecture ? "Yeniden hazırla" : "Özeti hazırla"}

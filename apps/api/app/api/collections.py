@@ -215,12 +215,22 @@ async def feynman(cid: str, body: FeynmanIn, conn=Depends(db), user=Depends(curr
 
 
 @router.post("/collections/{cid}/lecture")
-async def lecture(cid: str, conn=Depends(db), user=Depends(current_user)):
-    """Sesli Ders: koleksiyonu akici bir anlatim metnine cevirir."""
-    col = await conn.fetchrow("SELECT id, title FROM collections WHERE id=$1 AND user_id=$2",
-                              cid, user["id"])
+async def lecture(cid: str, refresh: bool = False, conn=Depends(db), user=Depends(current_user)):
+    """Sesli Ders: koleksiyonu akici bir anlatim metnine cevirir.
+
+    Metin kaydedilir: ayni ders her acilista yeniden yazilmaz, boylece uretilen
+    seslendirme de onbellekte kalir (kota bosa gitmez). refresh=1 yeniden yazar.
+    """
+    col = await conn.fetchrow("SELECT id, title, lecture, lecture_at FROM collections "
+                              "WHERE id=$1 AND user_id=$2", cid, user["id"])
     if not col:
         raise NotFound("Çalışma kitabı bulunamadı.")
+    if not refresh and (col["lecture"] or "").strip():
+        n = await conn.fetchval(
+            "SELECT count(*) FROM documents WHERE user_id=$1 AND collection_id=$2 AND status='ready'",
+            user["id"], cid)
+        return {"script": col["lecture"], "title": col["title"], "documents": n,
+                "cached": True, "at": col["lecture_at"].isoformat() if col["lecture_at"] else None}
     docs = await conn.fetch(
         "SELECT id, title, short_summary FROM documents WHERE user_id=$1 AND collection_id=$2 AND status='ready'",
         user["id"], cid)
@@ -235,7 +245,8 @@ async def lecture(cid: str, conn=Depends(db), user=Depends(current_user)):
     if len(context) < 200:
         raise AppError("Ders oluşturmak için yeterli içerik yok.")
     script = await asyncio.to_thread(lecture_script, context, col["title"])
-    return {"script": script, "title": col["title"], "documents": len(docs)}
+    await conn.execute("UPDATE collections SET lecture=$1, lecture_at=now() WHERE id=$2", script, cid)
+    return {"script": script, "title": col["title"], "documents": len(docs), "cached": False}
 
 
 def _norm_term(t: str) -> str:

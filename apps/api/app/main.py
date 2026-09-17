@@ -31,6 +31,8 @@ async def lifespan(app: FastAPI):
             await conn.execute("ALTER TABLE collections ADD COLUMN IF NOT EXISTS concept_map_at timestamptz")
             await conn.execute("ALTER TABLE collections ADD COLUMN IF NOT EXISTS draft text")
             await conn.execute("ALTER TABLE collections ADD COLUMN IF NOT EXISTS draft_at timestamptz")
+            await conn.execute("ALTER TABLE collections ADD COLUMN IF NOT EXISTS lecture text")
+            await conn.execute("ALTER TABLE collections ADD COLUMN IF NOT EXISTS lecture_at timestamptz")
             # Uretilen seslendirmeler: ayni metin bir daha kota harcamasin.
             await conn.execute(
                 "CREATE TABLE IF NOT EXISTS tts_cache ("
