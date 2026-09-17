@@ -1,0 +1,20 @@
+name: keepalive
+
+# Supabase (ve Render) uyku onleyici: backend'i duzenli pingler,
+# boylece Supabase projesi "7 gun hareketsizlik" nedeniyle duraklatilmaz.
+on:
+  schedule:
+    # Render ucretsiz plan 15 dk hareketsizlikte uyur; 06:00-22:00 TR (03-19 UTC) arasi her 10 dk ping
+    - cron: '*/10 3-19 * * *'
+  workflow_dispatch: {}
+
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Backend'i pingle (Supabase + Render keep-alive)
+        run: |
+          BASE="https://pdf-api-r597.onrender.com"
+          curl -s -o /dev/null -w "health %{http_code}\n" --max-time 120 "$BASE/health" || true
+          curl -s -o /dev/null -w "keepalive %{http_code}\n" --max-time 120 "$BASE/keepalive" || true
+          echo "keepalive tamam"

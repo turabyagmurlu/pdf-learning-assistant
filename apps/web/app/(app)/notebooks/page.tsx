@@ -24,10 +24,15 @@ function ago(iso: string) {
 export default function NotebooksPage() {
   const router = useRouter();
   const [list, setList] = useState<NB[] | null>(null);
+  const [loadErr, setLoadErr] = useState("");
   const [creating, setCreating] = useState(false);
   const [title, setTitle] = useState("");
 
-  async function load() { try { setList(await api("/collections")); } catch { setList([]); } }
+  async function load() {
+    setLoadErr("");
+    try { setList(await api("/collections")); }
+    catch (e: any) { setLoadErr(e?.message || "Sunucuya ulaşılamadı."); setList((l) => l ?? []); }
+  }
   useEffect(() => { load(); }, []);
 
   async function create() {
@@ -60,9 +65,15 @@ export default function NotebooksPage() {
                     )
                   } />
 
+      {loadErr && (
+        <div className="mb-4 flex flex-wrap items-center justify-between gap-2 rounded-xl border border-warning/40 bg-warning/10 px-4 py-3 text-sm">
+          <span>Sunucuya ulaşılamadı; defterlerin silinmedi, sadece yüklenemedi. {loadErr}</span>
+          <button onClick={load} className="rounded-lg bg-accent-purple px-3 py-1.5 text-white">Tekrar dene</button>
+        </div>
+      )}
       {list === null ? (
         <CardSkeleton n={3} />
-      ) : list.length === 0 ? (
+      ) : loadErr && list.length === 0 ? null : list.length === 0 ? (
         <div className="rounded-2xl border border-dashed p-12 text-center">
           <Notebook size={30} className="mx-auto text-accent-purple" />
           <p className="mt-3 text-sm text-text-secondary">
