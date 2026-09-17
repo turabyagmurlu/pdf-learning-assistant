@@ -43,8 +43,38 @@ def _wav_header(pcm_len: int, rate: int = 24000, channels: int = 1, bits: int = 
     )
 
 
-def synthesize(text: str, voice: str = DEFAULT_VOICE, style: str = "") -> bytes:
-    """Metni WAV baytlarina cevirir."""
+def wav_from_pcm(pcm: bytes) -> bytes:
+    """Ham PCM'i calinabilir WAV'a cevirir."""
+    return _wav_header(len(pcm)) + pcm
+
+
+def split_for_tts(text: str, max_chars: int = 1100) -> list[str]:
+    """Metni cumle sinirlarindan ~max_chars'lik parcalara boler."""
+    text = (text or "").strip()
+    if not text:
+        return []
+    import re
+    sentences = re.split(r"(?<=[.!?…])\s+", text)
+    chunks, cur = [], ""
+    for sent in sentences:
+        if len(cur) + len(sent) + 1 <= max_chars:
+            cur = (cur + " " + sent).strip()
+        else:
+            if cur:
+                chunks.append(cur)
+            while len(sent) > max_chars:          # tek cumle cok uzunsa kes
+                cut = sent.rfind(" ", 0, max_chars)
+                cut = cut if cut > max_chars // 2 else max_chars
+                chunks.append(sent[:cut].strip())
+                sent = sent[cut:].strip()
+            cur = sent
+    if cur:
+        chunks.append(cur)
+    return chunks
+
+
+def synthesize_pcm(text: str, voice: str = DEFAULT_VOICE, style: str = "") -> bytes:
+    """Metni ham PCM baytlarina cevirir (tek Gemini cagrisi)."""
     key = (settings.gemini_api_key or "").strip()
     if not key:
         raise AiUnavailable("Gemini API anahtarı tanımlı değil.")
@@ -88,11 +118,15 @@ def synthesize(text: str, voice: str = DEFAULT_VOICE, style: str = "") -> bytes:
                 break
         if not b64:
             raise AiUnavailable("Ses verisi alınamadı.")
-        pcm = base64.b64decode(b64)
-        return _wav_header(len(pcm)) + pcm
+        return base64.b64decode(b64)
     except AiUnavailable:
         raise
     except httpx.TimeoutException:
         raise AiUnavailable("Seslendirme çok uzun sürdü. Metni kısaltıp tekrar dene.")
     except Exception:  # noqa
         raise AiUnavailable("Seslendirme servisi şu an yanıt vermiyor.")
+
+
+def synthesize(text: str, voice: str = DEFAULT_VOICE, style: str = "") -> bytes:
+    """Tek parca WAV (kisa metinler icin)."""
+    return wav_from_pcm(synthesize_pcm(text, voice, style))

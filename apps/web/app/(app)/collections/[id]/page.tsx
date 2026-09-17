@@ -296,9 +296,10 @@ export default function CollectionPage({ params }: { params: { id: string } }) {
     } finally { setLecBusy(false); }
   }
 
+  const [audioPct, setAudioPct] = useState(0);
   async function playLecture() {
     if (!lecture) return;
-    setAudioBusy(true); setLecErr(""); stopAudio();
+    setAudioBusy(true); setLecErr(""); setAudioPct(0); stopAudio();
     try {
       let blob: Blob | null = null;
       // 1) onbellek
@@ -309,29 +310,26 @@ export default function CollectionPage({ params }: { params: { id: string } }) {
           if (hit) blob = await hit.blob();
         }
       } catch {}
-      // 2) uret
+      // 2) arka plan isi: parca parca uretilir, ilerleme gosterilir
       if (!blob) {
-        // sunucu uyuyor / yeniden basliyor olabilir: 3 deneme, aralarinda bekleme
-        let res: Response | null = null, lastErr = "";
-        for (let attempt = 0; attempt < 3 && !res; attempt++) {
-          try {
-            if (attempt > 0) { setLecErr(`Sunucu uyanıyor, tekrar deniyorum… (${attempt + 1}/3)`); await new Promise((r) => setTimeout(r, 4000 * attempt)); }
-            const r = await fetch(`${API}/tts`, {
-              method: "POST",
-              headers: { "Content-Type": "application/json", Authorization: "Bearer " + getToken() },
-              body: JSON.stringify({ text: lecture.slice(0, 5500) }),
-            });
-            if (r.ok) res = r;
-            else { lastErr = (await r.text().catch(() => "")) || `HTTP ${r.status}`; if (r.status < 500) break; }
-          } catch (e: any) { lastErr = e?.message || "bağlantı hatası"; }
+        const job = await api("/tts/jobs", { method: "POST", body: JSON.stringify({ text: lecture.slice(0, 12000) }) });
+        const jid = job.job_id;
+        let st: any = null;
+        for (let i = 0; i < 150; i++) {            // en fazla ~5 dk
+          await new Promise((r) => setTimeout(r, 2000));
+          st = await api(`/tts/jobs/${jid}`);
+          if (st.total) setAudioPct(Math.round((st.done / st.total) * 100));
+          if (st.status === "ready") break;
+          if (st.status === "error") throw new Error(st.error || "Seslendirme başarısız.");
         }
-        if (!res) throw new Error("Seslendirme yapılamadı: " + lastErr.slice(0, 160));
-        setLecErr("");
+        if (!st || st.status !== "ready") throw new Error("Seslendirme çok uzun sürdü; metni kısaltıp tekrar dene.");
+        const res = await fetch(`${API}/tts/jobs/${jid}/audio`, { headers: { Authorization: "Bearer " + getToken() } });
+        if (!res.ok) throw new Error("Ses indirilemedi.");
         blob = await res.blob();
         try {
           if ("caches" in window) {
             const c = await caches.open("typdf-audio");
-            await c.put(AUDIO_KEY, new Response(blob, { headers: { "Content-Type": blob.type || "audio/mpeg" } }));
+            await c.put(AUDIO_KEY, new Response(blob, { headers: { "Content-Type": blob.type || "audio/wav" } }));
             setAudioReady(true);
           }
         } catch {}
@@ -341,7 +339,7 @@ export default function CollectionPage({ params }: { params: { id: string } }) {
       setAudioUrl(url); setPlaying(true);
     } catch (e: any) {
       setLecErr(e?.message || "Seslendirme yapılamadı.");
-    } finally { setAudioBusy(false); }
+    } finally { setAudioBusy(false); setAudioPct(0); }
   }
 
   async function saveTitle() {
@@ -875,7 +873,7 @@ export default function CollectionPage({ params }: { params: { id: string } }) {
               <button onClick={playLecture} disabled={audioBusy}
                       className="flex items-center gap-1.5 rounded-xl border px-4 py-2.5 text-sm hover:bg-black/5 disabled:opacity-60">
                 {audioBusy ? <Loader2 size={15} className="animate-spin" /> : <Headphones size={15} />}
-                {audioBusy ? (audioReady ? "Açılıyor…" : "Ses hazırlanıyor… (~20 sn)") : (audioReady ? "Dinle (hazır)" : "Dinle")}
+                {audioBusy ? (audioPct > 0 ? `Ses hazırlanıyor… %${audioPct}` : "Ses hazırlanıyor…") : (audioReady ? "Dinle (hazır)" : "Dinle")}
               </button>
             )}
           </div>

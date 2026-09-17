@@ -1,5 +1,6 @@
 import asyncio
 import json
+import time
 import uuid
 from datetime import datetime, timedelta, timezone
 from fastapi import APIRouter, Depends, Response
@@ -7,7 +8,8 @@ from pydantic import BaseModel
 from app.deps import db, current_user
 from app.core.errors import NotFound, AppError
 from app.services.analysis_service import generate_study_items, cards_from_text, explain_page
-from app.services.tts_service import synthesize, FEMALE_VOICES, DEFAULT_VOICE
+from app.services.tts_service import (synthesize, synthesize_pcm, wav_from_pcm, split_for_tts,
+                                      FEMALE_VOICES, DEFAULT_VOICE)
 
 router = APIRouter(tags=["study"])
 
@@ -144,12 +146,90 @@ async def tts_voices(user=Depends(current_user)):
 
 @router.post("/tts")
 async def tts(body: TtsIn, user=Depends(current_user)):
-    """Metni dogal kadin sesiyle seslendirir (WAV)."""
+    """Kisa metinler icin dogrudan WAV. Uzun metinlerde /tts/jobs kullan."""
     txt = (body.text or "").strip()
     if len(txt) < 2:
         raise AppError("Seslendirilecek metin boş.")
+    if len(txt) > 1500:
+        raise AppError("Metin uzun; /tts/jobs ucunu kullan.")
     wav = await asyncio.to_thread(synthesize, txt, body.voice or DEFAULT_VOICE, body.style or "")
     return Response(content=wav, media_type="audio/wav",
+                    headers={"Cache-Control": "no-store"})
+
+
+# ---- Uzun seslendirme: arka plan isi (parcali, ilerlemeli) ----
+# Tek worker calistigi icin bellekte tutmak yeterli; is bitince ~20 dk saklanir.
+_TTS_JOBS: dict[str, dict] = {}
+_TTS_TTL = 20 * 60
+
+
+def _tts_cleanup():
+    now = time.time()
+    for k in [k for k, v in _TTS_JOBS.items() if now - v.get("at", now) > _TTS_TTL]:
+        _TTS_JOBS.pop(k, None)
+
+
+async def _run_tts_job(job_id: str, chunks: list[str], voice: str, style: str):
+    job = _TTS_JOBS[job_id]
+    sem = asyncio.Semaphore(2)          # aynı anda en fazla 2 Gemini cagrisi
+    parts: list[bytes | None] = [None] * len(chunks)
+
+    async def one(i: int, text: str):
+        async with sem:
+            for attempt in range(2):
+                try:
+                    parts[i] = await asyncio.to_thread(synthesize_pcm, text, voice, style)
+                    break
+                except Exception as e:  # noqa
+                    if attempt == 1:
+                        raise
+                    await asyncio.sleep(3)
+            job["done"] = sum(1 for p in parts if p is not None)
+
+    try:
+        await asyncio.gather(*(one(i, c) for i, c in enumerate(chunks)))
+        job["wav"] = wav_from_pcm(b"".join(p or b"" for p in parts))
+        job["status"] = "ready"
+    except Exception as e:  # noqa
+        job["status"] = "error"
+        job["error"] = getattr(e, "user_message", None) or str(e)[:200] or "Seslendirme başarısız."
+    job["at"] = time.time()
+
+
+@router.post("/tts/jobs")
+async def tts_job_create(body: TtsIn, user=Depends(current_user)):
+    """Uzun metni arka planda parca parca seslendirir; is kimligi doner."""
+    _tts_cleanup()
+    txt = (body.text or "").strip()
+    if len(txt) < 2:
+        raise AppError("Seslendirilecek metin boş.")
+    chunks = split_for_tts(txt[:12000])
+    if not chunks:
+        raise AppError("Seslendirilecek metin boş.")
+    job_id = str(uuid.uuid4())
+    _TTS_JOBS[job_id] = {"status": "running", "done": 0, "total": len(chunks),
+                         "wav": None, "error": None, "at": time.time(), "user": str(user["id"])}
+    asyncio.create_task(_run_tts_job(job_id, chunks, body.voice or DEFAULT_VOICE, body.style or ""))
+    return {"job_id": job_id, "total": len(chunks)}
+
+
+@router.get("/tts/jobs/{job_id}")
+async def tts_job_status(job_id: str, user=Depends(current_user)):
+    job = _TTS_JOBS.get(job_id)
+    if not job or job.get("user") != str(user["id"]):
+        raise NotFound("Seslendirme işi bulunamadı; yeniden başlat.")
+    return {"status": job["status"], "done": job["done"], "total": job["total"],
+            "error": job["error"], "bytes": len(job["wav"]) if job.get("wav") else 0}
+
+
+@router.get("/tts/jobs/{job_id}/audio")
+async def tts_job_audio(job_id: str, user=Depends(current_user)):
+    job = _TTS_JOBS.get(job_id)
+    if not job or job.get("user") != str(user["id"]):
+        raise NotFound("Seslendirme işi bulunamadı; yeniden başlat.")
+    if job["status"] != "ready" or not job.get("wav"):
+        raise AppError("Ses henüz hazır değil.")
+    return Response(content=job["wav"], media_type="audio/wav",
                     headers={"Cache-Control": "no-store"})
 
 
