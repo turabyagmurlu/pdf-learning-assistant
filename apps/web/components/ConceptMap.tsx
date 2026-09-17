@@ -38,7 +38,8 @@ export default function ConceptMap({ nodes, edges, height = 560 }: { nodes: CMNo
   const [q, setQ] = useState("");
   const [view, setView] = useState<"net" | "list">("net");
   const posRef = useRef<Record<string, P>>({});
-  const [, force] = useState(0);
+  const [tick, force] = useState(0);
+  const [hoverEdge, setHoverEdge] = useState<number | null>(null);
   const dragRef = useRef<{ id?: string; pan?: { x: number; y: number; zx: number; zy: number } } | null>(null);
 
   const degree = useMemo(() => {
@@ -112,8 +113,9 @@ export default function ConceptMap({ nodes, edges, height = 560 }: { nodes: CMNo
     const ids = visNodes.map((n) => n.id);
     const adj = visEdges.map((e) => [e.source, e.target] as const);
     // Az dugum varsa daha genis yay, cok dugum varsa daha sikisik dur.
-    const rep = ids.length <= 14 ? 12000 : ids.length <= 30 ? 9000 : 6500;
-    const want = ids.length <= 14 ? 190 : ids.length <= 30 ? 160 : 130;
+    // Etiketlerin sigmasi icin genis birak: az dugumde cok daha genis yay.
+    const rep = ids.length <= 14 ? 20000 : ids.length <= 30 ? 13000 : 8000;
+    const want = ids.length <= 14 ? 230 : ids.length <= 30 ? 185 : 145;
     const step = () => {
       tick++;
       const alpha = Math.max(0.02, 0.35 * Math.pow(0.985, tick));
@@ -182,6 +184,48 @@ export default function ConceptMap({ nodes, edges, height = 560 }: { nodes: CMNo
   }, []);
 
   function openFocus(id: string) { setFocusId(id); setSel({ type: "node", id }); setView("net"); setQ(""); }
+
+  /**
+   * Etiket yerlesimi: once dugum adlari yer kapar, sonra iliski yazilari
+   * bos kalan yerlere konur. Cakisan iliski yazisi gizlenir; yerine cizginin
+   * ortasinda kucuk bir nokta kalir (tikla -> cumleyi ve sayfayi gor).
+   */
+  type Box = { x: number; y: number; w: number; h: number };
+  const hit = (a: Box, b: Box) =>
+    Math.abs(a.x - b.x) * 2 < a.w + b.w && Math.abs(a.y - b.y) * 2 < a.h + b.h;
+
+  const placed = useMemo(() => {
+    const boxes: Box[] = [];
+    const pos = posRef.current;
+    for (const n of visNodes) {
+      const p = pos[n.id]; if (!p) continue;
+      const r = (focusId === n.id ? 12 : 7) + Math.min(10, (degree[n.id] || 0) * 1.4);
+      boxes.push({ x: p.x, y: p.y, w: r * 2 + 6, h: r * 2 + 6 });                     // daire
+      const txt = n.id.length > 24 ? 24 : n.id.length;
+      boxes.push({ x: p.x, y: p.y + r + 13, w: txt * 6.1 + 6, h: 15 });               // ad
+    }
+    const labels: { i: number; x: number; y: number; angle: number; text: string; full: string }[] = [];
+    const hidden: { i: number; x: number; y: number }[] = [];
+    for (const e of visEdges) {
+      const idx = edges.indexOf(e);
+      const a = pos[e.source], b = pos[e.target]; if (!a || !b) continue;
+      const mx = (a.x + b.x) / 2, my = (a.y + b.y) / 2;
+      const full = e.label || "";
+      const text = full.length > 26 ? full.slice(0, 25) + "…" : full;
+      if (!text) { continue; }
+      let angle = (Math.atan2(b.y - a.y, b.x - a.x) * 180) / Math.PI;
+      if (angle > 90) angle -= 180; else if (angle < -90) angle += 180;
+      const w = text.length * 5.4 + 10, h = 14;
+      const rad = (angle * Math.PI) / 180, ca = Math.abs(Math.cos(rad)), sa = Math.abs(Math.sin(rad));
+      const box: Box = { x: mx, y: my, w: w * ca + h * sa, h: w * sa + h * ca };
+      if (boxes.some((o) => hit(box, o))) { hidden.push({ i: idx, x: mx, y: my }); continue; }
+      boxes.push(box);
+      labels.push({ i: idx, x: mx, y: my, angle, text, full });
+    }
+    return { labels, hidden };
+    // Her karede degil, birkac karede bir yeniden hesapla (yerlesim otururken yeter).
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [visNodes, visEdges, edges, degree, focusId, Math.floor(tick / 5)]);
 
   const selNode = sel?.type === "node" ? nodes.find((n) => n.id === sel.id) : null;
   const selEdge = sel?.type === "edge" ? edges[sel.i] : null;
@@ -308,21 +352,18 @@ export default function ConceptMap({ nodes, edges, height = 560 }: { nodes: CMNo
                onPointerMove={onMove} onPointerUp={onUp} onPointerLeave={onUp}>
             <svg width={size.w} height={size.h} onPointerDown={(e) => { onDownBg(e); setSel(null); }} className="cursor-grab">
               <g transform={`translate(${zoom.x},${zoom.y}) scale(${zoom.k})`}>
+                {/* 1) Cizgiler */}
                 {visEdges.map((e, i) => {
                   const a = posRef.current[e.source], b = posRef.current[e.target]; if (!a || !b) return null;
                   const idx = edges.indexOf(e);
-                  const on = sel?.type === "edge" && sel.i === idx;
-                  const mx = (a.x + b.x) / 2, my = (a.y + b.y) / 2;
-                  const few = visNodes.length <= 14;
+                  const on = (sel?.type === "edge" && sel.i === idx) || hoverEdge === idx;
                   return (
-                    <g key={i} onPointerDown={(ev) => { ev.stopPropagation(); setSel({ type: "edge", i: idx }); }} className="cursor-pointer">
-                      <line x1={a.x} y1={a.y} x2={b.x} y2={b.y} stroke="transparent" strokeWidth={14} />
+                    <g key={i} onPointerDown={(ev) => { ev.stopPropagation(); setSel({ type: "edge", i: idx }); }}
+                       onPointerEnter={() => setHoverEdge(idx)} onPointerLeave={() => setHoverEdge((h) => (h === idx ? null : h))}
+                       className="cursor-pointer">
+                      <line x1={a.x} y1={a.y} x2={b.x} y2={b.y} stroke="transparent" strokeWidth={16} />
                       <line x1={a.x} y1={a.y} x2={b.x} y2={b.y} stroke={on ? "#8b7cf0" : "currentColor"}
-                            strokeOpacity={on ? 1 : 0.3} strokeWidth={on ? 2.5 : 1.2} className="text-text-secondary" />
-                      {(on || few || zoom.k > 1.4) && (
-                        <text x={mx} y={my - 4} textAnchor="middle" fontSize={10} fill="currentColor" className="text-text-secondary"
-                              style={{ pointerEvents: "none", paintOrder: "stroke", stroke: "var(--surface)", strokeWidth: 3 }}>{e.label}</text>
-                      )}
+                            strokeOpacity={on ? 1 : 0.28} strokeWidth={on ? 2.5 : 1.2} className="text-text-secondary" />
                     </g>
                   );
                 })}
@@ -345,6 +386,50 @@ export default function ConceptMap({ nodes, edges, height = 560 }: { nodes: CMNo
                     </g>
                   );
                 })}
+
+                {/* 3) Iliski yazilari en ustte: cizgiye hizali, zeminli, cakisanlar gizli */}
+                {placed.hidden.map((h) => (
+                  <circle key={"h" + h.i} cx={h.x} cy={h.y} r={3} fill="currentColor" fillOpacity={0.35}
+                          className="cursor-pointer text-text-secondary"
+                          onPointerDown={(ev) => { ev.stopPropagation(); setSel({ type: "edge", i: h.i }); }}
+                          onPointerEnter={() => setHoverEdge(h.i)} onPointerLeave={() => setHoverEdge((v) => (v === h.i ? null : v))}>
+                    <title>{edges[h.i]?.label}</title>
+                  </circle>
+                ))}
+                {placed.labels.map((l) => {
+                  const on = (sel?.type === "edge" && sel.i === l.i) || hoverEdge === l.i;
+                  const w = l.text.length * 5.4 + 10;
+                  return (
+                    <g key={"l" + l.i} transform={`translate(${l.x},${l.y}) rotate(${l.angle})`}
+                       className="cursor-pointer"
+                       onPointerDown={(ev) => { ev.stopPropagation(); setSel({ type: "edge", i: l.i }); }}
+                       onPointerEnter={() => setHoverEdge(l.i)} onPointerLeave={() => setHoverEdge((v) => (v === l.i ? null : v))}>
+                      <rect x={-w / 2} y={-8} width={w} height={16} rx={8}
+                            fill="var(--surface)" stroke={on ? "#8b7cf0" : "currentColor"}
+                            strokeOpacity={on ? 1 : 0.18} className="text-text-secondary" />
+                      <text y={4} textAnchor="middle" fontSize={10} fontWeight={on ? 600 : 400}
+                            fill={on ? "#8b7cf0" : "currentColor"} className="text-text-secondary"
+                            style={{ pointerEvents: "none" }}>{l.text}</text>
+                    </g>
+                  );
+                })}
+
+                {/* Uzerine gelinen iliskinin tam metni — hicbir seyin altinda kalmaz */}
+                {hoverEdge !== null && edges[hoverEdge] && (() => {
+                  const e = edges[hoverEdge];
+                  const a = posRef.current[e.source], b = posRef.current[e.target];
+                  if (!a || !b) return null;
+                  const t = `${e.source} — ${e.label} — ${e.target}`;
+                  const w = t.length * 6.2 + 16;
+                  const x = (a.x + b.x) / 2, y = (a.y + b.y) / 2 - 22;
+                  return (
+                    <g style={{ pointerEvents: "none" }}>
+                      <rect x={x - w / 2} y={y - 11} width={w} height={22} rx={11}
+                            fill="var(--surface)" stroke="#8b7cf0" strokeOpacity={0.5} />
+                      <text x={x} y={y + 4} textAnchor="middle" fontSize={11} fill="currentColor" className="text-text-primary">{t}</text>
+                    </g>
+                  );
+                })()}
               </g>
             </svg>
 
@@ -398,7 +483,8 @@ export default function ConceptMap({ nodes, edges, height = 560 }: { nodes: CMNo
             )}
           </div>
           <p className="mt-2 text-[11px] text-text-secondary">
-            Bir maddeye çift tıkla: yalnız onu ve komşularını gör · Çizgiye tıkla: ilişkinin geçtiği cümle ve sayfa · Sürükle: taşı
+            Bir maddeye çift tıkla: yalnız onu ve komşularını gör · Çizginin üstüne gel: ilişkinin tamamı ·
+            Tıkla: geçtiği cümle ve sayfa · Küçük nokta: yazısı sığmamış ilişki, tıkla
           </p>
         </>
       )}
