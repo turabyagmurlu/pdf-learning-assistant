@@ -32,7 +32,7 @@ async def list_collections(conn=Depends(db), user=Depends(current_user)):
     """Defter listesi: kaynak/not sayilari ve son etkinlik (buyuk JSON alanlari haric)."""
     rows = await conn.fetch(
         """SELECT c.id, c.title, c.description, c.created_at, c.draft_at,
-                  (c.draft IS NOT NULL AND length(c.draft) > 0) AS has_draft,
+                  (c.draft IS NOT NULL AND length(c.draft) > 60) AS has_draft,
                   (SELECT COUNT(*) FROM documents d WHERE d.collection_id=c.id AND d.user_id=c.user_id) AS doc_count,
                   (SELECT COALESCE(SUM(d.page_count),0) FROM documents d WHERE d.collection_id=c.id AND d.user_id=c.user_id) AS page_count,
                   (SELECT COUNT(*) FROM notes n JOIN documents d ON d.id=n.document_id
@@ -84,6 +84,15 @@ async def get_collection(cid: str, conn=Depends(db), user=Depends(current_user))
         "concept_map": _has(c.pop("concept_map", None)),
     }
     draft = c.get("draft") or ""
+    draft_words = 0
+    if draft.strip():
+        try:
+            j = json.loads(draft)
+            for b in (j.get("blocks") or []):
+                if b.get("type") in ("p", "h"):
+                    draft_words += len((b.get("text") or "").split())
+        except Exception:
+            draft_words = len(draft.split())
     return {
         "collection": c,
         "documents": docs,
@@ -93,7 +102,7 @@ async def get_collection(cid: str, conn=Depends(db), user=Depends(current_user))
             "ready": sum(1 for d in docs if d.get("status") == "ready"),
             "pages": sum((d.get("page_count") or 0) for d in docs),
             "notes": notes,
-            "draft_words": len(draft.split()) if draft.strip() else 0,
+            "draft_words": draft_words,
         },
     }
 

@@ -5,6 +5,7 @@ import { api, API, getToken } from "@/lib/api";
 import PodcastPlayer from "@/components/PodcastPlayer";
 import { Skeleton, CardSkeleton } from "@/components/Skeleton";
 import ConceptMap, { CMNode, CMEdge } from "@/components/ConceptMap";
+import DraftEditor, { Block } from "@/components/DraftEditor";
 import {
   BookOpen, Sparkles, FileText, ArrowLeft, PenLine,
   Loader2, Send, Pencil, Check, Headphones, Plus, X, Square, CheckSquare, Trash2,
@@ -145,76 +146,19 @@ export default function CollectionPage({ params }: { params: { id: string } }) {
   const [asking, setAsking] = useState(false);
   const [thread, setThread] = useState<{ q: string; answer: string; sources: any[] }[]>([]);
 
-  // taslak
-  const [draft, setDraft] = useState("");
-  const [draftLoaded, setDraftLoaded] = useState(false);
-  const [draftSaved, setDraftSaved] = useState<"idle" | "saving" | "saved" | "error">("idle");
-  const draftTimer = useRef<any>(null);
-  const draftRef = useRef<HTMLTextAreaElement | null>(null);
+  // taslak (blok editor): Sohbet'ten gelen bloklar kuyrukta bekler
+  const [inbox, setInbox] = useState<Block[]>([]);
   const [material, setMaterial] = useState<any[] | null>(null);
-  const [matQ, setMatQ] = useState("");
-  const [flash, setFlash] = useState("");
-
-  function saveDraftNow(text: string) {
-    setDraftSaved("saving");
-    api(`/collections/${id}`, { method: "PATCH", body: JSON.stringify({ draft: text }) })
-      .then(() => setDraftSaved("saved")).catch(() => setDraftSaved("error"));
-  }
-  function onDraftChange(text: string) {
-    setDraft(text); setDraftSaved("saving");
-    if (draftTimer.current) clearTimeout(draftTimer.current);
-    draftTimer.current = setTimeout(() => saveDraftNow(text), 1200);
-  }
-  function insertAtCursor(snippet: string) {
-    const ta = draftRef.current;
-    const cur = draft;
-    if (!ta) { onDraftChange((cur ? cur.replace(/\s*$/, "") + "\n\n" : "") + snippet + "\n"); return; }
-    const st = ta.selectionStart ?? cur.length, en = ta.selectionEnd ?? cur.length;
-    const before = cur.slice(0, st), after = cur.slice(en);
-    const pad1 = before && !before.endsWith("\n") ? "\n\n" : (before.endsWith("\n\n") || !before ? "" : "\n");
-    const next = before + pad1 + snippet + "\n" + after;
-    onDraftChange(next);
-    requestAnimationFrame(() => { ta.focus(); const pos = (before + pad1 + snippet + "\n").length; ta.setSelectionRange(pos, pos); });
-    setFlash("Taslağa eklendi."); setTimeout(() => setFlash(""), 1500);
-  }
-  function cite(title: string, page?: number | null) { return `(${title}${page ? ", s. " + page : ""})`; }
   function answerToDraft(t: { q: string; answer: string; sources: any[] }) {
-    const srcs = (t.sources || []).map((s: any, i: number) => `[K${i + 1}] ${s.title}${s.page ? ", s. " + s.page : ""}`).join("; ");
-    insertAtCursor(`**${t.q}**\n\n${t.answer.trim()}\n\n_Kaynaklar: ${srcs}_`);
+    setInbox((q) => [...q, { id: Math.random().toString(36).slice(2, 10), type: "answer", q: t.q, text: t.answer.trim(),
+      sources: (t.sources || []).map((s: any) => ({ title: s.title, page: s.page ?? null, document_id: s.document_id })) }]);
     setTab("taslak");
   }
   async function loadMaterial() {
-    try {
-      const all = await api("/notes");
-      setMaterial((all || []).filter((n: any) => n.collection_id === id));
-    } catch { setMaterial([]); }
+    try { const all = await api("/notes"); setMaterial((all || []).filter((n: any) => n.collection_id === id)); }
+    catch { setMaterial([]); }
   }
-  useEffect(() => {
-    if (tab !== "taslak") return;
-    if (!draftLoaded && data?.collection) { setDraft(data.collection.draft || ""); setDraftLoaded(true); }
-    if (material === null) loadMaterial();
-  }, [tab, data]);
-  function exportDraft(kind: "md" | "doc") {
-    const title = col?.title || "Taslak";
-    let blob: Blob, name: string;
-    if (kind === "md") {
-      blob = new Blob([`# ${title}\n\n${draft}`], { type: "text/markdown;charset=utf-8" }); name = `${title}.md`;
-    } else {
-      const esc = (t: string) => t.replace(/&/g, "&amp;").replace(/</g, "&lt;");
-      const html = draft.split(/\n{2,}/).map((para) => {
-        const p = para.trim();
-        if (!p) return "";
-        if (p.startsWith("> ")) return `<blockquote style="margin:0 0 12pt 24pt;color:#444;border-left:3px solid #ccc;padding-left:10pt">${esc(p.replace(/^> ?/gm, ""))}</blockquote>`;
-        if (p.startsWith("## ")) return `<h2>${esc(p.slice(3))}</h2>`;
-        if (p.startsWith("# ")) return `<h1>${esc(p.slice(2))}</h1>`;
-        return `<p>${esc(p).replace(/\*\*(.+?)\*\*/g, "<b>$1</b>").replace(/_(.+?)_/g, "<i>$1</i>").replace(/\n/g, "<br>")}</p>`;
-      }).join("\n");
-      blob = new Blob([`<html xmlns:o="urn:schemas-microsoft-com:office:office" xmlns:w="urn:schemas-microsoft-com:office:word"><head><meta charset="utf-8"><title>${esc(title)}</title><style>body{font-family:Georgia,serif;font-size:12pt;line-height:1.5}h1{font-size:20pt}h2{font-size:15pt}</style></head><body><h1>${esc(title)}</h1>${html}</body></html>`], { type: "application/msword" });
-      name = `${title}.doc`;
-    }
-    const url = URL.createObjectURL(blob); const el = document.createElement("a"); el.href = url; el.download = name; el.click();
-    setTimeout(() => URL.revokeObjectURL(url), 1000);
-  }
+  useEffect(() => { if (tab === "taslak" && material === null) loadMaterial(); }, [tab]);
 
   // belge ekleme (kutuphaneden sec)
   const [picker, setPicker] = useState(false);
@@ -656,57 +600,13 @@ export default function CollectionPage({ params }: { params: { id: string } }) {
         </div>
       )}
 
-      {/* TASLAK: yazma alani */}
+      {/* TASLAK: blok editor */}
       {tab === "taslak" && (
-        <div className="mt-5 grid grid-cols-1 gap-5 lg:grid-cols-[1fr_340px]">
-          <div>
-            <div className="mb-2 flex flex-wrap items-center gap-2 text-xs text-text-secondary">
-              <span>{draft.trim() ? draft.trim().split(/\s+/).length : 0} kelime</span>
-              <span>·</span>
-              <span className={draftSaved === "error" ? "text-danger" : ""}>
-                {draftSaved === "saving" ? "kaydediliyor…" : draftSaved === "saved" ? "kaydedildi" : draftSaved === "error" ? "kaydedilemedi" : ""}
-              </span>
-              {flash && <span className="text-accent-purple">{flash}</span>}
-              <span className="ml-auto flex gap-1.5">
-                <button onClick={() => exportDraft("md")} disabled={!draft.trim()} className="rounded-lg border bg-surface px-2.5 py-1 hover:border-accent-purple/50 disabled:opacity-40">Markdown</button>
-                <button onClick={() => exportDraft("doc")} disabled={!draft.trim()} className="rounded-lg border bg-surface px-2.5 py-1 hover:border-accent-purple/50 disabled:opacity-40">Word</button>
-              </span>
-            </div>
-            <textarea ref={draftRef} value={draft} onChange={(e) => onDraftChange(e.target.value)}
-                      placeholder={"Buraya yaz. Sağdaki notları tıklayarak atıflı olarak ekleyebilirsin; Sohbet'teki cevapları da \"Taslağa ekle\" ile.\n\nBiçim: # Başlık, ## Alt başlık, **kalın**, _eğik_, > alıntı"}
-                      className="min-h-[60vh] w-full resize-y rounded-2xl border bg-surface p-5 font-body text-[15px] leading-[1.75] outline-none focus:border-accent-purple"
-                      spellCheck={false} />
-          </div>
-          <aside className="lg:sticky lg:top-4 lg:self-start">
-            <div className="rounded-2xl border bg-surface p-3">
-              <div className="mb-2 flex items-center justify-between px-1">
-                <p className="text-xs font-semibold uppercase tracking-wide text-text-secondary">Malzeme</p>
-                <button onClick={loadMaterial} title="Yenile" className="rounded-md p-1 text-text-secondary hover:bg-surface-muted"><RefreshCw size={13} /></button>
-              </div>
-              <input value={matQ} onChange={(e) => setMatQ(e.target.value)} placeholder="Notlarda ara…"
-                     className="mb-2 w-full rounded-lg border bg-surface-muted px-2.5 py-1.5 text-sm outline-none focus:border-accent-purple" />
-              <div className="max-h-[55vh] space-y-1.5 overflow-y-auto pr-1">
-                {material === null ? (
-                  <p className="p-3 text-xs text-text-secondary">Yükleniyor…</p>
-                ) : material.length === 0 ? (
-                  <p className="p-3 text-xs text-text-secondary">Bu defterin kaynaklarında henüz vurgu/not yok. PDF'te metin seçip işaretle; burada belirir.</p>
-                ) : material
-                  .filter((n: any) => !matQ.trim() || (n.selected_text || "").toLowerCase().includes(matQ.toLowerCase()) || (n.note_content || "").toLowerCase().includes(matQ.toLowerCase()))
-                  .map((n: any) => (
-                    <button key={n.id}
-                            onClick={() => insertAtCursor(n.selected_text
-                              ? `> ${n.selected_text.trim().replace(/\n+/g, " ")} ${cite(n.document_title, n.page_number)}${n.note_content ? "\n\n" + n.note_content.trim() : ""}`
-                              : `${(n.note_content || "").trim()} ${cite(n.document_title, n.page_number)}`)}
-                            title="Taslağa atıfla ekle"
-                            className="block w-full rounded-lg border bg-surface p-2.5 text-left hover:border-accent-purple/50">
-                      {n.selected_text && <p className="line-clamp-3 text-xs leading-relaxed" style={{ borderLeft: "3px solid " + (n.highlight_color || "#FFE78A"), paddingLeft: 8 }}>{n.selected_text}</p>}
-                      {n.note_content && <p className="mt-1 line-clamp-2 text-xs text-text-secondary">{n.note_content}</p>}
-                      <p className="mt-1 text-[10px] text-text-secondary">{n.document_title}{n.page_number ? " · s." + n.page_number : ""}</p>
-                    </button>
-                  ))}
-              </div>
-            </div>
-          </aside>
+        <div className="mt-5">
+          <DraftEditor notebookId={id} title={col.title} initial={col.draft}
+                       material={material} onReloadMaterial={loadMaterial}
+                       inbox={inbox} onInboxConsumed={() => setInbox([])}
+                       onSaved={(ser) => setData((d: any) => d ? { ...d, collection: { ...d.collection, draft: ser } } : d)} />
         </div>
       )}
 
