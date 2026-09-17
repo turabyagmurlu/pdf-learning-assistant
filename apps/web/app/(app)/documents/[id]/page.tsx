@@ -45,6 +45,63 @@ export default function DocumentPage({ params }: { params: { id: string } }) {
 
   const { annotations, add, patch, remove } = useAnnotations(id);
 
+  // geri al / yinele (vurgu ve not ekleme-silme; ustune vurgulamada degistirme tek adim)
+  type HistOp = { kind: "add"; ann: Annotation } | { kind: "remove"; ann: Annotation } | { kind: "group"; ops: HistOp[] };
+  const undoRef = useRef<HistOp[]>([]);
+  const redoRef = useRef<HistOp[]>([]);
+  const [histTick, setHistTick] = useState(0);
+  const [toast, setToast] = useState("");
+  function say(m: string) { setToast(m); setTimeout(() => setToast(""), 1600); }
+  function pushHist(op: HistOp) { undoRef.current.push(op); if (undoRef.current.length > 60) undoRef.current.shift(); redoRef.current = []; setHistTick((t) => t + 1); }
+  async function recreate(a: Annotation) {
+    return add({ page_number: a.page_number, selected_text: a.selected_text, note_content: a.note_content ?? "",
+                 highlight_color: a.highlight_color, anchor: a.anchor });
+  }
+  // bir islemi geri alir, yinelemek icin gereken karsit islemi dondurur
+  async function applyUndo(op: HistOp): Promise<HistOp> {
+    if (op.kind === "add") { await remove(op.ann.id); return { kind: "add", ann: op.ann }; }
+    if (op.kind === "remove") { const c = await recreate(op.ann); return { kind: "remove", ann: c || op.ann }; }
+    const out: HistOp[] = [];
+    for (const o of [...op.ops].reverse()) out.unshift(await applyUndo(o));
+    return { kind: "group", ops: out };
+  }
+  async function applyRedo(op: HistOp): Promise<HistOp> {
+    if (op.kind === "add") { const c = await recreate(op.ann); return { kind: "add", ann: c || op.ann }; }
+    if (op.kind === "remove") { await remove(op.ann.id); return { kind: "remove", ann: op.ann }; }
+    const out: HistOp[] = [];
+    for (const o of op.ops) out.push(await applyRedo(o));
+    return { kind: "group", ops: out };
+  }
+  async function undo() {
+    const op = undoRef.current.pop(); if (!op) return;
+    redoRef.current.push(await applyUndo(op));
+    say(op.kind === "add" ? "Vurgu geri alındı" : op.kind === "remove" ? "Silme geri alındı" : "Geri alındı");
+    setEditing(null); setHistTick((t) => t + 1);
+  }
+  async function redo() {
+    const op = redoRef.current.pop(); if (!op) return;
+    undoRef.current.push(await applyRedo(op));
+    say("Yinelendi"); setEditing(null); setHistTick((t) => t + 1);
+  }
+  async function removeTracked(id: string) {
+    const a = annotations.find((x) => x.id === id);
+    await remove(id);
+    if (a) pushHist({ kind: "remove", ann: a });
+  }
+  // yeni vurgu, eski bir vurgunun >=%60'ini kapliyorsa eskiyi kaldirip yenisini koy (ust uste yigilma olmasin)
+  function coveredBy(oldRects: any[], newRects: any[]) {
+    let oldArea = 0, inter = 0;
+    for (const o of oldRects) {
+      const oa = (o.w || 0) * (o.h || 0); oldArea += oa;
+      for (const n of newRects) {
+        const x = Math.max(0, Math.min(o.x + o.w, n.x + n.w) - Math.max(o.x, n.x));
+        const y = Math.max(0, Math.min(o.y + o.h, n.y + n.h) - Math.max(o.y, n.y));
+        inter += x * y;
+      }
+    }
+    return oldArea > 0 ? Math.min(1, inter / oldArea) : 0;
+  }
+
   // persisted reader prefs
   useEffect(() => {
     try {
@@ -81,6 +138,10 @@ export default function DocumentPage({ params }: { params: { id: string } }) {
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if ((e.target as HTMLElement)?.tagName === "INPUT" || (e.target as HTMLElement)?.tagName === "TEXTAREA") return;
+      const mod = e.ctrlKey || e.metaKey;
+      if (mod && e.key.toLowerCase() === "z" && !e.shiftKey) { e.preventDefault(); undo(); return; }
+      if (mod && ((e.key.toLowerCase() === "z" && e.shiftKey) || e.key.toLowerCase() === "y")) { e.preventDefault(); redo(); return; }
+      if (mod) return;
       if (e.key === "ArrowRight" || e.key === "ArrowDown") { setPage((p) => Math.min(numPages || p, p + 1)); }
       else if (e.key === "ArrowLeft" || e.key === "ArrowUp") { setPage((p) => Math.max(1, p - 1)); }
       else if (e.key === "f") setFocus((f) => !f);
@@ -88,7 +149,7 @@ export default function DocumentPage({ params }: { params: { id: string } }) {
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [numPages]);
+  }, [numPages, annotations]);
 
   // kaldigin yerden devam: PDF acilinca kayitli sayfaya don
   useEffect(() => {
@@ -143,12 +204,20 @@ export default function DocumentPage({ params }: { params: { id: string } }) {
   const progress = numPages ? Math.round((page / numPages) * 100) : 0;
 
   async function onCreateHighlight(h: { page: number; rects: any[]; text: string; color: string; openNote?: boolean }) {
+    const olds = annotations.filter((a) => a.page_number === h.page && a.anchor?.type === "highlight" && !a.note_content
+                                            && coveredBy(a.anchor.rects || [], h.rects) >= 0.6);
+    for (const o of olds) await remove(o.id);
     const created = await add({ page_number: h.page, selected_text: h.text, note_content: "", highlight_color: h.color, anchor: { type: "highlight", rects: h.rects } });
+    if (created) {
+      const addOp: HistOp = { kind: "add", ann: created };
+      pushHist(olds.length ? { kind: "group", ops: [...olds.map((o) => ({ kind: "remove", ann: o } as HistOp)), addOp] } : addOp);
+      if (olds.length) say(olds.length === 1 ? "Önceki vurgunun yerine geçti" : `${olds.length} eski vurgunun yerine geçti`);
+    }
     if (created && h.openNote) { setEditing(created); setRightOpen(true); setRightTab("notes"); }
   }
   async function onCreateSticky(s: { page: number; x: number; y: number }) {
     const created = await add({ page_number: s.page, selected_text: null, note_content: "", highlight_color: null, anchor: { type: "sticky", x: s.x, y: s.y } });
-    if (created) { setEditing(created); setRightOpen(true); setRightTab("notes"); }
+    if (created) { pushHist({ kind: "add", ann: created }); setEditing(created); setRightOpen(true); setRightTab("notes"); }
     setTool("none");
   }
   function onExport() {
@@ -183,6 +252,8 @@ export default function DocumentPage({ params }: { params: { id: string } }) {
           focus={focus} setFocus={setFocus}
           leftOpen={leftOpen} setLeftOpen={setLeftOpen} rightOpen={rightOpen} setRightOpen={setRightOpen}
           onExport={onExport}
+          onUndo={undo} onRedo={redo}
+          canUndo={histTick >= 0 && undoRef.current.length > 0} canRedo={histTick >= 0 && redoRef.current.length > 0}
         />
       </div>
 
@@ -257,6 +328,11 @@ export default function DocumentPage({ params }: { params: { id: string } }) {
               s.{page} / {numPages} · %{progress}
             </div>
           )}
+          {toast && (
+            <div className="fade-in absolute bottom-10 left-1/2 z-40 -translate-x-1/2 rounded-xl bg-text-primary px-4 py-2 text-sm text-background shadow-lg">
+              {toast}
+            </div>
+          )}
         </main>
 
         {/* RIGHT learning/notes panel */}
@@ -295,7 +371,7 @@ export default function DocumentPage({ params }: { params: { id: string } }) {
               ) : (
                 <NotesPanel docTitle={doc?.title} annotations={annotations}
                             onJump={(a) => setPage(a.page_number)}
-                            onDelete={remove}
+                            onDelete={removeTracked}
                             onEditNote={(a) => setEditing(a)} />
               )}
             </div>
@@ -306,7 +382,7 @@ export default function DocumentPage({ params }: { params: { id: string } }) {
       {editing && (
         <NoteEditor ann={editing} onClose={() => setEditing(null)}
                     onSave={(content, color) => { patch(editing.id, { note_content: content, ...(color ? { highlight_color: color } : {}) }); setEditing(null); }}
-                    onDelete={() => { remove(editing.id); setEditing(null); }} />
+                    onDelete={() => { removeTracked(editing.id); setEditing(null); }} />
       )}
     </div>
   );

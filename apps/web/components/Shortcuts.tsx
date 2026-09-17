@@ -49,7 +49,7 @@ export default function Shortcuts() {
   const rows: [string, string][] = [
     ["G  D", "Defterler"], ["G  K", "Kütüphane"], ["G  A", "Araştır"],
     ["/", "Aramaya odaklan"], ["T", "Tema (gündüz / gece / sistem)"], ["?", "Bu pencere"], ["Esc", "Kapat"],
-    ["← →", "PDF'te sayfa değiştir"], ["F", "PDF'te odak modu"],
+    ["← →", "PDF'te sayfa değiştir"], ["F", "PDF'te odak modu"], ["Ctrl Z", "PDF'te vurguyu geri al"],
   ];
   return (
     <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/40 p-4" onClick={() => setHelp(false)}>

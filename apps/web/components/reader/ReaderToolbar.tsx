@@ -2,6 +2,7 @@
 import {
   ChevronLeft, ChevronRight, Minus, Plus, Highlighter, StickyNote,
   BookOpen, FileText, Maximize2, Minimize2, Sun, Contrast, Moon, PanelLeft, PanelRight, Download,
+  Undo2, Redo2,
 } from "lucide-react";
 
 type Theme = "light" | "sepia" | "dark";
@@ -15,6 +16,7 @@ interface Props {
   leftOpen: boolean; setLeftOpen: (b: boolean) => void;
   rightOpen: boolean; setRightOpen: (b: boolean) => void;
   onExport: () => void;
+  onUndo?: () => void; onRedo?: () => void; canUndo?: boolean; canRedo?: boolean;
 }
 
 export default function ReaderToolbar(p: Props) {
@@ -54,6 +56,9 @@ export default function ReaderToolbar(p: Props) {
               onClick={() => p.setTool(p.tool === "note" ? "none" : "note")}><StickyNote size={16} /></button>
       <Sep />
       <ThemeSwitch theme={p.theme} setTheme={p.setTheme} btn={btn} active={active} />
+      <button className={btn} aria-label="Geri al" title="Geri al (Ctrl+Z)" disabled={!p.canUndo} onClick={p.onUndo}><Undo2 size={16} /></button>
+      <button className={btn} aria-label="Yinele" title="Yinele (Ctrl+Shift+Z)" disabled={!p.canRedo} onClick={p.onRedo}><Redo2 size={16} /></button>
+      <Sep />
       <button className={btn} aria-label="Notları dışa aktar" title="Markdown dışa aktar" onClick={p.onExport}><Download size={16} /></button>
       <button className={`${btn} ${p.focus ? active : ""}`} aria-label="Odak modu" title="Odak modu"
               onClick={() => p.setFocus(!p.focus)}>{p.focus ? <Minimize2 size={16} /> : <Maximize2 size={16} />}</button>
