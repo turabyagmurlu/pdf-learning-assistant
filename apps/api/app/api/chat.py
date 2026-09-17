@@ -5,7 +5,7 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from app.deps import db, current_user
 from app.db.session import get_pool
-from app.core.errors import NotFound
+from app.core.errors import NotFound, AiUnavailable
 from app.core.security import decode_token
 from app.services import rag_service
 from app.ai.factory import get_embeddings, get_llm
@@ -109,8 +109,11 @@ async def send(sid: str, body: MessageIn, token: str | None = None):
                 async for tok in llm.stream_chat(messages, model=model):
                     full += tok
                     yield _sse("token", {"text": tok})
-            except Exception:  # noqa
-                yield _sse("error", {"message": "Asistan şu an yanıt veremiyor."}); return
+            except Exception as e:  # noqa
+                msg = getattr(e, "user_message", None) or "Asistan şu an yanıt veremiyor."
+                if msg == AiUnavailable.user_message:
+                    msg = "Asistan şu an yanıt veremiyor; birkaç saniye sonra tekrar dene."
+                yield _sse("error", {"message": msg}); return
 
             citations = [{"n": i + 1, "chunk_id": str(c["id"]), "page": c["page_number"],
                           "section": c.get("section_title"), "snippet": c["content"][:180]}

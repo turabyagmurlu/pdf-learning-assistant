@@ -90,32 +90,83 @@ class GeminiLLM(LLMProvider):
         sse = "&alt=sse" if stream else ""
         return f"{BASE}/models/{model}:{method}?key={self.key}{sse}"
 
+    # Gecici hatalar (kota dakikalik siniri, model yogun): kisa bekleyip tekrar dene.
+    _RETRY_CODES = (429, 500, 502, 503, 504)
+    _WAITS = (3, 8, 15)
+
+    @staticmethod
+    def _friendly(status: int, text: str) -> AiUnavailable:
+        if status == 429 and "PerDay" in text:
+            return AiUnavailable("Günlük yapay zekâ kotası doldu; yarın yenilenir.", detail=text[:200])
+        if status == 429:
+            return AiUnavailable("Yapay zekâ kotası şu an dolu; bir dakika sonra tekrar dene.", detail=text[:200])
+        if status in (500, 502, 503, 504):
+            return AiUnavailable("Model şu an yoğun; birkaç saniye sonra tekrar dene.", detail=text[:200])
+        return AiUnavailable(detail=f"{status}: {text[:200]}")
+
     async def stream_chat(self, messages, model=None) -> AsyncIterator[str]:
         model = model or settings.active_llm_model
         system, contents = _to_gemini(messages)
         body = {"contents": contents, "generationConfig": {"temperature": 0.2}}
         if system:
             body["systemInstruction"] = system
-        try:
-            async with httpx.AsyncClient(timeout=120) as client:
-                async with client.stream("POST", self._gen_url(model, True), json=body) as resp:
-                    resp.raise_for_status()
-                    async for line in resp.aiter_lines():
-                        if not line.startswith("data:"):
+        import asyncio
+        last_err: Exception | None = None
+        for attempt in range(len(self._WAITS) + 1):
+            yielded = False
+            try:
+                async with httpx.AsyncClient(timeout=120) as client:
+                    async with client.stream("POST", self._gen_url(model, True), json=body) as resp:
+                        if resp.status_code in self._RETRY_CODES and attempt < len(self._WAITS):
+                            txt = (await resp.aread()).decode("utf-8", "ignore")
+                            last_err = self._friendly(resp.status_code, txt)
+                            await asyncio.sleep(self._WAITS[attempt])
                             continue
-                        data = line[5:].strip()
-                        if not data or data == "[DONE]":
-                            continue
-                        try:
-                            j = json.loads(data)
-                            parts = j["candidates"][0]["content"]["parts"]
-                            for p in parts:
-                                if "text" in p:
-                                    yield p["text"]
-                        except Exception:  # noqa
-                            continue
-        except Exception as e:  # noqa
-            raise AiUnavailable(detail=str(e))
+                        if resp.status_code >= 400:
+                            txt = (await resp.aread()).decode("utf-8", "ignore")
+                            raise self._friendly(resp.status_code, txt)
+                        async for line in resp.aiter_lines():
+                            if not line.startswith("data:"):
+                                continue
+                            data = line[5:].strip()
+                            if not data or data == "[DONE]":
+                                continue
+                            try:
+                                j = json.loads(data)
+                                parts = j["candidates"][0]["content"]["parts"]
+                                for p in parts:
+                                    if "text" in p:
+                                        yielded = True
+                                        yield p["text"]
+                            except Exception:  # noqa
+                                continue
+                return
+            except AiUnavailable:
+                raise
+            except Exception as e:  # noqa  (ag hatasi vb.)
+                last_err = e
+                if yielded or attempt >= len(self._WAITS):
+                    raise AiUnavailable(detail=str(e))
+                await asyncio.sleep(self._WAITS[attempt])
+        raise last_err if isinstance(last_err, AiUnavailable) else AiUnavailable(detail=str(last_err))
+
+    def _post_retry(self, url: str, body: dict) -> dict:
+        import time
+        last = ""
+        for attempt in range(len(self._WAITS) + 1):
+            try:
+                r = httpx.post(url, json=body, timeout=120)
+            except httpx.HTTPError as e:
+                last = str(e)
+                if attempt < len(self._WAITS):
+                    time.sleep(self._WAITS[attempt]); continue
+                raise AiUnavailable(detail=last)
+            if r.status_code == 200:
+                return r.json()
+            if r.status_code in self._RETRY_CODES and attempt < len(self._WAITS) and "PerDay" not in r.text:
+                time.sleep(self._WAITS[attempt]); continue
+            raise self._friendly(r.status_code, r.text)
+        raise AiUnavailable(detail=last)
 
     def complete(self, messages, model=None) -> str:
         model = model or settings.active_llm_model
@@ -124,9 +175,9 @@ class GeminiLLM(LLMProvider):
         if system:
             body["systemInstruction"] = system
         try:
-            r = httpx.post(self._gen_url(model, False), json=body, timeout=120)
-            r.raise_for_status()
-            return r.json()["candidates"][0]["content"]["parts"][0]["text"]
+            return self._post_retry(self._gen_url(model, False), body)["candidates"][0]["content"]["parts"][0]["text"]
+        except AiUnavailable:
+            raise
         except Exception as e:  # noqa
             raise AiUnavailable(detail=str(e))
 
@@ -144,8 +195,8 @@ class GeminiLLM(LLMProvider):
         if system:
             body["systemInstruction"] = system
         try:
-            r = httpx.post(self._gen_url(model, False), json=body, timeout=120)
-            r.raise_for_status()
-            return r.json()["candidates"][0]["content"]["parts"][0]["text"]
+            return self._post_retry(self._gen_url(model, False), body)["candidates"][0]["content"]["parts"][0]["text"]
+        except AiUnavailable:
+            raise
         except Exception as e:  # noqa
             raise AiUnavailable(detail=str(e))
