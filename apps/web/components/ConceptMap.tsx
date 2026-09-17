@@ -66,7 +66,11 @@ export default function ConceptMap({ nodes, edges, height = 560 }: { nodes: CMNo
       return nodes.filter((n) => keep.has(n.id));          // odakta tur filtresi uygulanmaz
     }
     const connected = nodes.filter((n) => (degree[n.id] || 0) > 0).filter(byKind);
-    return [...connected].sort((a, b) => (degree[b.id] || 0) - (degree[a.id] || 0)).slice(0, limit);
+    const top = [...connected].sort((a, b) => (degree[b.id] || 0) - (degree[a.id] || 0)).slice(0, limit);
+    // Secilenler arasinda komsusu kalmayanlari at: tek basina duran nokta ise yaramaz.
+    const ids = new Set(top.map((n) => n.id));
+    const linked = top.filter((n) => Array.from(nbrsOf[n.id] || []).some((m) => ids.has(m)));
+    return linked.length >= 2 ? linked : top;
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [nodes, degree, nbrsOf, focusId, limit, kinds]);
 
@@ -142,6 +146,17 @@ export default function ConceptMap({ nodes, edges, height = 560 }: { nodes: CMNo
       }
       force((v) => v + 1);
       if (tick < 300) raf = requestAnimationFrame(step);
+      else fit();          // yerlesim oturdu: her sey ekrana sigsin
+    };
+    // Dugumlerin sinirlarina gore yakinlastirmayi ayarla (bos alan kalmasin).
+    const fit = () => {
+      const ps = ids.map((i) => pos[i]).filter(Boolean) as P[];
+      if (ps.length < 2) return;
+      const pad = 64;
+      const x0 = Math.min(...ps.map((p) => p.x)) - pad, x1 = Math.max(...ps.map((p) => p.x)) + pad;
+      const y0 = Math.min(...ps.map((p) => p.y)) - pad, y1 = Math.max(...ps.map((p) => p.y)) + pad;
+      const k = Math.max(0.5, Math.min(1.9, Math.min(size.w / (x1 - x0), size.h / (y1 - y0))));
+      setZoom({ k, x: (size.w - (x1 - x0) * k) / 2 - x0 * k, y: (size.h - (y1 - y0) * k) / 2 - y0 * k });
     };
     raf = requestAnimationFrame(step);
     return () => cancelAnimationFrame(raf);
@@ -206,21 +221,40 @@ export default function ConceptMap({ nodes, edges, height = 560 }: { nodes: CMNo
     }
     const labels: { i: number; x: number; y: number; angle: number; text: string; full: string }[] = [];
     const hidden: { i: number; x: number; y: number }[] = [];
-    for (const e of visEdges) {
+    // Uzun kenardan kisaya: yer once genis cizgilere verilsin.
+    const ordered = [...visEdges].sort((e1, e2) => {
+      const a1 = pos[e1.source], b1 = pos[e1.target], a2 = pos[e2.source], b2 = pos[e2.target];
+      if (!a1 || !b1 || !a2 || !b2) return 0;
+      return Math.hypot(b2.x - a2.x, b2.y - a2.y) - Math.hypot(b1.x - a1.x, b1.y - a1.y);
+    });
+    for (const e of ordered) {
       const idx = edges.indexOf(e);
       const a = pos[e.source], b = pos[e.target]; if (!a || !b) continue;
-      const mx = (a.x + b.x) / 2, my = (a.y + b.y) / 2;
       const full = e.label || "";
       const text = full.length > 26 ? full.slice(0, 25) + "…" : full;
-      if (!text) { continue; }
+      if (!text) continue;
       let angle = (Math.atan2(b.y - a.y, b.x - a.x) * 180) / Math.PI;
       if (angle > 90) angle -= 180; else if (angle < -90) angle += 180;
       const w = text.length * 5.4 + 10, h = 14;
       const rad = (angle * Math.PI) / 180, ca = Math.abs(Math.cos(rad)), sa = Math.abs(Math.sin(rad));
-      const box: Box = { x: mx, y: my, w: w * ca + h * sa, h: w * sa + h * ca };
-      if (boxes.some((o) => hit(box, o))) { hidden.push({ i: idx, x: mx, y: my }); continue; }
-      boxes.push(box);
-      labels.push({ i: idx, x: mx, y: my, angle, text, full });
+      const bw = w * ca + h * sa, bh = w * sa + h * ca;
+      // Cizgi boyunca birkac yer dene; sigmazsa dikey olarak biraz kaydir.
+      const ux = (b.x - a.x), uy = (b.y - a.y);
+      const len = Math.hypot(ux, uy) || 1;
+      const px = -uy / len, py = ux / len;                   // dik yon
+      let done = false;
+      for (const t of [0.5, 0.38, 0.62, 0.28, 0.72]) {
+        for (const off of [0, 13, -13, 24, -24]) {
+          const x = a.x + ux * t + px * off, y = a.y + uy * t + py * off;
+          const box: Box = { x, y, w: bw, h: bh };
+          if (boxes.some((o) => hit(box, o))) continue;
+          boxes.push(box);
+          labels.push({ i: idx, x, y, angle, text, full });
+          done = true; break;
+        }
+        if (done) break;
+      }
+      if (!done) hidden.push({ i: idx, x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 });
     }
     return { labels, hidden };
     // Her karede degil, birkac karede bir yeniden hesapla (yerlesim otururken yeter).
