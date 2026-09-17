@@ -2,7 +2,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { api } from "@/lib/api";
-import { ArrowUp, ArrowDown, X, Plus, ExternalLink, Sparkles, Quote, RefreshCw, Heading2 } from "lucide-react";
+import { ArrowUp, ArrowDown, X, Plus, ExternalLink, Sparkles, Quote, RefreshCw, Heading2, Wand2, Loader2, Check } from "lucide-react";
 
 /* ---------- blok modeli ---------- */
 export type Block =
@@ -68,6 +68,43 @@ export default function DraftEditor({ notebookId, title, initial, material, onRe
   const [flash, setFlash] = useState("");
   const timer = useRef<any>(null);
   const dirty = useRef(false);
+
+  // AI ile duzenle
+  type Assist = { idx: number; action: string; busy: boolean; text?: string; suggestions?: any[]; why?: string; error?: string; menu?: boolean };
+  const [assist, setAssist] = useState<Assist | null>(null);
+  const [customInstr, setCustomInstr] = useState("");
+  const ACTIONS: [string, string, string][] = [
+    ["shorten", "Kısalt", "Yarı uzunluğa indir, özü koru"],
+    ["academic", "Akademik tona çevir", "Nesnel, üçüncü şahıs, ölçülü"],
+    ["suggest_sources", "Kaynak öner", "Defterdeki vurgulardan bu paragrafı destekleyenler"],
+    ["custom", "Serbest talimat…", "Kendi isteğini yaz"],
+  ];
+  async function runAssist(idx: number, action: string, instruction?: string) {
+    const b = blocks[idx]; if (!b) return;
+    const text = b.type === "quote" ? b.text : b.type === "answer" ? b.text : (b as any).text;
+    if (!text || text.trim().length < 8) { setAssist({ idx, action, busy: false, error: "Önce biraz metin yaz." }); return; }
+    setAssist({ idx, action, busy: true });
+    try {
+      const r = await api(`/collections/${notebookId}/draft-assist`, { method: "POST", body: JSON.stringify({ action, text, instruction }) });
+      setAssist({ idx, action, busy: false, text: r.text, suggestions: r.suggestions, why: r.why || r.note });
+    } catch (e: any) { setAssist({ idx, action, busy: false, error: e?.message || "Olmadı." }); }
+  }
+  function applyAssist() {
+    if (!assist || !assist.text) return;
+    const b = blocks[assist.idx];
+    if (b.type === "quote" && assist.action === "paraphrase") {
+      // parafraz: alintinin ALTINA senin paragrafin olarak girer; alinti karti kalir (kaynak belli olsun)
+      insertAfter(assist.idx, { id: uid(), type: "p", text: assist.text });
+    } else if (b.type === "p" || b.type === "h") {
+      setText(assist.idx, assist.text);
+    }
+    setAssist(null);
+  }
+  function addSuggested(sg: any) {
+    if (!assist) return;
+    insertAfter(assist.idx, { id: uid(), type: "quote", text: (sg.text || "").trim().replace(/\s+/g, " "), note: sg.note || undefined,
+      color: sg.color, source: sg.document_title, page: sg.page ?? null, document_id: sg.document_id });
+  }
 
   // otomatik kayit
   useEffect(() => {
@@ -137,6 +174,28 @@ export default function DraftEditor({ notebookId, title, initial, material, onRe
         <div className="rounded-2xl border bg-surface p-4 md:p-6">
           {blocks.map((b, i) => (
             <div key={b.id} className="group relative" onFocus={() => setFocusIdx(i)} onClick={() => setFocusIdx(i)}>
+              {/* AI menusu (sag ust) */}
+              {(b.type === "p" || b.type === "h" || b.type === "quote") && (
+                <div className="absolute right-0 top-1 z-10 opacity-0 transition group-hover:opacity-100 focus-within:opacity-100">
+                  <button onClick={(e) => { e.stopPropagation(); setAssist(assist?.idx === i && assist.menu ? null : { idx: i, action: "", busy: false, menu: true }); }}
+                          title="AI ile düzenle" className="flex items-center gap-1 rounded-full border bg-surface px-2 py-0.5 text-[11px] text-text-secondary hover:border-accent-purple/50 hover:text-accent-purple">
+                    <Wand2 size={11} /> AI
+                  </button>
+                  {assist?.idx === i && assist.menu && (
+                    <div onClick={(e) => e.stopPropagation()} className="absolute right-0 top-7 w-64 overflow-hidden rounded-xl border bg-surface shadow-lg">
+                      {(b.type === "quote"
+                        ? [["paraphrase", "Kendi cümlemle yeniden yaz", "Parafraz; alıntının altına paragraf olarak girer"]]
+                        : ACTIONS).map(([k, label, desc]) => (
+                        <button key={k} onClick={() => { if (k === "custom") setAssist({ idx: i, action: "custom", busy: false, menu: false }); else runAssist(i, k); }}
+                                className="block w-full px-3 py-2 text-left hover:bg-surface-muted">
+                          <span className="block text-sm">{label}</span>
+                          <span className="block text-[11px] text-text-secondary">{desc}</span>
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )}
               {/* blok araclari */}
               <div className="absolute -left-1 top-1 hidden -translate-x-full flex-col gap-0.5 pr-2 group-hover:flex md:flex md:opacity-0 md:group-hover:opacity-100">
                 <button onClick={() => move(i, -1)} aria-label="Yukarı" className="rounded p-0.5 text-text-secondary hover:bg-surface-muted"><ArrowUp size={12} /></button>
@@ -181,6 +240,55 @@ export default function DraftEditor({ notebookId, title, initial, material, onRe
                       </button>
                     ))}
                   </div>
+                </div>
+              )}
+
+              {/* AI onerisi */}
+              {assist && assist.idx === i && !assist.menu && (
+                <div className="my-2 rounded-xl border border-accent-purple/40 bg-accent-purple/5 p-3 text-sm">
+                  {assist.action === "custom" && assist.text === undefined && !assist.busy && (
+                    <div className="flex gap-2">
+                      <input autoFocus value={customInstr} onChange={(e) => setCustomInstr(e.target.value)}
+                             onKeyDown={(e) => { if (e.key === "Enter" && customInstr.trim()) runAssist(i, "custom", customInstr.trim()); if (e.key === "Escape") setAssist(null); }}
+                             placeholder="Örn: iki cümleye indir ve daha net bir iddiayla başla"
+                             className="flex-1 rounded-lg border bg-surface px-3 py-1.5 outline-none focus:border-accent-purple" />
+                      <button onClick={() => customInstr.trim() && runAssist(i, "custom", customInstr.trim())} className="rounded-lg bg-accent-purple px-3 py-1.5 text-white">Uygula</button>
+                      <button onClick={() => setAssist(null)} className="rounded-lg border px-2 py-1.5 text-text-secondary">Vazgeç</button>
+                    </div>
+                  )}
+                  {assist.busy && <p className="flex items-center gap-2 text-text-secondary"><Loader2 size={14} className="animate-spin" /> Hazırlanıyor…</p>}
+                  {assist.error && <p className="text-danger">{assist.error} <button onClick={() => setAssist(null)} className="ml-2 underline">kapat</button></p>}
+                  {assist.text !== undefined && !assist.busy && (
+                    <>
+                      <p className="mb-1 flex items-center gap-1 text-[11px] uppercase tracking-wide text-accent-purple"><Sparkles size={11} /> Öneri — {assist.action === "paraphrase" ? "kendi cümlelerinle" : assist.action === "shorten" ? "kısaltılmış" : assist.action === "academic" ? "akademik ton" : "düzenlenmiş"}</p>
+                      <p className="whitespace-pre-wrap leading-relaxed">{assist.text}</p>
+                      <div className="mt-2 flex gap-2">
+                        <button onClick={applyAssist} className="flex items-center gap-1 rounded-lg bg-accent-purple px-3 py-1.5 text-white"><Check size={13} /> {assist.action === "paraphrase" ? "Altına paragraf olarak ekle" : "Uygula"}</button>
+                        <button onClick={() => runAssist(i, assist.action, customInstr.trim() || undefined)} className="rounded-lg border px-3 py-1.5 text-text-secondary">Tekrar dene</button>
+                        <button onClick={() => setAssist(null)} className="rounded-lg border px-3 py-1.5 text-text-secondary">Vazgeç</button>
+                      </div>
+                    </>
+                  )}
+                  {assist.suggestions && !assist.busy && (
+                    <>
+                      <p className="mb-1 flex items-center gap-1 text-[11px] uppercase tracking-wide text-accent-purple"><Sparkles size={11} /> Bu paragrafı destekleyebilecek vurgular</p>
+                      {assist.suggestions.length === 0 ? (
+                        <p className="text-text-secondary">{assist.why || "Uygun vurgu bulunamadı."}</p>
+                      ) : (
+                        <div className="space-y-1.5">
+                          {assist.suggestions.map((sg: any, k: number) => (
+                            <button key={sg.id} onClick={() => addSuggested(sg)} title="Alıntı kartı olarak ekle"
+                                    className="block w-full rounded-lg border bg-surface p-2 text-left hover:border-accent-purple/50">
+                              <p className="line-clamp-2 text-xs leading-relaxed" style={{ borderLeft: "3px solid " + (sg.color || "#FFE78A"), paddingLeft: 8 }}>[{k + 1}] {sg.text}</p>
+                              <p className="mt-0.5 text-[10px] text-text-secondary">{sg.document_title}{sg.page ? " · s." + sg.page : ""} · uyum %{Math.round((sg.score || 0) * 100)}</p>
+                            </button>
+                          ))}
+                          {assist.why && <p className="whitespace-pre-wrap pt-1 text-[11px] text-text-secondary">{assist.why}</p>}
+                        </div>
+                      )}
+                      <button onClick={() => setAssist(null)} className="mt-2 rounded-lg border px-3 py-1.5 text-text-secondary">Kapat</button>
+                    </>
+                  )}
                 </div>
               )}
 

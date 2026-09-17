@@ -439,6 +439,84 @@ async def build_timeline(cid: str, conn=Depends(db), user=Depends(current_user))
     return {"events": events, "generated_at": now.isoformat(), "documents": len(docs)}
 
 
+class DraftAssistIn(BaseModel):
+    action: str            # shorten | academic | paraphrase | suggest_sources
+    text: str
+    instruction: str | None = None
+
+
+@router.post("/collections/{cid}/draft-assist")
+async def draft_assist(cid: str, body: DraftAssistIn, conn=Depends(db), user=Depends(current_user)):
+    """Taslaktaki bir blok icin AI yardimi. Metni degistirmez, oneri dondurur; kullanici uygular."""
+    col = await conn.fetchrow("SELECT id, title FROM collections WHERE id=$1 AND user_id=$2", cid, user["id"])
+    if not col:
+        raise NotFound("Defter bulunamadı.")
+    text = (body.text or "").strip()
+    if len(text) < 8:
+        raise AppError("Metin çok kısa.")
+    llm = get_llm()
+    base = ("Sen titiz bir editörsün. Yalnızca Türkçe yaz. Metnin anlamını, iddialarını ve olgularını değiştirme; "
+            "yeni bilgi, tarih ya da isim ekleme. Başlık, açıklama, tırnak ya da 'İşte' gibi girişler yazma; "
+            "yalnızca sonuç metnini döndür.")
+    if body.action == "shorten":
+        sysm = base + " Metni yaklaşık yarı uzunluğa indir; en önemli cümleleri koru, tekrarları ve dolgu ifadeleri at."
+        usr = text
+    elif body.action == "academic":
+        sysm = base + (" Metni akademik bir tona çevir: nesnel, üçüncü şahıs, kesin ve ölçülü ifadeler, konuşma dili yok, "
+                       "gereksiz sıfat yok. Uzunluğu yaklaşık koru.")
+        usr = text
+    elif body.action == "paraphrase":
+        sysm = base + (" Bu bir kaynaktan alıntıdır. Aynı bilgiyi tamamen kendi cümlelerinle, farklı sözcük ve cümle yapısıyla "
+                       "yeniden anlat (parafraz); alıntıdaki hiçbir cümleyi olduğu gibi kopyalama. Kaynak adı ya da sayfa ekleme; "
+                       "bu bilgi ayrıca gösterilecek.")
+        usr = text
+    elif body.action == "custom":
+        sysm = base + " Kullanıcının talimatını uygula."
+        usr = f"Talimat: {body.instruction or ''}\n\nMetin:\n{text}"
+    elif body.action == "suggest_sources":
+        # defterdeki vurgular arasindan bu paragrafa uyanlari bul (anlam bazli)
+        rows = await conn.fetch(
+            """SELECT n.id, n.selected_text, n.note_content, n.page_number, n.highlight_color,
+                      d.id AS document_id, d.title AS document_title
+               FROM notes n JOIN documents d ON d.id = n.document_id
+               WHERE n.user_id=$1 AND d.collection_id=$2 AND n.selected_text IS NOT NULL AND length(n.selected_text) > 20""",
+            user["id"], cid)
+        if not rows:
+            return {"action": body.action, "suggestions": [], "note": "Bu defterin kaynaklarında henüz vurgu yok."}
+        # embedding ile siralama
+        try:
+            emb = get_embeddings()
+            qv = emb.embed([text])[0]
+            cands = [r["selected_text"] for r in rows]
+            vs = emb.embed(cands)
+            import math
+            def cos(a, b):
+                dot = sum(x * y for x, y in zip(a, b)); na = math.sqrt(sum(x * x for x in a)); nb = math.sqrt(sum(y * y for y in b))
+                return dot / (na * nb) if na and nb else 0.0
+            scored = sorted(((cos(qv, v), r) for v, r in zip(vs, rows)), key=lambda t: -t[0])
+        except Exception:
+            scored = [(0.0, r) for r in rows]
+        top = [{"id": str(r["id"]), "text": r["selected_text"], "note": r["note_content"], "page": r["page_number"],
+                "color": r["highlight_color"], "document_id": str(r["document_id"]), "document_title": r["document_title"],
+                "score": round(float(sc), 3)} for sc, r in scored[:6]]
+        # kisa gerekce
+        why = ""
+        try:
+            listing = "\n".join(f"[{i+1}] {t['text'][:300]}" for i, t in enumerate(top[:4]))
+            why = llm.complete([
+                {"role": "system", "content": "Yalnızca Türkçe. Çok kısa yaz."},
+                {"role": "user", "content": f"Paragraf:\n{text}\n\nAday alıntılar:\n{listing}\n\n"
+                                            "Her aday için tek satır: [n] bu paragrafı nasıl destekler ya da desteklemez. En fazla 4 satır."},
+            ], model=settings.active_llm_model)
+        except Exception:
+            pass
+        return {"action": body.action, "suggestions": top, "why": why}
+    else:
+        raise AppError("Bilinmeyen işlem.")
+    out = llm.complete([{"role": "system", "content": sysm}, {"role": "user", "content": usr}], model=settings.active_llm_model)
+    return {"action": body.action, "text": (out or "").strip()}
+
+
 class ColStudyIn(BaseModel):
     type: str = "flashcard"
     count: int = 10
