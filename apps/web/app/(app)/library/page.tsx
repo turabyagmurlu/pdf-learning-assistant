@@ -143,8 +143,8 @@ export default function LibraryPage() {
 
   async function createFolder() { const t = newFolder.trim(); if (!t) { setCreatingFolder(false); return; } try { const r = await fetch(API + "/collections", { method: "POST", headers: { Authorization: "Bearer " + getToken(), "Content-Type": "application/json" }, body: JSON.stringify({ title: t }) }); if (r.ok) { const j = await r.json().catch(() => null); setNewFolder(""); setCreatingFolder(false); reload(); if (j?.id) router.push("/collections/" + j.id); } } catch {} }
 
-  const gap = density === "compact" ? "gap-2" : "gap-4";
-  const pad = density === "compact" ? "p-3" : "p-4";
+  const gap = density === "compact" ? "gap-2" : "gap-5";
+  const pad = density === "compact" ? "p-3" : "p-5";
 
   return (
     <div className="mx-auto w-full max-w-6xl px-4 py-5 md:px-6 md:py-8" onClick={() => { setMenuFor(null); setFolderMenu(null); }}>
@@ -215,7 +215,7 @@ export default function LibraryPage() {
           {filtered.map((d) => (
             <div key={d.id} onClick={() => router.push("/documents/" + d.id)} role="button" tabIndex={0}
                  onKeyDown={(e) => { if (e.key === "Enter") router.push("/documents/" + d.id); }}
-                 className={cx("group relative cursor-pointer rounded-2xl border bg-surface", pad, "transition hover:border-accent-purple/50 hover:shadow-sm")}>
+                 className={cx("lift group relative cursor-pointer rounded-2xl border bg-surface", pad, "hover:border-accent-purple/40")}>
               <div className="flex items-start justify-between gap-2">
                 <div className="flex min-w-0 items-center gap-2">
                   <FileText size={16} className="shrink-0 text-accent-purple" />

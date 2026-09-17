@@ -522,7 +522,7 @@ export default function CollectionPage({ params }: { params: { id: string } }) {
                     <div key={d.id} role="button" tabIndex={0}
                          onClick={() => router.push("/documents/" + d.id)}
                          onKeyDown={(e) => { if (e.key === "Enter") router.push("/documents/" + d.id); }}
-                         className="group relative cursor-pointer rounded-xl border bg-surface p-3 transition hover:border-accent-purple/50 hover:shadow-sm">
+                         className="lift group relative cursor-pointer rounded-xl border bg-surface p-4 hover:border-accent-purple/40">
                       <button onClick={(e) => { e.stopPropagation(); removeFromCollection(d.id); }}
                               aria-label="Bu kitaptan çıkar" title="Bu kitaptan çıkar"
                               className="absolute right-2 top-2 rounded-md p-1 text-text-secondary hover:bg-surface-muted hover:text-danger">

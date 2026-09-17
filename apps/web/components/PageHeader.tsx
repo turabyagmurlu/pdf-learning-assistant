@@ -9,7 +9,7 @@ export default function PageHeader({ eyebrow, title, subtitle, hero, right }: {
 }) {
   const { dark } = useTheme();
   return (
-    <header className={hero ? "relative -mx-4 -mt-5 mb-6 overflow-hidden md:-mx-6 md:-mt-8" : "mb-6"}>
+    <header className={hero ? "relative -mx-4 -mt-5 mb-8 overflow-hidden md:-mx-6 md:-mt-8" : "mb-8"}>
       {hero && (
         <>
           <div className="absolute inset-0 h-full w-full">

@@ -1,7 +1,21 @@
 import "../styles/globals.css";
 import type { Metadata, Viewport } from "next";
+import { Fraunces, Inter } from "next/font/google";
 import PwaRegister from "@/components/PwaRegister";
 import { THEME_BOOT_SCRIPT } from "@/lib/theme-boot";
+
+// Baslik: modern, yuksek kontrastli serif. Govde: temiz sans.
+const fraunces = Fraunces({
+  subsets: ["latin", "latin-ext"],
+  variable: "--font-heading",
+  display: "swap",
+  axes: ["opsz", "SOFT"],
+});
+const inter = Inter({
+  subsets: ["latin", "latin-ext"],
+  variable: "--font-body",
+  display: "swap",
+});
 
 export const metadata: Metadata = {
   title: "TY PDF — Öğrenme Asistanı",
@@ -25,7 +39,7 @@ export const viewport: Viewport = {
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
-    <html lang="tr" suppressHydrationWarning>
+    <html lang="tr" suppressHydrationWarning className={`${fraunces.variable} ${inter.variable}`}>
       <head>
         <script dangerouslySetInnerHTML={{ __html: THEME_BOOT_SCRIPT }} />
       </head>

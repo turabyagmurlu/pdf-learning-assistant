@@ -7,7 +7,8 @@
   --text-primary:#1B2233; --text-secondary:#5B6172;
   --accent-purple:#7C6BF0; --accent-teal:#2FB4A6; --accent-amber:#E0A233;
   --accent-coral:#E5735B; --success:#3FA96A; --warning:#D9962B; --danger:#D4553F;
-  --font-heading:"Georgia"; --font-body:system-ui; --font-mono:ui-monospace;
+  --font-mono:ui-monospace;
+  --ease:cubic-bezier(.2,.7,.2,1);
 }
 .dark{
   --bg:#0F1420; --surface:#161C2B; --surface-muted:#1E2637; --border:#293246;
@@ -15,14 +16,44 @@
   --accent-purple:#9C8CFF; --accent-teal:#48C9BA; --accent-amber:#EDB652;
   --accent-coral:#F08A72; --success:#4FB877; --warning:#E7AC4C; --danger:#EA6A52;
 }
-html,body{background:var(--bg);color:var(--text-primary);font-family:var(--font-body);}
+html,body{background:var(--bg);color:var(--text-primary);font-family:var(--font-body),system-ui,sans-serif;}
 * { border-color: var(--border); }
 html{scroll-behavior:smooth;-webkit-text-size-adjust:100%;}
+body{-webkit-font-smoothing:antialiased;-moz-osx-font-smoothing:grayscale;text-rendering:optimizeLegibility;}
+
+/* Basliklar: Fraunces — optik boyut ve yumusaklik ekseni */
+.font-heading{
+  font-family:var(--font-heading),Georgia,serif;
+  font-variation-settings:"opsz" 96,"SOFT" 30;
+  letter-spacing:-0.01em;
+  font-weight:500;
+}
+
 button,a,[role="button"]{-webkit-tap-highlight-color:transparent;touch-action:manipulation;}
 :focus-visible{outline:2px solid var(--accent-purple);outline-offset:2px;border-radius:6px;}
 select,input,textarea{color:inherit;}
-/* iOS: 16px altinda input odaklaninca sayfa zoomlanir */
 @media (max-width:767px){ input,select,textarea{font-size:16px;} }
-/* PWA tam ekranda alt/ust cikintilar */
 body{padding-left:env(safe-area-inset-left);padding-right:env(safe-area-inset-right);}
+
+/* --- Ince gecisler --- */
+@keyframes pageIn{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:none}}
+.page-enter{animation:pageIn .36s var(--ease) both;}
+@keyframes fadeIn{from{opacity:0}to{opacity:1}}
+.fade-in{animation:fadeIn .25s var(--ease) both;}
+
+/* kart: hafif yukselme */
+.lift{transition:transform .22s var(--ease),box-shadow .22s var(--ease),border-color .22s var(--ease);}
+.lift:hover{transform:translateY(-2px);box-shadow:0 10px 30px rgba(20,25,40,.10);}
+.dark .lift:hover{box-shadow:0 12px 34px rgba(0,0,0,.45);}
+
+/* dugme: basinca hafif kucul */
+button{transition:background-color .15s var(--ease),color .15s var(--ease),border-color .15s var(--ease),opacity .15s var(--ease),transform .12s var(--ease);}
+button:active:not(:disabled){transform:scale(.985);}
+
+/* ilerleme cubuklari akici dolsun */
+.h-full.bg-accent-purple, .h-full.rounded-full.bg-accent-purple{transition:width .5s var(--ease);}
+
+/* secim rengi */
+::selection{background:rgba(124,107,240,.28);}
+
 @media (prefers-reduced-motion: reduce){ *{animation:none!important;transition:none!important;} }

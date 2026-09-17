@@ -3,7 +3,7 @@ import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import { api } from "@/lib/api";
 import PageHeader from "@/components/PageHeader";
-import { Highlighter, Search, Trash2, Pencil, Check, GraduationCap, FileText, StickyNote, ExternalLink } from "lucide-react";
+import { Highlighter, Search, Trash2, Pencil, Check, GraduationCap, FileText, StickyNote, ExternalLink, Quote, Download } from "lucide-react";
 
 type Note = {
   id: string; document_id: string; document_title: string; page_number: number | null;
@@ -76,6 +76,33 @@ export default function NotesPage() {
   function open(n: Note) {
     router.push("/documents/" + n.document_id + (n.page_number ? "?page=" + n.page_number : ""));
   }
+  function citation(n: Note) {
+    const pg = n.page_number ? `, s. ${n.page_number}` : "";
+    return `"${(n.selected_text || "").trim()}" (${n.document_title}${pg})`;
+  }
+  async function copyQuote(n: Note) {
+    try { await navigator.clipboard.writeText(citation(n)); setMsg("Alıntı kopyalandı (kaynak ve sayfa ile)."); }
+    catch { setMsg("Kopyalanamadı."); }
+    setTimeout(() => setMsg(""), 2000);
+  }
+  function exportMarkdown() {
+    const groups: Record<string, Note[]> = {};
+    for (const n of list) (groups[n.document_id] ||= []).push(n);
+    const lines: string[] = [`# Vurgular — ${new Date().toLocaleDateString("tr-TR")}`, ""];
+    for (const items of Object.values(groups)) {
+      lines.push(`## ${items[0].document_title}`, "");
+      for (const n of items) {
+        const pg = n.page_number ? ` — s. ${n.page_number}` : "";
+        if (n.selected_text) lines.push(`> ${n.selected_text.trim().replace(/\n+/g, " ")}${pg}`);
+        if (n.note_content) lines.push(`>`, `> **Not:** ${n.note_content.trim()}`);
+        lines.push("");
+      }
+    }
+    const blob = new Blob([lines.join("\n")], { type: "text/markdown;charset=utf-8" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a"); a.href = url; a.download = "vurgular.md"; a.click();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+  }
 
   const total = notes?.length || 0;
   const commented = (notes || []).filter((n) => (n.note_content || "").trim()).length;
@@ -104,6 +131,10 @@ export default function NotesPage() {
         <button onClick={() => setOnlyCommented((v) => !v)} aria-pressed={onlyCommented}
                 className={cx("rounded-xl border px-3 py-2 text-sm", onlyCommented ? "border-accent-purple text-accent-purple" : "bg-surface text-text-secondary")}>
           Sadece yorumlu
+        </button>
+        <button onClick={exportMarkdown} disabled={list.length === 0} title="Görünen vurguları Markdown dosyası olarak indir"
+                className="flex items-center gap-1.5 rounded-xl border bg-surface px-3 py-2 text-sm text-text-secondary hover:border-accent-purple/50 disabled:opacity-50">
+          <Download size={15} /> Dışa aktar
         </button>
       </div>
       {msg && <p className="mt-3 text-sm text-accent-purple">{msg}</p>}
@@ -163,6 +194,10 @@ export default function NotesPage() {
                           )}
                         </div>
                         <div className="flex shrink-0 items-center gap-0.5 opacity-60 group-hover:opacity-100">
+                          {n.selected_text && (
+                            <button onClick={() => copyQuote(n)} title="Alıntıyı kopyala (kaynak + sayfa)" aria-label="Alıntıyı kopyala"
+                                    className="rounded-md p-1.5 text-text-secondary hover:bg-surface-muted hover:text-accent-purple"><Quote size={15} /></button>
+                          )}
                           <button onClick={() => toCard(n)} title="Karta çevir" aria-label="Karta çevir"
                                   className="rounded-md p-1.5 text-text-secondary hover:bg-surface-muted hover:text-accent-purple"><GraduationCap size={15} /></button>
                           <button onClick={() => { setEditing(n.id); setDraft(n.note_content || ""); }} title="Yorumu düzenle" aria-label="Düzenle"
