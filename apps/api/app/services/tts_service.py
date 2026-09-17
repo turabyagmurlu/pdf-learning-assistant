@@ -4,13 +4,26 @@ Gemini TTS 24kHz, 16-bit, mono PCM dondurur; onune WAV basligi ekleyip
 tarayicida dogrudan calinabilir hale getiririz.
 """
 import base64
+import hashlib
 import io
+import re
 import struct
 import httpx
 from app.config import settings
 from app.core.errors import AiUnavailable
 
 BASE = "https://generativelanguage.googleapis.com/v1beta"
+
+
+class TtsQuota(AiUnavailable):
+    """Gemini ses kotasi doldu (429). retry_after: onerilen bekleme (sn)."""
+
+    code, status = "TTS_QUOTA", 429      # 503 degil: istemci bunu tekrar denemesin
+
+    def __init__(self, user_message: str | None = None, retry_after: int = 30, daily: bool = False):
+        super().__init__(user_message)
+        self.retry_after = retry_after
+        self.daily = daily
 
 # Gemini TTS kadin sesleri (etiket: dokumandaki karakter tanimi)
 FEMALE_VOICES = {
@@ -48,12 +61,50 @@ def wav_from_pcm(pcm: bytes) -> bytes:
     return _wav_header(len(pcm)) + pcm
 
 
-def split_for_tts(text: str, max_chars: int = 1100) -> list[str]:
-    """Metni cumle sinirlarindan ~max_chars'lik parcalara boler."""
+def cache_key(text: str, voice: str, style: str = "") -> str:
+    """Ayni metin+ses icin sabit anahtar; uretilen WAV bir daha uretilmez."""
+    h = hashlib.sha256()
+    h.update((text or "").strip().encode("utf-8"))
+    h.update(b"\x00" + (voice or "").encode("utf-8"))
+    h.update(b"\x00" + (style or "").strip().encode("utf-8"))
+    return h.hexdigest()
+
+
+def _quota_from_response(r: httpx.Response) -> "TtsQuota":
+    """429 govdesinden Google'in onerdigi bekleme suresini okur."""
+    delay, daily, msg = 30, False, ""
+    try:
+        err = (r.json() or {}).get("error") or {}
+        msg = (err.get("message") or "")[:300]
+        for d in err.get("details") or []:
+            if str(d.get("@type", "")).endswith("RetryInfo"):
+                m = re.match(r"(\d+(?:\.\d+)?)s", str(d.get("retryDelay") or ""))
+                if m:
+                    delay = int(float(m.group(1))) + 1
+            if str(d.get("@type", "")).endswith("QuotaFailure"):
+                for v in d.get("violations") or []:
+                    if "PerDay" in str(v.get("quotaId", "")):
+                        daily = True
+    except Exception:
+        pass
+    if "PerDay" in msg or "per day" in msg.lower():
+        daily = True
+    if daily:
+        return TtsQuota("Günlük ses kotası doldu. Yarın yenilenir; o zamana kadar "
+                        "tarayıcı sesiyle dinleyebilirsin.", retry_after=3600, daily=True)
+    delay = max(5, min(delay, 90))
+    return TtsQuota(f"Ses kotası şu an dolu; {delay} saniye sonra otomatik denenecek.",
+                    retry_after=delay)
+
+
+def split_for_tts(text: str, max_chars: int = 2600) -> list[str]:
+    """Metni cumle sinirlarindan ~max_chars'lik parcalara boler.
+
+    Parca ne kadar buyukse o kadar az Gemini cagrisi -> kota o kadar az yanar.
+    """
     text = (text or "").strip()
     if not text:
         return []
-    import re
     sentences = re.split(r"(?<=[.!?…])\s+", text)
     chunks, cur = [], ""
     for sent in sentences:
@@ -84,7 +135,7 @@ def synthesize_pcm(text: str, voice: str = DEFAULT_VOICE, style: str = "") -> by
     directive = style.strip() or (
         "Sıcak, sakin ve anlaşılır bir öğretmen tonuyla, doğal bir tempoda oku"
     )
-    prompt = f"{directive}:\n\n{text[:6000]}"
+    prompt = f"{directive}:\n\n{text[:8000]}"
 
     model = (settings.gemini_tts_model or "gemini-2.5-flash-preview-tts").strip()
     url = f"{BASE}/models/{model}:generateContent?key={key}"
@@ -98,9 +149,9 @@ def synthesize_pcm(text: str, voice: str = DEFAULT_VOICE, style: str = "") -> by
         },
     }
     try:
-        r = httpx.post(url, json=payload, timeout=httpx.Timeout(connect=10, read=100, write=30, pool=10))
+        r = httpx.post(url, json=payload, timeout=httpx.Timeout(connect=10, read=170, write=30, pool=10))
         if r.status_code == 429:
-            raise AiUnavailable("Seslendirme kotası doldu. Biraz sonra tekrar dene.")
+            raise _quota_from_response(r)
         if r.status_code >= 400:
             detail = ""
             try:

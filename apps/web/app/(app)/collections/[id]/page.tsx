@@ -3,13 +3,14 @@ import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { api, API, getToken } from "@/lib/api";
 import PodcastPlayer from "@/components/PodcastPlayer";
+import BrowserVoice, { browserVoiceSupported } from "@/components/BrowserVoice";
 import { Skeleton, CardSkeleton } from "@/components/Skeleton";
 import ConceptMap, { CMNode, CMEdge } from "@/components/ConceptMap";
 import DraftEditor, { Block } from "@/components/DraftEditor";
 import {
   BookOpen, Sparkles, FileText, ArrowLeft, PenLine,
   Loader2, Send, Pencil, Check, Headphones, Plus, X, Square, CheckSquare, Trash2,
-  BookMarked, Search, RefreshCw, Clock, Share2,
+  BookMarked, Search, RefreshCw, Clock, Share2, Volume2,
 } from "lucide-react";
 
 type Doc = {
@@ -297,9 +298,16 @@ export default function CollectionPage({ params }: { params: { id: string } }) {
   }
 
   const [audioPct, setAudioPct] = useState(0);
+  const [audioNote, setAudioNote] = useState("");
+  const [quotaOut, setQuotaOut] = useState(false);   // kota doldu -> tarayici sesi
+  const [useBrowserVoice, setUseBrowserVoice] = useState(false);
+  const [canSpeak, setCanSpeak] = useState(false);   // sunucu/istemci farki olmasin
+  useEffect(() => { setCanSpeak(browserVoiceSupported()); }, []);
+
   async function playLecture() {
     if (!lecture) return;
-    setAudioBusy(true); setLecErr(""); setAudioPct(0); stopAudio();
+    setAudioBusy(true); setLecErr(""); setAudioPct(0); setAudioNote("");
+    setQuotaOut(false); stopAudio();
     try {
       let blob: Blob | null = null;
       // 1) onbellek
@@ -314,13 +322,19 @@ export default function CollectionPage({ params }: { params: { id: string } }) {
       if (!blob) {
         const job = await api("/tts/jobs", { method: "POST", body: JSON.stringify({ text: lecture.slice(0, 12000) }) });
         const jid = job.job_id;
-        let st: any = null;
-        for (let i = 0; i < 150; i++) {            // en fazla ~5 dk
+        let st: any = job.cached ? { status: "ready", done: job.total, total: job.total } : null;
+        for (let i = 0; i < 240 && (!st || st.status === "running"); i++) {   // kota beklemesiyle ~8 dk
           await new Promise((r) => setTimeout(r, 2000));
           st = await api(`/tts/jobs/${jid}`);
           if (st.total) setAudioPct(Math.round((st.done / st.total) * 100));
+          setAudioNote(st.note || "");
           if (st.status === "ready") break;
-          if (st.status === "error") throw new Error(st.error || "Seslendirme başarısız.");
+          if (st.status === "error") {
+            if (st.quota) setQuotaOut(true);
+            const err: any = new Error(st.error || "Seslendirme başarısız.");
+            err.quota = !!st.quota;
+            throw err;
+          }
         }
         if (!st || st.status !== "ready") throw new Error("Seslendirme çok uzun sürdü; metni kısaltıp tekrar dene.");
         const res = await fetch(`${API}/tts/jobs/${jid}/audio`, { headers: { Authorization: "Bearer " + getToken() } });
@@ -338,8 +352,10 @@ export default function CollectionPage({ params }: { params: { id: string } }) {
       audioUrlRef.current = url;
       setAudioUrl(url); setPlaying(true);
     } catch (e: any) {
-      setLecErr(e?.message || "Seslendirme yapılamadı.");
-    } finally { setAudioBusy(false); setAudioPct(0); }
+      const msg = String(e?.message || "");
+      if (e?.quota || /kota/i.test(msg)) setQuotaOut(true);
+      setLecErr(msg || "Seslendirme yapılamadı.");
+    } finally { setAudioBusy(false); setAudioPct(0); setAudioNote(""); }
   }
 
   async function saveTitle() {
@@ -876,8 +892,30 @@ export default function CollectionPage({ params }: { params: { id: string } }) {
                 {audioBusy ? (audioPct > 0 ? `Ses hazırlanıyor… %${audioPct}` : "Ses hazırlanıyor…") : (audioReady ? "Dinle (hazır)" : "Dinle")}
               </button>
             )}
+            {lecture && canSpeak && !useBrowserVoice && (
+              <button onClick={() => { stopAudio(); setUseBrowserVoice(true); }}
+                      className="flex items-center gap-1.5 rounded-xl border px-4 py-2.5 text-sm hover:bg-black/5">
+                <Volume2 size={15} /> Tarayıcı sesiyle dinle
+              </button>
+            )}
           </div>
-          {lecErr && <p className="mt-3 text-sm text-danger">{lecErr}</p>}
+          {audioBusy && audioNote && <p className="mt-3 text-sm text-text-secondary">{audioNote}</p>}
+          {lecErr && (
+            <div className={"mt-3 rounded-xl px-4 py-3 text-sm " + (quotaOut ? "border border-warning/40 bg-warning/10" : "")}>
+              <p className={quotaOut ? "" : "text-danger"}>{lecErr}</p>
+              {quotaOut && canSpeak && (
+                <button onClick={() => { setLecErr(""); setUseBrowserVoice(true); }}
+                        className="mt-2 flex items-center gap-1.5 rounded-lg bg-accent-purple px-3 py-1.5 text-white">
+                  <Volume2 size={14} /> Tarayıcı sesiyle dinle
+                </button>
+              )}
+            </div>
+          )}
+          {useBrowserVoice && lecture && (
+            <div className="mt-4">
+              <BrowserVoice text={lecture} onClose={() => setUseBrowserVoice(false)} />
+            </div>
+          )}
           {audioUrl && (
             <div className="mt-4">
               <PodcastPlayer src={audioUrl} title={col.title} subtitle={`Sesli özet · ${st.ready || st.documents} belge`}

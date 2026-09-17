@@ -31,6 +31,16 @@ async def lifespan(app: FastAPI):
             await conn.execute("ALTER TABLE collections ADD COLUMN IF NOT EXISTS concept_map_at timestamptz")
             await conn.execute("ALTER TABLE collections ADD COLUMN IF NOT EXISTS draft text")
             await conn.execute("ALTER TABLE collections ADD COLUMN IF NOT EXISTS draft_at timestamptz")
+            # Uretilen seslendirmeler: ayni metin bir daha kota harcamasin.
+            await conn.execute(
+                "CREATE TABLE IF NOT EXISTS tts_cache ("
+                " key text PRIMARY KEY,"
+                " wav bytea NOT NULL,"
+                " chars int NOT NULL DEFAULT 0,"
+                " used_at timestamptz NOT NULL DEFAULT now(),"
+                " created_at timestamptz NOT NULL DEFAULT now())"
+            )
+            await conn.execute("CREATE INDEX IF NOT EXISTS tts_cache_used_idx ON tts_cache (used_at)")
     except Exception:  # noqa
         pass
     yield

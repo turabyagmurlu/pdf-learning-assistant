@@ -9,7 +9,8 @@ from app.deps import db, current_user
 from app.core.errors import NotFound, AppError
 from app.services.analysis_service import generate_study_items, cards_from_text, explain_page
 from app.services.tts_service import (synthesize, synthesize_pcm, wav_from_pcm, split_for_tts,
-                                      FEMALE_VOICES, DEFAULT_VOICE)
+                                      cache_key, TtsQuota, FEMALE_VOICES, DEFAULT_VOICE)
+from app.db.session import get_pool
 
 router = APIRouter(tags=["study"])
 
@@ -152,7 +153,12 @@ async def tts(body: TtsIn, user=Depends(current_user)):
         raise AppError("Seslendirilecek metin boş.")
     if len(txt) > 1500:
         raise AppError("Metin uzun; /tts/jobs ucunu kullan.")
-    wav = await asyncio.to_thread(synthesize, txt, body.voice or DEFAULT_VOICE, body.style or "")
+    voice, style = body.voice or DEFAULT_VOICE, body.style or ""
+    key = "wav:" + cache_key(txt, voice, style)
+    wav = await _cache_get(key)
+    if wav is None:
+        wav = await asyncio.to_thread(synthesize, txt, voice, style)
+        await _cache_put(key, wav, len(txt))
     return Response(content=wav, media_type="audio/wav",
                     headers={"Cache-Control": "no-store"})
 
@@ -169,30 +175,82 @@ def _tts_cleanup():
         _TTS_JOBS.pop(k, None)
 
 
-async def _run_tts_job(job_id: str, chunks: list[str], voice: str, style: str):
-    job = _TTS_JOBS[job_id]
-    sem = asyncio.Semaphore(2)          # aynı anda en fazla 2 Gemini cagrisi
-    parts: list[bytes | None] = [None] * len(chunks)
-
-    async def one(i: int, text: str):
-        async with sem:
-            for attempt in range(2):
-                try:
-                    parts[i] = await asyncio.to_thread(synthesize_pcm, text, voice, style)
-                    break
-                except Exception as e:  # noqa
-                    if attempt == 1:
-                        raise
-                    await asyncio.sleep(3)
-            job["done"] = sum(1 for p in parts if p is not None)
-
+async def _cache_get(key: str) -> bytes | None:
     try:
-        await asyncio.gather(*(one(i, c) for i, c in enumerate(chunks)))
-        job["wav"] = wav_from_pcm(b"".join(p or b"" for p in parts))
+        pool = await get_pool()
+        async with pool.acquire() as conn:
+            row = await conn.fetchrow("SELECT wav FROM tts_cache WHERE key=$1", key)
+            if row:
+                await conn.execute("UPDATE tts_cache SET used_at=now() WHERE key=$1", key)
+                return bytes(row["wav"])
+    except Exception:  # noqa
+        pass
+    return None
+
+
+async def _cache_put(key: str, wav: bytes, chars: int):
+    try:
+        pool = await get_pool()
+        async with pool.acquire() as conn:
+            await conn.execute(
+                "INSERT INTO tts_cache (key, wav, chars) VALUES ($1,$2,$3) "
+                "ON CONFLICT (key) DO UPDATE SET used_at=now()", key, wav, chars)
+            # Depoyu sinirla: en eski kullanilanlardan 120 kaydin uzerini temizle.
+            await conn.execute(
+                "DELETE FROM tts_cache WHERE key IN ("
+                " SELECT key FROM tts_cache ORDER BY used_at DESC OFFSET 120)")
+    except Exception:  # noqa
+        pass
+
+
+async def _run_tts_job(job_id: str, chunks: list[str], voice: str, style: str, key: str):
+    """Parcalari SIRAYLA seslendirir; kota hatasinda Google'in onerdigi kadar bekler.
+
+    Es zamanli istek yok: ucretsiz kotada dakikalik istek siniri cok dusuk,
+    paralel gitmek kotayi aninda yakiyor.
+    """
+    job = _TTS_JOBS[job_id]
+    parts: list[bytes] = []
+    try:
+        for i, text in enumerate(chunks):
+            ck = cache_key(text, voice, style)
+            hit = await _cache_get("pcm:" + ck)
+            if hit is not None:
+                parts.append(hit)
+                job["done"] = i + 1
+                continue
+            for attempt in range(4):
+                try:
+                    pcm = await asyncio.to_thread(synthesize_pcm, text, voice, style)
+                    parts.append(pcm)
+                    await _cache_put("pcm:" + ck, pcm, len(text))
+                    break
+                except TtsQuota as q:
+                    if q.daily or attempt == 3:
+                        raise
+                    job["waiting"] = int(q.retry_after)
+                    job["note"] = f"Kota doldu; {int(q.retry_after)} sn bekleniyor…"
+                    await asyncio.sleep(q.retry_after)
+                    job["waiting"] = 0
+                    job["note"] = ""
+                except Exception:  # noqa
+                    if attempt >= 1:
+                        raise
+                    await asyncio.sleep(4)
+            job["done"] = i + 1
+            if i < len(chunks) - 1:
+                await asyncio.sleep(2)      # dakikalik istek sinirina nefes payi
+        wav = wav_from_pcm(b"".join(parts))
+        job["wav"] = wav
         job["status"] = "ready"
+        await _cache_put("wav:" + key, wav, sum(len(c) for c in chunks))
     except Exception as e:  # noqa
         job["status"] = "error"
+        job["quota"] = isinstance(e, TtsQuota)
+        job["daily"] = bool(getattr(e, "daily", False))
         job["error"] = getattr(e, "user_message", None) or str(e)[:200] or "Seslendirme başarısız."
+    job["note"] = ""
+    job["waiting"] = 0
     job["at"] = time.time()
 
 
@@ -203,14 +261,26 @@ async def tts_job_create(body: TtsIn, user=Depends(current_user)):
     txt = (body.text or "").strip()
     if len(txt) < 2:
         raise AppError("Seslendirilecek metin boş.")
-    chunks = split_for_tts(txt[:12000])
+    txt = txt[:12000]
+    voice = body.voice or DEFAULT_VOICE
+    style = body.style or ""
+    chunks = split_for_tts(txt)
     if not chunks:
         raise AppError("Seslendirilecek metin boş.")
     job_id = str(uuid.uuid4())
-    _TTS_JOBS[job_id] = {"status": "running", "done": 0, "total": len(chunks),
-                         "wav": None, "error": None, "at": time.time(), "user": str(user["id"])}
-    asyncio.create_task(_run_tts_job(job_id, chunks, body.voice or DEFAULT_VOICE, body.style or ""))
-    return {"job_id": job_id, "total": len(chunks)}
+    key = cache_key(txt, voice, style)
+    job = {"status": "running", "done": 0, "total": len(chunks), "wav": None,
+           "error": None, "quota": False, "daily": False, "note": "", "waiting": 0,
+           "at": time.time(), "user": str(user["id"])}
+    _TTS_JOBS[job_id] = job
+
+    cached = await _cache_get("wav:" + key)          # ayni ders daha once seslendirildiyse
+    if cached:
+        job.update(status="ready", wav=cached, done=len(chunks))
+        return {"job_id": job_id, "total": len(chunks), "cached": True}
+
+    asyncio.create_task(_run_tts_job(job_id, chunks, voice, style, key))
+    return {"job_id": job_id, "total": len(chunks), "cached": False}
 
 
 @router.get("/tts/jobs/{job_id}")
@@ -219,7 +289,10 @@ async def tts_job_status(job_id: str, user=Depends(current_user)):
     if not job or job.get("user") != str(user["id"]):
         raise NotFound("Seslendirme işi bulunamadı; yeniden başlat.")
     return {"status": job["status"], "done": job["done"], "total": job["total"],
-            "error": job["error"], "bytes": len(job["wav"]) if job.get("wav") else 0}
+            "error": job["error"], "quota": job.get("quota", False),
+            "daily": job.get("daily", False), "note": job.get("note", ""),
+            "waiting": job.get("waiting", 0),
+            "bytes": len(job["wav"]) if job.get("wav") else 0}
 
 
 @router.get("/tts/jobs/{job_id}/audio")
