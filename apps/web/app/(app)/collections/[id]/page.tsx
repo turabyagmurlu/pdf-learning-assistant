@@ -256,7 +256,11 @@ export default function CollectionPage({ params }: { params: { id: string } }) {
   const [audioUrl, setAudioUrl] = useState("");
   const [audioReady, setAudioReady] = useState(false); // onbellekte ses var mi
   const LEC_KEY = "lecture.text." + id;
-  const AUDIO_KEY = "/typdf-audio/lecture/" + id;
+  const VOICE_KEY = "lecture.voice";
+  // Ses onbellegi sese gore ayrisir: kadin sesini degistirince eski kayit calmaz.
+  const [voice, setVoice] = useState("");
+  const [voiceList, setVoiceList] = useState<{ id: string; label: string }[]>([]);
+  const AUDIO_KEY = "/typdf-audio/lecture/" + id + (voice ? "/" + voice : "");
 
   function stopAudio() {
     try { if (audioUrlRef.current) { URL.revokeObjectURL(audioUrlRef.current); audioUrlRef.current = ""; } } catch {}
@@ -267,15 +271,22 @@ export default function CollectionPage({ params }: { params: { id: string } }) {
   // ders metni ve ses onbellegini yukle (sayfaya donunce yeniden uretmeye gerek yok)
   useEffect(() => {
     try { const t = localStorage.getItem(LEC_KEY); if (t) setLecture(t); } catch {}
+    try { const v = localStorage.getItem(VOICE_KEY); if (v) setVoice(v); } catch {}
     (async () => {
-      try {
-        if (!("caches" in window)) return;
-        const c = await caches.open("typdf-audio");
-        const hit = await c.match(AUDIO_KEY);
-        setAudioReady(!!hit);
-      } catch {}
+      try { const r = await api("/tts/voices"); setVoiceList(r.voices || []); setVoice((v) => v || r.default || ""); }
+      catch {}
     })();
   }, [id]);
+
+  useEffect(() => {
+    (async () => {
+      try {
+        if (!("caches" in window)) { setAudioReady(false); return; }
+        const c = await caches.open("typdf-audio");
+        setAudioReady(!!(await c.match(AUDIO_KEY)));
+      } catch { setAudioReady(false); }
+    })();
+  }, [AUDIO_KEY]);
 
   async function makeLecture(refresh = false) {
     setLecBusy(true); setLecErr(""); setLecture(""); stopAudio();
@@ -311,6 +322,34 @@ export default function CollectionPage({ params }: { params: { id: string } }) {
   const [canSpeak, setCanSpeak] = useState(false);   // sunucu/istemci farki olmasin
   useEffect(() => { setCanSpeak(browserVoiceSupported()); }, []);
 
+  // Ses ornegi: tek cumle, kisa uctan; onbelleklendigi icin ikinci kez bedava.
+  const [sampling, setSampling] = useState("");
+  const sampleRef = useRef<HTMLAudioElement | null>(null);
+  async function sampleVoice(v: string) {
+    setSampling(v); setLecErr("");
+    try {
+      const res = await fetch(`${API}/tts`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Authorization: "Bearer " + getToken() },
+        body: JSON.stringify({ text: "Merhaba, bu defterdeki kaynakları sana bu sesle anlatacağım.", voice: v }),
+      });
+      if (!res.ok) {
+        let m = "Örnek dinlenemedi.";
+        try { const j = await res.json(); m = j?.detail?.message || j?.message || j?.detail || m; } catch {}
+        if (res.status === 429) setQuotaOut(true);
+        throw new Error(m);
+      }
+      const url = URL.createObjectURL(await res.blob());
+      try { sampleRef.current?.pause(); } catch {}
+      const a = new Audio(url); sampleRef.current = a;
+      a.onended = () => URL.revokeObjectURL(url);
+      await a.play();
+    } catch (e: any) {
+      setLecErr(e?.message || "Örnek dinlenemedi.");
+    } finally { setSampling(""); }
+  }
+  useEffect(() => () => { try { sampleRef.current?.pause(); } catch {} }, []);
+
   async function playLecture() {
     if (!lecture) return;
     setAudioBusy(true); setLecErr(""); setAudioPct(0); setAudioNote("");
@@ -327,7 +366,10 @@ export default function CollectionPage({ params }: { params: { id: string } }) {
       } catch {}
       // 2) arka plan isi: parca parca uretilir, ilerleme gosterilir
       if (!blob) {
-        const job = await api("/tts/jobs", { method: "POST", body: JSON.stringify({ text: lecture.slice(0, 12000) }) });
+        const job = await api("/tts/jobs", {
+          method: "POST",
+          body: JSON.stringify({ text: lecture.slice(0, 12000), voice: voice || undefined }),
+        });
         const jid = job.job_id;
         let st: any = job.cached ? { status: "ready", done: job.total, total: job.total } : null;
         for (let i = 0; i < 240 && (!st || st.status === "running"); i++) {   // kota beklemesiyle ~8 dk
@@ -900,13 +942,45 @@ export default function CollectionPage({ params }: { params: { id: string } }) {
                 {audioBusy ? (audioPct > 0 ? `Ses hazırlanıyor… %${audioPct}` : "Ses hazırlanıyor…") : (audioReady ? "Dinle (hazır)" : "Dinle")}
               </button>
             )}
-            {lecture && canSpeak && !useBrowserVoice && (
-              <button onClick={() => { stopAudio(); setUseBrowserVoice(true); }}
-                      className="flex items-center gap-1.5 rounded-xl border px-4 py-2.5 text-sm hover:bg-black/5">
-                <Volume2 size={15} /> Tarayıcı sesiyle dinle
-              </button>
-            )}
           </div>
+
+          {/* Anlatıcı sesi — hepsi kadın, Türkçe */}
+          {lecture && voiceList.length > 0 && (
+            <div className="mt-4 rounded-2xl border bg-surface p-4">
+              <div className="flex flex-wrap items-center gap-2">
+                <span className="text-sm font-medium">Anlatıcı sesi</span>
+                <span className="text-xs text-text-secondary">· hepsi kadın sesi, doğal tonlama</span>
+              </div>
+              <div className="mt-3 flex flex-wrap gap-1.5">
+                {voiceList.map((v) => (
+                  <button key={v.id} onClick={() => { setVoice(v.id); try { localStorage.setItem(VOICE_KEY, v.id); } catch {} stopAudio(); }}
+                          className={"rounded-xl border px-3 py-1.5 text-xs " +
+                            (voice === v.id ? "border-accent-purple bg-accent-purple/10 text-accent-purple" : "hover:bg-black/5")}>
+                    {v.label}
+                    <span className="ml-1 opacity-60">{v.id}</span>
+                  </button>
+                ))}
+              </div>
+              <div className="mt-3 flex flex-wrap items-center gap-2">
+                <button onClick={() => sampleVoice(voice)} disabled={!voice || !!sampling}
+                        className="flex items-center gap-1.5 rounded-lg border px-3 py-1.5 text-xs hover:bg-black/5 disabled:opacity-60">
+                  {sampling ? <Loader2 size={13} className="animate-spin" /> : <Volume2 size={13} />}
+                  {sampling ? "Örnek hazırlanıyor…" : "Bu sesi dinle"}
+                </button>
+                <span className="text-[11px] text-text-secondary">
+                  Sesi değiştirirsen ders o sesle yeniden seslendirilir; her ses ayrı saklanır.
+                </span>
+              </div>
+            </div>
+          )}
+
+          {/* Yedek: cihazın kendi sesi. Kalitesi düşük, sadece kota bitince anlamlı. */}
+          {lecture && canSpeak && !useBrowserVoice && (
+            <button onClick={() => { stopAudio(); setUseBrowserVoice(true); }}
+                    className="mt-3 text-xs text-text-secondary underline underline-offset-4 hover:text-text">
+              Kota bittiyse cihazının kendi sesiyle dinle (robotik yedek)
+            </button>
+          )}
           {audioBusy && audioNote && <p className="mt-3 text-sm text-text-secondary">{audioNote}</p>}
           {lecErr && (
             <div className={"mt-3 rounded-xl px-4 py-3 text-sm " + (quotaOut ? "border border-warning/40 bg-warning/10" : "")}>

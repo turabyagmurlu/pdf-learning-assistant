@@ -30,6 +30,24 @@ export function browserVoiceSupported() {
   return typeof window !== "undefined" && "speechSynthesis" in window;
 }
 
+/** Bilinen kadin Turkce ses adlari (Edge/Windows dogal sesleri dahil). */
+const FEMALE_HINTS = /emel|filiz|seda|aylin|zeynep|ayse|ayşe|female|kadın|kadin/i;
+const NATURAL_HINTS = /natural|neural|online|google/i;
+
+function voiceQuality(v: SpeechSynthesisVoice) {
+  const female = FEMALE_HINTS.test(v.name);
+  const natural = NATURAL_HINTS.test(v.name) || !v.localService;
+  return { female, natural, score: (female ? 2 : 0) + (natural ? 1 : 0) };
+}
+
+function describe(v: SpeechSynthesisVoice) {
+  const q = voiceQuality(v);
+  const bits = [q.female ? "kadın" : "erkek"];
+  if (q.natural) bits.push("doğal");
+  else bits.push("robotik");
+  return `${v.name} — ${bits.join(", ")}`;
+}
+
 export default function BrowserVoice({ text, onClose }: { text: string; onClose?: () => void }) {
   const parts = useRef<string[]>(splitSentences(text));
   const idx = useRef(0);
@@ -54,8 +72,10 @@ export default function BrowserVoice({ text, onClose }: { text: string; onClose?
     const read = () => {
       const all = window.speechSynthesis.getVoices();
       const tr = all.filter((v) => /^tr/i.test(v.lang));
-      setVoices(tr.length ? tr : all);
-      setVoiceName((n) => n || (tr[0]?.name ?? ""));
+      // En iyisi basa: once kadin, sonra dogal ses.
+      const sorted = (tr.length ? tr : all).sort((a, b) => voiceQuality(b).score - voiceQuality(a).score);
+      setVoices(sorted);
+      setVoiceName((n) => n || (sorted[0]?.name ?? ""));
     };
     read();
     window.speechSynthesis.addEventListener("voiceschanged", read);
@@ -111,9 +131,16 @@ export default function BrowserVoice({ text, onClose }: { text: string; onClose?
     <div className="rounded-2xl border bg-surface p-4">
       <div className="flex items-center gap-2 text-sm">
         <Volume2 size={15} className="text-accent-purple" />
-        <span className="font-medium">Tarayıcı sesi</span>
-        <span className="text-xs text-text-secondary">· cihazının kendi sesi, kota harcamaz</span>
+        <span className="font-medium">Cihaz sesi (yedek)</span>
+        <span className="text-xs text-text-secondary">· kota harcamaz, ama anlatıcı sesi kadar doğal değil</span>
       </div>
+      {voices.length > 0 && !voiceQuality(voices.find((v) => v.name === voiceName) || voices[0]).female && (
+        <p className="mt-2 rounded-lg bg-warning/10 px-3 py-2 text-[11px] text-text-secondary">
+          Bu cihazda yüklü tek Türkçe ses erkek ve robotik. Doğal bir kadın sesi istersen uygulamayı
+          <b> Microsoft Edge</b>'de aç — Edge'in çevrimiçi Türkçe kadın sesi burada listeye düşer.
+          Asıl anlatıcı sesi için kota yenilenince <b>Dinle</b>'ye dön.
+        </p>
+      )}
 
       <div className="mt-3 flex flex-wrap items-center gap-2">
         <button onClick={toggle}
@@ -137,7 +164,7 @@ export default function BrowserVoice({ text, onClose }: { text: string; onClose?
         {voices.length > 1 && (
           <select value={voiceName} onChange={(e) => { setVoiceName(e.target.value); if (state !== "idle") setTimeout(() => speakFrom(idx.current), 0); }}
                   className="rounded-xl border bg-surface px-2 py-2 text-xs">
-            {voices.map((v) => <option key={v.name} value={v.name}>{v.name}</option>)}
+            {voices.map((v) => <option key={v.name} value={v.name}>{describe(v)}</option>)}
           </select>
         )}
       </div>
