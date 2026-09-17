@@ -7,6 +7,7 @@ import BrowserVoice, { browserVoiceSupported } from "@/components/BrowserVoice";
 import { stageInfo } from "@/lib/docstage";
 import CitedText from "@/components/CitedText";
 import { useRefreshOn } from "@/components/Wake";
+import { useConfirm } from "@/components/Confirm";
 import { Skeleton, CardSkeleton } from "@/components/Skeleton";
 import ConceptMap, { CMNode, CMEdge } from "@/components/ConceptMap";
 import DraftEditor, { Block } from "@/components/DraftEditor";
@@ -191,6 +192,8 @@ export default function CollectionPage({ params }: { params: { id: string } }) {
       setErr(e?.message || "Belgeler eklenemedi.");
     } finally { setAddBusy(false); }
   }
+  const { confirm, dialog: confirmDialog } = useConfirm();
+
   async function reprocessDoc(docId: string) {
     try { await api("/documents/" + docId + "/reprocess", { method: "POST" }); } catch {}
     load();
@@ -231,6 +234,13 @@ export default function CollectionPage({ params }: { params: { id: string } }) {
   }, [data]);
 
   async function removeFromCollection(docId: string) {
+    const d = (data?.documents || []).find((x: Doc) => x.id === docId);
+    const ok = await confirm({
+      title: `"${d?.title || "Bu kaynak"}" defterden çıkarılsın mı?`,
+      keeps: ["Kaynak silinmez; Kütüphane'de kalır ve istediğinde geri eklenebilir"],
+      confirmLabel: "Defterden çıkar",
+    });
+    if (!ok) return;
     try {
       await api("/documents/" + docId, { method: "PATCH", body: JSON.stringify({ collection_id: "" }) });
       await load();
@@ -334,6 +344,16 @@ export default function CollectionPage({ params }: { params: { id: string } }) {
   }, [AUDIO_KEY]);
 
   async function makeLecture(refresh = false) {
+    if (refresh) {
+      const ok = await confirm({
+        title: "Özet sıfırdan yeniden yazılsın mı?",
+        description: "Şu anki ders metni yerine yepyeni bir metin yazılır.",
+        losses: ["Kayıtlı ders metni değişir",
+                 "Üretilmiş ses geçersiz olur; dinlemek için yeniden üretilmesi gerekir (kota harcar)"],
+        confirmLabel: "Yeniden yaz",
+      });
+      if (!ok) return;
+    }
     setLecBusy(true); setLecErr(""); setLecture(""); stopAudio();
     setUseBrowserVoice(false); setQuotaOut(false);
     if (refresh) setAudioReady(false);
@@ -538,10 +558,17 @@ export default function CollectionPage({ params }: { params: { id: string } }) {
         <button
           onClick={async () => {
             const n = docs.length;
-            const msg = n > 0
-              ? `"${col.title}" defterini silmek istiyor musun?\n\nİçindeki ${n} kaynak silinmez, deftersiz kalır.`
-              : `"${col.title}" defterini silmek istiyor musun?`;
-            if (!window.confirm(msg)) return;
+            const losses = ["Defterin sohbeti, sözlüğü, haritası ve zaman çizelgesi silinir"];
+            if (st.draft_words) losses.unshift(`Taslağındaki ${st.draft_words} kelime silinir`);
+            const ok = await confirm({
+              title: `"${col.title}" defteri silinsin mi?`,
+              description: "Defter kalıcı olarak silinir; bu işlem geri alınamaz.",
+              losses,
+              keeps: n > 0 ? [`İçindeki ${n} kaynak silinmez; Kütüphane'de deftersiz kalır`] : undefined,
+              confirmLabel: "Defteri sil", danger: true,
+              typeToConfirm: (n > 0 || st.draft_words) ? col.title : undefined,
+            });
+            if (!ok) return;
             try { await api("/collections/" + id, { method: "DELETE" }); router.push("/notebooks"); }
             catch (e: any) { setErr(e?.message || "Silinemedi."); }
           }}
@@ -1197,6 +1224,7 @@ export default function CollectionPage({ params }: { params: { id: string } }) {
           </div>
         </div>
       )}
+      {confirmDialog}
     </div>
   );
 }

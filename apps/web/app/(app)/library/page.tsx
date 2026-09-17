@@ -6,6 +6,7 @@ import { CardSkeleton } from "@/components/Skeleton";
 import PageHeader from "@/components/PageHeader";
 import { stageInfo } from "@/lib/docstage";
 import { useRefreshOn } from "@/components/Wake";
+import { useConfirm } from "@/components/Confirm";
 import { UploadCloud, Search, Star, Trash2, Pencil, LayoutGrid, List, MoreVertical, X, FileText, FolderOpen, FolderPlus, Check, BookOpen, RefreshCw } from "lucide-react";
 
 type Doc = {
@@ -49,6 +50,7 @@ export default function LibraryPage() {
   const [renameVal, setRenameVal] = useState("");
   const [folderMenu, setFolderMenu] = useState<string | null>(null);
   const fileRef = useRef<HTMLInputElement>(null);
+  const { confirm, dialog: confirmDialog } = useConfirm();
 
   async function renameFolder(id: string) {
     const t = renameVal.trim();
@@ -59,10 +61,15 @@ export default function LibraryPage() {
   }
   async function deleteFolder(id: string, title: string) {
     const n = docs.filter((d) => d.collection_id === id).length;
-    const msg = n > 0
-      ? `"${title}" defterini silmek istiyor musun?\n\nİçindeki ${n} kaynak silinmez, deftersiz kalır.`
-      : `"${title}" defterini silmek istiyor musun?`;
-    if (!window.confirm(msg)) return;
+    const ok = await confirm({
+      title: `"${title}" defteri silinsin mi?`,
+      description: "Defter kalıcı olarak silinir; bu işlem geri alınamaz.",
+      losses: ["Defterin sohbeti, taslağı, sözlüğü, haritası ve zaman çizelgesi silinir"],
+      keeps: n > 0 ? [`İçindeki ${n} kaynak silinmez; Kütüphane'de deftersiz kalır`] : undefined,
+      confirmLabel: "Defteri sil", danger: true,
+      typeToConfirm: n > 0 ? title : undefined,
+    });
+    if (!ok) return;
     setFolderMenu(null);
     if (folder === id) setFolder("");
     setCollections((cs) => cs.filter((c) => c.id !== id));
@@ -145,6 +152,15 @@ export default function LibraryPage() {
     reload();
   }
   async function removeDoc(id: string) {
+    const d = docs.find((x) => x.id === id);
+    const ok = await confirm({
+      title: `"${d?.title || "Bu kaynak"}" silinsin mi?`,
+      description: "PDF ve üzerindeki her şey kalıcı olarak silinir; geri alınamaz.",
+      losses: ["PDF dosyası, vurguların, kenar notların ve sohbet geçmişi silinir",
+               "Bulunduğu defterlerden de çıkar"],
+      confirmLabel: "Kalıcı olarak sil", danger: true,
+    });
+    if (!ok) return;
     const prevDocs = docs;
     setDocs((prev) => prev.filter((d) => d.id !== id));
     try { const r = await fetch(API + "/documents/" + id, { method: "DELETE", headers: { Authorization: "Bearer " + getToken() } }); if (!r.ok) setDocs(prevDocs); } catch { setDocs(prevDocs); }
@@ -406,6 +422,7 @@ export default function LibraryPage() {
       </div>
 
       {editing && <EditModal doc={editing} collections={collections} onClose={() => setEditing(null)} onSave={(b) => { patchDoc(editing.id, b); setEditing(null); }} />}
+      {confirmDialog}
     </div>
   );
 }
