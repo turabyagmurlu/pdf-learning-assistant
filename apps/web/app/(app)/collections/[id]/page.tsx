@@ -335,7 +335,7 @@ export default function CollectionPage({ params }: { params: { id: string } }) {
       });
       if (!res.ok) {
         let m = "Örnek dinlenemedi.";
-        try { const j = await res.json(); m = j?.detail?.message || j?.message || j?.detail || m; } catch {}
+        try { const j = await res.json(); m = j?.error?.user_message || j?.detail || m; } catch {}
         if (res.status === 429) setQuotaOut(true);
         throw new Error(m);
       }
