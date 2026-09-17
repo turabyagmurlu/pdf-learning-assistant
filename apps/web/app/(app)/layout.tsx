@@ -8,6 +8,7 @@ import { BrandMarkSvg } from "@/components/BrandMark";
 import ThemeToggle, { useTheme } from "@/components/ThemeToggle";
 import Shortcuts from "@/components/Shortcuts";
 import BackButton, { isSubPage, parentOf } from "@/components/BackButton";
+import Wake from "@/components/Wake";
 import { useRef } from "react";
 
 const NAV = [
@@ -45,6 +46,7 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
 
   return (
     <div className="flex min-h-screen">
+      <Wake />
       {/* Masaustu: sol menu */}
       <aside className="hidden w-56 shrink-0 flex-col gap-1 border-r bg-surface p-4 md:flex">
         <Link href="/notebooks" className="flex items-center gap-2.5 px-2 py-3">

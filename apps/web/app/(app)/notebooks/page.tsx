@@ -4,6 +4,7 @@ import { useRouter } from "next/navigation";
 import { api } from "@/lib/api";
 import PageHeader from "@/components/PageHeader";
 import { CardSkeleton } from "@/components/Skeleton";
+import { useRefreshOn } from "@/components/Wake";
 import { Notebook, Plus, FileText, Highlighter, PenLine, Check, BookMarked, Share2, Clock } from "lucide-react";
 
 type NB = {
@@ -34,6 +35,7 @@ export default function NotebooksPage() {
     catch (e: any) { setLoadErr(e?.message || "Sunucuya ulaşılamadı."); setList((l) => l ?? []); }
   }
   useEffect(() => { load(); }, []);
+  useRefreshOn(load);
 
   async function create() {
     const t = title.trim();

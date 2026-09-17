@@ -5,6 +5,7 @@ import { api, API, getToken } from "@/lib/api";
 import { CardSkeleton } from "@/components/Skeleton";
 import PageHeader from "@/components/PageHeader";
 import { stageInfo } from "@/lib/docstage";
+import { useRefreshOn } from "@/components/Wake";
 import { UploadCloud, Search, Star, Trash2, Pencil, LayoutGrid, List, MoreVertical, X, FileText, FolderOpen, FolderPlus, Check, BookOpen, RefreshCw } from "lucide-react";
 
 type Doc = {
@@ -71,6 +72,7 @@ export default function LibraryPage() {
 
   async function reload() { try { const d = await api("/documents"); setDocs(d as Doc[]); } catch {} try { const cs = await fetch(API + "/collections", { headers: { Authorization: "Bearer " + getToken() } }); if (cs.ok) setCollections(await cs.json()); } catch {} setLoading(false); }
   useEffect(() => { reload(); }, []);
+  useRefreshOn(reload);
   // okuma ilerlemesini oku (reader localStorage'a yazar)
   useEffect(() => {
     if (!docs.length) return;

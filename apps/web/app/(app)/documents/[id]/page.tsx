@@ -362,7 +362,7 @@ export default function DocumentPage({ params }: { params: { id: string } }) {
             </div>
             <div className="min-h-0 flex-1">
               {rightTab === "ai" ? (
-                <ChatPanel documentId={id} />
+                <ChatPanel documentId={id} onGoPage={(pg) => setPage(Math.max(1, Math.min(numPages || pg, pg)))} />
               ) : rightTab === "explain" ? (
                 <ExplainPanel documentId={id} page={page} getPageText={getPageText} />
               ) : rightTab === "links" ? (

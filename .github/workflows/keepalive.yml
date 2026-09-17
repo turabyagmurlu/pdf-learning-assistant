@@ -4,8 +4,9 @@ name: keepalive
 # boylece Supabase projesi "7 gun hareketsizlik" nedeniyle duraklatilmaz.
 on:
   schedule:
-    # Render ucretsiz plan 15 dk hareketsizlikte uyur; 06:00-22:00 TR (03-19 UTC) arasi her 10 dk ping
-    - cron: '*/10 3-19 * * *'
+    # Render ucretsiz plan 15 dk hareketsizlikte uyur; 7/24 her 10 dk ping.
+    # (Ucretsiz Render'da ayda 750 saat var; tek servis 7/24 = ~720 saat, sigar.)
+    - cron: '*/10 * * * *'
   workflow_dispatch: {}
 
 jobs:

@@ -5,6 +5,8 @@ import { api, API, getToken } from "@/lib/api";
 import PodcastPlayer from "@/components/PodcastPlayer";
 import BrowserVoice, { browserVoiceSupported } from "@/components/BrowserVoice";
 import { stageInfo } from "@/lib/docstage";
+import CitedText from "@/components/CitedText";
+import { useRefreshOn } from "@/components/Wake";
 import { Skeleton, CardSkeleton } from "@/components/Skeleton";
 import ConceptMap, { CMNode, CMEdge } from "@/components/ConceptMap";
 import DraftEditor, { Block } from "@/components/DraftEditor";
@@ -245,6 +247,7 @@ export default function CollectionPage({ params }: { params: { id: string } }) {
     }
   }
   useEffect(() => { load(); }, [id]);
+  useRefreshOn(load);
 
   // okuma ilerlemesi (reader localStorage'a yazar)
   useEffect(() => {
@@ -726,12 +729,14 @@ export default function CollectionPage({ params }: { params: { id: string } }) {
               <div key={i} className="fade-in">
                 <p className="mb-1.5 text-sm font-medium">{t.q}</p>
                 <div className="rounded-2xl border bg-surface p-4">
-                  <p className="whitespace-pre-wrap text-sm leading-relaxed">{t.answer}</p>
+                  <CitedText text={t.answer} sources={t.sources}
+                             onCite={(n, s) => { if (s?.document_id) router.push("/documents/" + s.document_id + (s.page ? "?page=" + s.page : "")); }} />
                   <div className="mt-3 flex flex-wrap items-center gap-1.5 border-t pt-3">
                     {t.sources.map((s: any, j: number) => (
                       <button key={j} onClick={() => router.push("/documents/" + s.document_id + (s.page ? "?page=" + s.page : ""))}
+                              title={`${s.title} · s.${s.page} — PDF'te aç`}
                               className="rounded-full border bg-surface px-2.5 py-1 text-xs text-text-secondary hover:border-accent-purple/50 hover:text-accent-purple">
-                        [K{j + 1}] {s.title} · s.{s.page}
+                        K{j + 1} · {s.title} · s.{s.page}
                       </button>
                     ))}
                     <button onClick={() => answerToDraft(t)}

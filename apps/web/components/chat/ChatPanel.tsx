@@ -3,13 +3,14 @@ import { useEffect, useState } from "react";
 import { api } from "@/lib/api";
 import { useChatStream } from "@/hooks/useChatStream";
 import { Send, Loader2 } from "lucide-react";
+import CitedText from "@/components/CitedText";
 
 const MODES = [
   ["default", "Genel"], ["summary", "Özet"], ["teacher", "Öğretmen"], ["socratic", "Sokratik"],
   ["exam", "Sınav"], ["academic", "Akademik"], ["critical", "Eleştirel"],
 ];
 
-export function ChatPanel({ documentId }: { documentId: string }) {
+export function ChatPanel({ documentId, onGoPage }: { documentId: string; onGoPage?: (page: number) => void }) {
   const [sessionId, setSessionId] = useState<string | null>(null);
   const [mode, setMode] = useState("default");
   const [q, setQ] = useState("");
@@ -64,17 +65,22 @@ export function ChatPanel({ documentId }: { documentId: string }) {
           <div key={i} className="rounded-lg bg-accent-purple/10 px-3 py-2 text-sm">{h.text}</div>
         ))}
         {answer && (
-          <div className="rounded-lg border bg-surface px-3 py-3 text-sm whitespace-pre-wrap">
-            {answer}
+          <div className="rounded-lg border bg-surface px-3 py-3 text-sm">
+            <CitedText text={answer}
+                       sources={(() => { const arr: any[] = []; citations.forEach((c) => { arr[c.n - 1] = { page: c.page, title: c.section || "Bu belge" }; }); return arr; })()}
+                       onCite={(n, s) => { const c = citations.find((x) => x.n === n); const pg = c?.page ?? s?.page; if (pg && onGoPage) onGoPage(pg); }}
+                       className="whitespace-pre-wrap text-sm leading-relaxed" />
             {citations.length > 0 && (
               <div className="mt-3 space-y-2">
-                <p className="text-xs text-text-secondary">Kaynaklar</p>
+                <p className="text-xs text-text-secondary">Kaynaklar · tıkla, sayfaya git</p>
                 {citations.map((c) => (
-                  <div key={c.n} className="rounded-md border bg-surface-muted px-3 py-2 font-mono text-xs">
+                  <button key={c.n} type="button" onClick={() => c.page && onGoPage?.(c.page)}
+                          title={`s.${c.page} — sayfaya git`}
+                          className="block w-full rounded-md border bg-surface-muted px-3 py-2 text-left font-mono text-xs hover:border-accent-purple/50">
                     <span className="text-accent-purple">[K{c.n}]</span> s.{c.page}
                     {c.section ? ` · ${c.section}` : ""}
                     <p className="mt-1 text-text-secondary line-clamp-2">{c.snippet}</p>
-                  </div>
+                  </button>
                 ))}
               </div>
             )}
