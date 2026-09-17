@@ -29,16 +29,31 @@ async def create_collection(body: CollectionIn, conn=Depends(db), user=Depends(c
 
 @router.get("/collections")
 async def list_collections(conn=Depends(db), user=Depends(current_user)):
-    rows = await conn.fetch("SELECT * FROM collections WHERE user_id=$1 ORDER BY created_at DESC", user["id"])
+    """Defter listesi: kaynak/not sayilari ve son etkinlik (buyuk JSON alanlari haric)."""
+    rows = await conn.fetch(
+        """SELECT c.id, c.title, c.description, c.created_at, c.draft_at,
+                  (c.draft IS NOT NULL AND length(c.draft) > 0) AS has_draft,
+                  (SELECT COUNT(*) FROM documents d WHERE d.collection_id=c.id AND d.user_id=c.user_id) AS doc_count,
+                  (SELECT COALESCE(SUM(d.page_count),0) FROM documents d WHERE d.collection_id=c.id AND d.user_id=c.user_id) AS page_count,
+                  (SELECT COUNT(*) FROM notes n JOIN documents d ON d.id=n.document_id
+                     WHERE d.collection_id=c.id AND n.user_id=c.user_id) AS note_count,
+                  (c.glossary IS NOT NULL) AS has_glossary,
+                  (c.timeline IS NOT NULL) AS has_timeline,
+                  (c.concept_map IS NOT NULL) AS has_concept_map,
+                  GREATEST(c.created_at, COALESCE(c.draft_at, c.created_at), COALESCE(c.glossary_at, c.created_at),
+                           COALESCE(c.timeline_at, c.created_at), COALESCE(c.concept_map_at, c.created_at),
+                           COALESCE((SELECT MAX(d.created_at) FROM documents d WHERE d.collection_id=c.id), c.created_at)) AS last_activity
+           FROM collections c WHERE c.user_id=$1 ORDER BY last_activity DESC""",
+        user["id"])
     return [dict(r) for r in rows]
 
 
 @router.get("/collections/{cid}")
 async def get_collection(cid: str, conn=Depends(db), user=Depends(current_user)):
-    """Calisma kitabi: bilgiler + icindeki belgeler."""
+    """Defter: bilgiler, kaynaklar, notlar ve studyo durumu."""
     col = await conn.fetchrow("SELECT * FROM collections WHERE id=$1 AND user_id=$2", cid, user["id"])
     if not col:
-        raise NotFound("Çalışma kitabı bulunamadı.")
+        raise NotFound("Defter bulunamadı.")
     docs = await conn.fetch(
         """SELECT id, title, status, page_count, short_summary, category, tags,
                   is_favorite, difficulty_level, created_at
@@ -47,40 +62,38 @@ async def get_collection(cid: str, conn=Depends(db), user=Depends(current_user))
         user["id"], cid)
     docs = [dict(d) for d in docs]
     ids = [str(d["id"]) for d in docs]
-    cards = 0
-    mastered = learning = review = due = 0
     notes = 0
     if ids:
-        srow = await conn.fetchrow(
-            """SELECT COUNT(*) AS total,
-                      COUNT(*) FILTER (WHERE review_status='mastered') AS mastered,
-                      COUNT(*) FILTER (WHERE review_status='learning') AS learning,
-                      COUNT(*) FILTER (WHERE review_status='review')   AS review,
-                      COUNT(*) FILTER (WHERE due_at IS NOT NULL AND due_at <= now()) AS due
-               FROM study_items WHERE user_id=$1 AND document_id = ANY($2::uuid[])""",
-            user["id"], ids)
-        if srow:
-            cards = srow["total"] or 0
-            mastered = srow["mastered"] or 0
-            learning = srow["learning"] or 0
-            review = srow["review"] or 0
-            due = srow["due"] or 0
         notes = await conn.fetchval(
             "SELECT COUNT(*) FROM notes WHERE user_id=$1 AND document_id = ANY($2::uuid[])",
             user["id"], ids) or 0
+    c = dict(col)
+    # buyuk JSON alanlari listeden cikar; varligini bayrak olarak ver
+    def _has(v):
+        if isinstance(v, str):
+            try:
+                v = json.loads(v)
+            except Exception:
+                return False
+        if not isinstance(v, dict):
+            return False
+        return bool(v.get("items") or v.get("events") or v.get("nodes"))
+    studio = {
+        "glossary": _has(c.pop("glossary", None)),
+        "timeline": _has(c.pop("timeline", None)),
+        "concept_map": _has(c.pop("concept_map", None)),
+    }
+    draft = c.get("draft") or ""
     return {
-        "collection": dict(col),
+        "collection": c,
         "documents": docs,
+        "studio": studio,
         "stats": {
             "documents": len(docs),
             "ready": sum(1 for d in docs if d.get("status") == "ready"),
             "pages": sum((d.get("page_count") or 0) for d in docs),
-            "cards": cards,
-            "mastered": mastered,
-            "learning": learning,
-            "review": review,
-            "due": due,
             "notes": notes,
+            "draft_words": len(draft.split()) if draft.strip() else 0,
         },
     }
 
@@ -88,6 +101,7 @@ async def get_collection(cid: str, conn=Depends(db), user=Depends(current_user))
 class CollectionPatch(BaseModel):
     title: str | None = None
     description: str | None = None
+    draft: str | None = None
 
 
 @router.patch("/collections/{cid}")
@@ -101,6 +115,9 @@ async def update_collection(cid: str, body: CollectionPatch, conn=Depends(db), u
     if body.description is not None:
         await conn.execute("UPDATE collections SET description=$1 WHERE id=$2 AND user_id=$3",
                            body.description, cid, user["id"])
+    if body.draft is not None:
+        await conn.execute("UPDATE collections SET draft=$1, draft_at=now() WHERE id=$2 AND user_id=$3",
+                           body.draft, cid, user["id"])
     return {"ok": True}
 
 

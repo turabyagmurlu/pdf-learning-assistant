@@ -29,6 +29,8 @@ async def lifespan(app: FastAPI):
             await conn.execute("ALTER TABLE collections ADD COLUMN IF NOT EXISTS timeline_at timestamptz")
             await conn.execute("ALTER TABLE collections ADD COLUMN IF NOT EXISTS concept_map jsonb")
             await conn.execute("ALTER TABLE collections ADD COLUMN IF NOT EXISTS concept_map_at timestamptz")
+            await conn.execute("ALTER TABLE collections ADD COLUMN IF NOT EXISTS draft text")
+            await conn.execute("ALTER TABLE collections ADD COLUMN IF NOT EXISTS draft_at timestamptz")
     except Exception:  # noqa
         pass
     yield

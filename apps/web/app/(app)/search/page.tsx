@@ -36,8 +36,8 @@ export default function SearchPage() {
 
   return (
     <div className="mx-auto w-full max-w-4xl px-4 py-5 md:px-6 md:py-8">
-      <PageHeader eyebrow="Ara" title="Keşfet"
-                  subtitle="Tüm belgelerinde anlam bazlı ara; ilgili pasajları belge ve sayfa bilgisiyle bul." />
+      <PageHeader eyebrow="Tüm kaynaklar" title="Araştır"
+                  subtitle="Bütün defterlerin ve kaynakların içinde anlam bazlı ara; pasajı belge ve sayfa bilgisiyle bul." />
 
       <div className="flex items-center gap-2 rounded-xl border bg-surface px-3">
         <Search size={18} className="text-text-secondary" />

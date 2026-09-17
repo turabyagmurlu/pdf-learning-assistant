@@ -24,7 +24,7 @@ export default function Shortcuts() {
       const now = Date.now();
       if (pendingG && now - pendingG < 900) {
         pendingG = 0;
-        const map: Record<string, string> = { k: "/library", o: "/study", ö: "/study", v: "/notes", a: "/search", e: "/search" };
+        const map: Record<string, string> = { d: "/notebooks", k: "/library", a: "/search" };
         if (map[k]) { e.preventDefault(); router.push(map[k]); }
         return;
       }
@@ -47,10 +47,9 @@ export default function Shortcuts() {
 
   if (!help) return null;
   const rows: [string, string][] = [
-    ["G  K", "Kütüphane"], ["G  Ö", "Öğrenme"], ["G  V", "Vurgular"], ["G  A", "Keşfet"],
+    ["G  D", "Defterler"], ["G  K", "Kütüphane"], ["G  A", "Araştır"],
     ["/", "Aramaya odaklan"], ["T", "Tema (gündüz / gece / sistem)"], ["?", "Bu pencere"], ["Esc", "Kapat"],
-    ["Boşluk", "Kartı çevir (Kart Çalışması)"], ["1 · 2 · 3 · 4", "Tekrar · Zor · İyi · Kolay"],
-    ["← →", "PDF'te sayfa değiştir"],
+    ["← →", "PDF'te sayfa değiştir"], ["F", "PDF'te odak modu"],
   ];
   return (
     <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/40 p-4" onClick={() => setHelp(false)}>

@@ -57,8 +57,8 @@ export default function LibraryPage() {
   async function deleteFolder(id: string, title: string) {
     const n = docs.filter((d) => d.collection_id === id).length;
     const msg = n > 0
-      ? `"${title}" klasörünü silmek istiyor musun?\n\nİçindeki ${n} belge silinmez, sadece klasörsüz kalır.`
-      : `"${title}" klasörünü silmek istiyor musun?`;
+      ? `"${title}" defterini silmek istiyor musun?\n\nİçindeki ${n} kaynak silinmez, deftersiz kalır.`
+      : `"${title}" defterini silmek istiyor musun?`;
     if (!window.confirm(msg)) return;
     setFolderMenu(null);
     if (folder === id) setFolder("");
@@ -149,7 +149,7 @@ export default function LibraryPage() {
   return (
     <div className="mx-auto w-full max-w-6xl px-4 py-5 md:px-6 md:py-8" onClick={() => { setMenuFor(null); setFolderMenu(null); }}>
       <PageHeader hero eyebrow="TY PDF" title="Kütüphane"
-                  subtitle="PDF'lerini yükle, raflara diz; ben özetleyip çalışılabilir hale getireyim." />
+                  subtitle="Tüm kaynakların tek yerde. Yükle, düzenle, defterlere dağıt." />
 
       <div className="mt-5 flex flex-col gap-6 lg:flex-row">
       <div className="min-w-0 flex-1">
@@ -225,7 +225,7 @@ export default function LibraryPage() {
                   <button onClick={(e) => { e.stopPropagation(); patchDoc(d.id, { is_favorite: !d.is_favorite }); }} aria-label={d.is_favorite ? "Favoriden çıkar" : "Favori yap"} className={cx("rounded-md p-1", d.is_favorite ? "text-accent-amber" : "text-text-secondary/70 hover:text-accent-amber")}>
                     <Star size={15} className={d.is_favorite ? "fill-current" : ""} />
                   </button>
-                  <button onClick={(e) => { e.stopPropagation(); setMenuFor(menuFor === d.id ? null : d.id); }} aria-label="Belge menüsü" title="Düzenle, klasöre taşı, sil" className="rounded-md p-1 text-text-secondary/70 hover:bg-surface-muted hover:text-text-primary">
+                  <button onClick={(e) => { e.stopPropagation(); setMenuFor(menuFor === d.id ? null : d.id); }} aria-label="Belge menüsü" title="Düzenle, deftere taşı, sil" className="rounded-md p-1 text-text-secondary/70 hover:bg-surface-muted hover:text-text-primary">
                     <MoreVertical size={15} />
                   </button>
                 </div>
@@ -265,7 +265,7 @@ export default function LibraryPage() {
       <aside className="w-full shrink-0 lg:w-64">
         <div className="rounded-2xl border bg-surface p-3">
           <div className="mb-2 flex items-center gap-1.5 px-1 text-sm font-medium text-text-primary">
-            <FolderOpen size={15} className="text-accent-purple" /> Raf
+            <FolderOpen size={15} className="text-accent-purple" /> Defterler
           </div>
 
           <button onClick={() => setFolder("")}
@@ -303,7 +303,7 @@ export default function LibraryPage() {
                   </button>
                   <span className={cx("px-1 text-xs", on ? "text-accent-purple" : "text-text-secondary")}>{n}</span>
                   <button onClick={() => router.push("/collections/" + c.id)}
-                          title="Çalışma kitabını aç" aria-label={c.title + " çalışma kitabını aç"}
+                          title="Defteri aç" aria-label={c.title + " defterini aç"}
                           className="rounded-md px-1.5 py-2 text-text-secondary hover:text-accent-purple">
                     <BookOpen size={14} />
                   </button>
@@ -321,7 +321,7 @@ export default function LibraryPage() {
                       </button>
                       <button onClick={() => { setFolderMenu(null); router.push("/collections/" + c.id); }}
                               className="flex w-full items-center gap-2 px-3 py-2 text-left text-sm hover:bg-surface-muted">
-                        <BookOpen size={14} /> Kitabı aç
+                        <BookOpen size={14} /> Defteri aç
                       </button>
                       <button onClick={() => deleteFolder(c.id, c.title)}
                               className="flex w-full items-center gap-2 px-3 py-2 text-left text-sm text-danger hover:bg-surface-muted">
@@ -342,7 +342,7 @@ export default function LibraryPage() {
               <button onClick={() => setFolder(on ? "" : "__none__")}
                       className={cx("mt-1 flex w-full items-center justify-between rounded-lg px-2.5 py-2 text-sm",
                         on ? "bg-accent-amber/15 text-accent-amber" : "text-text-secondary hover:bg-surface-muted")}>
-                <span className="flex items-center gap-2"><FolderOpen size={14} className="opacity-50" /> Klasörsüz</span>
+                <span className="flex items-center gap-2"><FolderOpen size={14} className="opacity-50" /> Deftersiz</span>
                 <span className="text-xs">{loose}</span>
               </button>
             );
@@ -353,21 +353,21 @@ export default function LibraryPage() {
               <div className="flex items-center gap-1">
                 <input autoFocus value={newFolder} onChange={(e) => setNewFolder(e.target.value)}
                        onKeyDown={(e) => { if (e.key === "Enter") createFolder(); if (e.key === "Escape") setCreatingFolder(false); }}
-                       placeholder="Klasör adı" aria-label="Yeni klasör adı"
+                       placeholder="Defter adı" aria-label="Yeni klasör adı"
                        className="min-w-0 flex-1 rounded-lg border bg-surface px-2.5 py-1.5 text-sm outline-none focus:border-accent-purple" />
                 <button onClick={createFolder} aria-label="Klasörü oluştur" className="rounded-lg bg-accent-purple p-1.5 text-white"><Check size={14} /></button>
               </div>
             ) : (
               <button onClick={() => setCreatingFolder(true)}
                       className="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-sm text-text-secondary hover:bg-surface-muted hover:text-accent-purple">
-                <FolderPlus size={14} /> Yeni klasör
+                <FolderPlus size={14} /> Yeni defter
               </button>
             )}
           </div>
         </div>
 
         <p className="mt-2 px-1 text-xs text-text-secondary">
-          Klasöre belge eklemek için 📖 ile çalışma kitabını aç → <b>Belge ekle</b>.
+          Bir kaynağı deftere eklemek için 📖 ile defteri aç → <b>Kaynak ekle</b>.
         </p>
       </aside>
       </div>

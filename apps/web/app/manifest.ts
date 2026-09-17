@@ -2,10 +2,10 @@ import type { MetadataRoute } from "next";
 
 export default function manifest(): MetadataRoute.Manifest {
   return {
-    name: "TY PDF — Öğrenme Asistanı",
+    name: "TY PDF — Araştırma Defteri",
     short_name: "TY PDF",
-    description: "PDF'lerini yükle, kartlar ve quizlerle çalış, sesli ders dinle.",
-    start_url: "/library",
+    description: "Kaynaklarını yükle, defterde soru sor, atıflı not al ve yaz.",
+    start_url: "/notebooks",
     scope: "/",
     display: "standalone",
     orientation: "any",
@@ -18,9 +18,9 @@ export default function manifest(): MetadataRoute.Manifest {
       { src: "/apple-icon", sizes: "180x180", type: "image/png" },
     ],
     shortcuts: [
+      { name: "Defterler", url: "/notebooks" },
       { name: "Kütüphane", url: "/library" },
-      { name: "Öğrenme", url: "/study" },
-      { name: "Keşfet", url: "/search" },
+      { name: "Araştır", url: "/search" },
     ],
   };
 }

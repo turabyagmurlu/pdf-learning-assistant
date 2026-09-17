@@ -1,17 +1,24 @@
 "use client";
 import { useMemo, useState } from "react";
 import { Annotation } from "@/lib/reader";
-import { Trash2, StickyNote, Highlighter, Search } from "lucide-react";
+import { Trash2, StickyNote, Highlighter, Search, Quote } from "lucide-react";
 
 interface Props {
   annotations: Annotation[];
+  docTitle?: string;
   onJump: (a: Annotation) => void;
   onDelete: (id: string) => void;
   onEditNote: (a: Annotation) => void;
 }
 
-export default function NotesPanel({ annotations, onJump, onDelete, onEditNote }: Props) {
+export default function NotesPanel({ annotations, docTitle, onJump, onDelete, onEditNote }: Props) {
   const [q, setQ] = useState("");
+  const [copied, setCopied] = useState<string | null>(null);
+  async function copyCite(a: Annotation) {
+    const t = (a.selected_text || "").trim().replace(/\s+/g, " ");
+    const cite = `"${t}" (${docTitle || "Belge"}${a.page_number ? ", s. " + a.page_number : ""})`;
+    try { await navigator.clipboard.writeText(cite); setCopied(a.id); setTimeout(() => setCopied(null), 1500); } catch {}
+  }
   const items = useMemo(() => {
     const list = [...annotations].sort((a, b) => a.page_number - b.page_number);
     if (!q.trim()) return list;
@@ -40,8 +47,16 @@ export default function NotesPanel({ annotations, onJump, onDelete, onEditNote }
                 {a.anchor.type === "sticky" ? <StickyNote size={12} /> : <Highlighter size={12} />}
                 s.{a.page_number}
               </span>
-              <button className="opacity-0 group-hover:opacity-100 text-danger" aria-label="Sil"
-                      onClick={() => onDelete(a.id)}><Trash2 size={13} /></button>
+              <span className="flex items-center gap-1.5">
+                {a.selected_text && (
+                  <button className="text-text-secondary hover:text-accent-purple" aria-label="Alıntıyı kopyala"
+                          title="Alıntıyı kaynak ve sayfayla kopyala" onClick={() => copyCite(a)}>
+                    {copied === a.id ? <span className="text-[10px] text-accent-purple">kopyalandı</span> : <Quote size={12} />}
+                  </button>
+                )}
+                <button className="text-text-secondary hover:text-danger" aria-label="Sil"
+                        onClick={() => onDelete(a.id)}><Trash2 size={13} /></button>
+              </span>
             </div>
             {a.anchor.type !== "sticky" && a.selected_text && (
               <button onClick={() => onJump(a)} className="mt-1 block w-full text-left">

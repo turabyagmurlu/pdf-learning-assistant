@@ -39,7 +39,6 @@ export default function DocumentPage({ params }: { params: { id: string } }) {
   const [rightTab, setRightTab] = useState<"ai" | "notes" | "explain" | "links">("ai");
   const [peek, setPeek] = useState<"left" | "right" | null>(null);
   const [restored, setRestored] = useState(false);
-  const [cardMsg, setCardMsg] = useState("");
   const [editing, setEditing] = useState<Annotation | null>(null);
   const [rightW, setRightW] = useState(420);
   const [leftW, setLeftW] = useState(288);
@@ -130,21 +129,6 @@ export default function DocumentPage({ params }: { params: { id: string } }) {
     window.addEventListener("mousemove", onMove);
     return () => window.removeEventListener("mousemove", onMove);
   }, [focus, leftW, rightW]);
-
-  // secili metinden flashcard uret
-  async function onMakeCard(text: string, pageNum: number) {
-    setCardMsg("Kart üretiliyor…");
-    try {
-      const r = await api(`/documents/${id}/study/from-text`, {
-        method: "POST",
-        body: JSON.stringify({ text, page: pageNum, count: 2 }),
-      });
-      setCardMsg(`${r.created} kart eklendi ✓ (Öğrenme sayfasında)`);
-    } catch (e: any) {
-      setCardMsg(e?.message || "Kart üretilemedi.");
-    }
-    setTimeout(() => setCardMsg(""), 4000);
-  }
 
   // acik sayfanin metnini DOM'dan al (pdf.js text layer)
   function getPageText(n: number): string {
@@ -262,7 +246,6 @@ export default function DocumentPage({ params }: { params: { id: string } }) {
             onNumPages={setNumPages} onVisiblePage={setPage}
             onCreateHighlight={onCreateHighlight} onCreateSticky={onCreateSticky}
             onSelectAnnotation={(a) => { setEditing(a); setRightOpen(true); setRightTab("notes"); }}
-            onMakeCard={onMakeCard}
           />
           ) : (
             <div className="reader-surround flex h-full items-center justify-center text-sm" style={{ color: "var(--r-ink-2)" }}>PDF hazırlanıyor…</div>
@@ -272,11 +255,6 @@ export default function DocumentPage({ params }: { params: { id: string } }) {
           {numPages > 0 && (
             <div className="pointer-events-none absolute bottom-3 right-4 rounded-full bg-black/55 px-2.5 py-1 text-xs text-white">
               s.{page} / {numPages} · %{progress}
-            </div>
-          )}
-          {cardMsg && (
-            <div className="absolute bottom-10 left-1/2 z-40 -translate-x-1/2 rounded-xl bg-accent-purple px-4 py-2 text-sm text-white shadow-lg">
-              {cardMsg}
             </div>
           )}
         </main>
@@ -315,7 +293,7 @@ export default function DocumentPage({ params }: { params: { id: string } }) {
                 <ConnectionsPanel documentId={id} page={page}
                                   onOpen={(docId) => { window.location.href = "/documents/" + docId; }} />
               ) : (
-                <NotesPanel annotations={annotations}
+                <NotesPanel docTitle={doc?.title} annotations={annotations}
                             onJump={(a) => setPage(a.page_number)}
                             onDelete={remove}
                             onEditNote={(a) => setEditing(a)} />

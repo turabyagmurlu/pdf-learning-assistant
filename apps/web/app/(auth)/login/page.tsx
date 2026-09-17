@@ -22,7 +22,7 @@ export default function LoginPage() {
       const body = mode === "register" ? { name, email, password } : { email, password };
       const r = await api(`/auth/${mode}`, { method: "POST", body: JSON.stringify(body) });
       setToken(r.token);
-      router.replace("/library");
+      router.replace("/notebooks");
     } catch (e: any) { setErr(e.message); } finally { setBusy(false); }
   }
 
@@ -47,7 +47,7 @@ export default function LoginPage() {
           </h2>
           <p className="mt-4 max-w-sm text-[15px] leading-relaxed text-[#fff3dc]/90 md:text-base"
              style={{ textShadow: "0 1px 10px rgba(0,0,0,0.5)" }}>
-            Her belge bir kapıdır. PDF'lerini yükle; sorularını sor, kartlarla çalış, sesli dersle dinle.
+            Her belge bir kapıdır. Kaynaklarını yükle; soru sor, atıflı not al, taslağını yaz.
           </p>
         </div>
       </section>

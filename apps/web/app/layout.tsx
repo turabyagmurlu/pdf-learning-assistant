@@ -18,8 +18,8 @@ const inter = Inter({
 });
 
 export const metadata: Metadata = {
-  title: "TY PDF — Öğrenme Asistanı",
-  description: "PDF'lerini yükle, kartlar ve quizlerle çalış, sesli ders dinle.",
+  title: "TY PDF — Araştırma Defteri",
+  description: "Kaynaklarını yükle, defterde soru sor, atıflı not al ve yaz.",
   applicationName: "TY PDF",
   manifest: "/manifest.webmanifest",
   appleWebApp: {

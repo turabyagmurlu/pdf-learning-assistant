@@ -6,7 +6,7 @@ import PodcastPlayer from "@/components/PodcastPlayer";
 import { Skeleton, CardSkeleton } from "@/components/Skeleton";
 import ConceptMap, { CMNode, CMEdge } from "@/components/ConceptMap";
 import {
-  BookOpen, Sparkles, GraduationCap, FileText, ArrowLeft,
+  BookOpen, Sparkles, FileText, ArrowLeft, PenLine,
   Loader2, Send, Pencil, Check, Headphones, Plus, X, Square, CheckSquare, Trash2,
   BookMarked, Search, RefreshCw, Clock, Share2,
 } from "lucide-react";
@@ -75,7 +75,7 @@ export default function CollectionPage({ params }: { params: { id: string } }) {
   const router = useRouter();
   const [data, setData] = useState<any>(null);
   const [err, setErr] = useState("");
-  const [tab, setTab] = useState<"raf" | "sor" | "sozluk" | "harita" | "zaman" | "ders" | "kart">("raf");
+  const [tab, setTab] = useState<"raf" | "sor" | "taslak" | "sozluk" | "harita" | "zaman" | "ders">("raf");
 
   // Kavram haritasi
   const [cm, setCm] = useState<{ nodes: CMNode[]; edges: CMEdge[] } | null>(null);
@@ -140,14 +140,81 @@ export default function CollectionPage({ params }: { params: { id: string } }) {
   const [renaming, setRenaming] = useState(false);
   const [newTitle, setNewTitle] = useState("");
 
-  // konuya sor
+  // sohbet (kaynakli)
   const [q, setQ] = useState("");
   const [asking, setAsking] = useState(false);
-  const [answer, setAnswer] = useState<{ answer: string; sources: any[] } | null>(null);
+  const [thread, setThread] = useState<{ q: string; answer: string; sources: any[] }[]>([]);
 
-  // kartlar
-  const [genBusy, setGenBusy] = useState(false);
-  const [genMsg, setGenMsg] = useState("");
+  // taslak
+  const [draft, setDraft] = useState("");
+  const [draftLoaded, setDraftLoaded] = useState(false);
+  const [draftSaved, setDraftSaved] = useState<"idle" | "saving" | "saved" | "error">("idle");
+  const draftTimer = useRef<any>(null);
+  const draftRef = useRef<HTMLTextAreaElement | null>(null);
+  const [material, setMaterial] = useState<any[] | null>(null);
+  const [matQ, setMatQ] = useState("");
+  const [flash, setFlash] = useState("");
+
+  function saveDraftNow(text: string) {
+    setDraftSaved("saving");
+    api(`/collections/${id}`, { method: "PATCH", body: JSON.stringify({ draft: text }) })
+      .then(() => setDraftSaved("saved")).catch(() => setDraftSaved("error"));
+  }
+  function onDraftChange(text: string) {
+    setDraft(text); setDraftSaved("saving");
+    if (draftTimer.current) clearTimeout(draftTimer.current);
+    draftTimer.current = setTimeout(() => saveDraftNow(text), 1200);
+  }
+  function insertAtCursor(snippet: string) {
+    const ta = draftRef.current;
+    const cur = draft;
+    if (!ta) { onDraftChange((cur ? cur.replace(/\s*$/, "") + "\n\n" : "") + snippet + "\n"); return; }
+    const st = ta.selectionStart ?? cur.length, en = ta.selectionEnd ?? cur.length;
+    const before = cur.slice(0, st), after = cur.slice(en);
+    const pad1 = before && !before.endsWith("\n") ? "\n\n" : (before.endsWith("\n\n") || !before ? "" : "\n");
+    const next = before + pad1 + snippet + "\n" + after;
+    onDraftChange(next);
+    requestAnimationFrame(() => { ta.focus(); const pos = (before + pad1 + snippet + "\n").length; ta.setSelectionRange(pos, pos); });
+    setFlash("Taslağa eklendi."); setTimeout(() => setFlash(""), 1500);
+  }
+  function cite(title: string, page?: number | null) { return `(${title}${page ? ", s. " + page : ""})`; }
+  function answerToDraft(t: { q: string; answer: string; sources: any[] }) {
+    const srcs = (t.sources || []).map((s: any, i: number) => `[K${i + 1}] ${s.title}${s.page ? ", s. " + s.page : ""}`).join("; ");
+    insertAtCursor(`**${t.q}**\n\n${t.answer.trim()}\n\n_Kaynaklar: ${srcs}_`);
+    setTab("taslak");
+  }
+  async function loadMaterial() {
+    try {
+      const all = await api("/notes");
+      setMaterial((all || []).filter((n: any) => n.collection_id === id));
+    } catch { setMaterial([]); }
+  }
+  useEffect(() => {
+    if (tab !== "taslak") return;
+    if (!draftLoaded && data?.collection) { setDraft(data.collection.draft || ""); setDraftLoaded(true); }
+    if (material === null) loadMaterial();
+  }, [tab, data]);
+  function exportDraft(kind: "md" | "doc") {
+    const title = col?.title || "Taslak";
+    let blob: Blob, name: string;
+    if (kind === "md") {
+      blob = new Blob([`# ${title}\n\n${draft}`], { type: "text/markdown;charset=utf-8" }); name = `${title}.md`;
+    } else {
+      const esc = (t: string) => t.replace(/&/g, "&amp;").replace(/</g, "&lt;");
+      const html = draft.split(/\n{2,}/).map((para) => {
+        const p = para.trim();
+        if (!p) return "";
+        if (p.startsWith("> ")) return `<blockquote style="margin:0 0 12pt 24pt;color:#444;border-left:3px solid #ccc;padding-left:10pt">${esc(p.replace(/^> ?/gm, ""))}</blockquote>`;
+        if (p.startsWith("## ")) return `<h2>${esc(p.slice(3))}</h2>`;
+        if (p.startsWith("# ")) return `<h1>${esc(p.slice(2))}</h1>`;
+        return `<p>${esc(p).replace(/\*\*(.+?)\*\*/g, "<b>$1</b>").replace(/_(.+?)_/g, "<i>$1</i>").replace(/\n/g, "<br>")}</p>`;
+      }).join("\n");
+      blob = new Blob([`<html xmlns:o="urn:schemas-microsoft-com:office:office" xmlns:w="urn:schemas-microsoft-com:office:word"><head><meta charset="utf-8"><title>${esc(title)}</title><style>body{font-family:Georgia,serif;font-size:12pt;line-height:1.5}h1{font-size:20pt}h2{font-size:15pt}</style></head><body><h1>${esc(title)}</h1>${html}</body></html>`], { type: "application/msword" });
+      name = `${title}.doc`;
+    }
+    const url = URL.createObjectURL(blob); const el = document.createElement("a"); el.href = url; el.download = name; el.click();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+  }
 
   // belge ekleme (kutuphaneden sec)
   const [picker, setPicker] = useState(false);
@@ -187,7 +254,7 @@ export default function CollectionPage({ params }: { params: { id: string } }) {
       setData(d);
       setNewTitle(d?.collection?.title || "");
     } catch (e: any) {
-      setErr(e?.message || "Çalışma kitabı açılamadı.");
+      setErr(e?.message || "Defter açılamadı.");
     }
   }
   useEffect(() => { load(); }, [id]);
@@ -212,28 +279,13 @@ export default function CollectionPage({ params }: { params: { id: string } }) {
   async function ask() {
     const question = q.trim();
     if (question.length < 3) return;
-    setAsking(true); setAnswer(null);
+    setAsking(true); setQ("");
     try {
-      const r = await api(`/collections/${id}/ask`, {
-        method: "POST", body: JSON.stringify({ question }),
-      });
-      setAnswer(r);
+      const r = await api(`/collections/${id}/ask`, { method: "POST", body: JSON.stringify({ question }) });
+      setThread((t) => [...t, { q: question, answer: r.answer, sources: r.sources || [] }]);
     } catch (e: any) {
-      setAnswer({ answer: e?.message || "Cevap alınamadı.", sources: [] });
+      setThread((t) => [...t, { q: question, answer: e?.message || "Cevap alınamadı.", sources: [] }]);
     } finally { setAsking(false); }
-  }
-
-  async function generate(type: string) {
-    setGenBusy(true); setGenMsg("");
-    try {
-      const r = await api(`/collections/${id}/study/generate`, {
-        method: "POST", body: JSON.stringify({ type, count: 10 }),
-      });
-      setGenMsg(`${r.created} kart üretildi. Öğrenme sayfasından çalışabilirsin.`);
-      load();
-    } catch (e: any) {
-      setGenMsg(e?.message || "Üretilemedi.");
-    } finally { setGenBusy(false); }
   }
 
   async function loadGlossary() {
@@ -353,6 +405,7 @@ export default function CollectionPage({ params }: { params: { id: string } }) {
   const col = data.collection;
   const docs: Doc[] = data.documents || [];
   const st = data.stats || {};
+  const studio = data.studio || {};
   const glist: GItem[] = gItems || [];
   const read = docs.filter((d) => (prog[d.id]?.pct || 0) >= 95).length;
   const overall = docs.length
@@ -369,9 +422,9 @@ export default function CollectionPage({ params }: { params: { id: string } }) {
 
   return (
     <div className="mx-auto w-full max-w-6xl px-4 py-5 md:px-6 md:py-8">
-      <button onClick={() => router.push("/library")}
+      <button onClick={() => router.push("/notebooks")}
               className="mb-4 flex items-center gap-1.5 text-sm text-text-secondary hover:text-accent-purple">
-        <ArrowLeft size={15} /> Kütüphane
+        <ArrowLeft size={15} /> Defterler
       </button>
 
       {/* başlık */}
@@ -397,20 +450,20 @@ export default function CollectionPage({ params }: { params: { id: string } }) {
             )}
           </div>
           <p className="mt-1 text-sm text-text-secondary">
-            {st.documents} belge · {st.pages || 0} sayfa · {st.cards || 0} kart
+            {st.documents} kaynak · {st.pages || 0} sayfa · {st.notes || 0} not
           </p>
         </div>
         <button
           onClick={async () => {
             const n = docs.length;
             const msg = n > 0
-              ? `"${col.title}" kitabını silmek istiyor musun?\n\nİçindeki ${n} belge silinmez, klasörsüz kalır.`
-              : `"${col.title}" kitabını silmek istiyor musun?`;
+              ? `"${col.title}" defterini silmek istiyor musun?\n\nİçindeki ${n} kaynak silinmez, deftersiz kalır.`
+              : `"${col.title}" defterini silmek istiyor musun?`;
             if (!window.confirm(msg)) return;
-            try { await api("/collections/" + id, { method: "DELETE" }); router.push("/library"); }
+            try { await api("/collections/" + id, { method: "DELETE" }); router.push("/notebooks"); }
             catch (e: any) { setErr(e?.message || "Silinemedi."); }
           }}
-          title="Kitabı sil" aria-label="Kitabı sil"
+          title="Defteri sil" aria-label="Defteri sil"
           className="shrink-0 rounded-lg border px-3 py-1.5 text-sm text-text-secondary hover:border-danger/50 hover:text-danger">
           <Trash2 size={15} />
         </button>
@@ -436,45 +489,35 @@ export default function CollectionPage({ params }: { params: { id: string } }) {
             </div>
           </div>
 
-          {/* kart sağlığı */}
+          {/* notlar & taslak */}
           <div className="rounded-2xl border bg-surface p-4">
-            <p className="mb-3 text-xs font-semibold uppercase tracking-wide text-text-secondary">Kart sağlığı</p>
-            {st.cards > 0 ? (
-              <>
-                <div className="flex h-2.5 w-full overflow-hidden rounded-full bg-surface-muted">
-                  <div className="h-full bg-green-500" style={{ width: pctOf(st.mastered, st.cards) + "%" }} />
-                  <div className="h-full bg-accent-purple" style={{ width: pctOf(st.review, st.cards) + "%" }} />
-                  <div className="h-full bg-accent-amber" style={{ width: pctOf(st.learning, st.cards) + "%" }} />
-                </div>
-                <div className="mt-3 space-y-1 text-xs">
-                  <Legend color="bg-green-500" label="Öğrenildi" n={st.mastered} />
-                  <Legend color="bg-accent-purple" label="Tekrar aşamasında" n={st.review} />
-                  <Legend color="bg-accent-amber" label="Yeni / zorlanıyor" n={st.learning} />
-                </div>
-              </>
-            ) : (
-              <p className="text-sm text-text-secondary">Henüz kart yok. Kartlar sekmesinden üret.</p>
-            )}
+            <p className="mb-3 text-xs font-semibold uppercase tracking-wide text-text-secondary">Notlar & taslak</p>
+            <div className="flex items-baseline gap-2">
+              <span className="text-3xl font-semibold">{st.notes || 0}</span>
+              <span className="text-sm text-text-secondary">not / vurgu</span>
+            </div>
+            <p className="mt-1 text-xs text-text-secondary">
+              {st.draft_words > 0 ? `Taslak: ${st.draft_words} kelime` : "Taslak henüz boş"}
+            </p>
+            <button onClick={() => setTab("taslak")}
+                    className="mt-3 w-full rounded-xl bg-accent-purple px-3 py-2 text-sm text-white">
+              {st.draft_words > 0 ? "Taslağa devam et" : "Yazmaya başla"}
+            </button>
           </div>
 
-          {/* bugün + notlar */}
+          {/* studyo durumu */}
           <div className="rounded-2xl border bg-surface p-4">
-            <p className="mb-3 text-xs font-semibold uppercase tracking-wide text-text-secondary">Bugün</p>
-            <div className="flex items-baseline gap-2">
-              <span className={cx("text-3xl font-semibold", st.due > 0 ? "text-accent-purple" : "")}>{st.due || 0}</span>
-              <span className="text-sm text-text-secondary">kart tekrar bekliyor</span>
-            </div>
-            {st.due > 0 ? (
-              <button onClick={() => router.push("/study")}
-                      className="mt-3 w-full rounded-xl bg-accent-purple px-3 py-2 text-sm text-white">
-                Tekrara başla
+            <p className="mb-3 text-xs font-semibold uppercase tracking-wide text-text-secondary">Stüdyo</p>
+            <div className="space-y-1.5 text-sm">
+              {([["sozluk", "Sözlük", studio.glossary], ["harita", "Harita", studio.concept_map], ["zaman", "Zaman çizelgesi", studio.timeline]] as const).map(([k, label, ok]) => (
+                <button key={k} onClick={() => setTab(k)} className="flex w-full items-center justify-between rounded-lg px-2 py-1.5 text-left hover:bg-surface-muted">
+                  <span>{label}</span>
+                  <span className={cx("text-xs", ok ? "text-success" : "text-text-secondary")}>{ok ? "hazır" : "oluşturulmadı"}</span>
+                </button>
+              ))}
+              <button onClick={() => setTab("ders")} className="flex w-full items-center justify-between rounded-lg px-2 py-1.5 text-left hover:bg-surface-muted">
+                <span>Sesli özet</span><span className="text-xs text-text-secondary">{lecture ? "hazır" : "—"}</span>
               </button>
-            ) : (
-              <p className="mt-2 text-xs text-text-secondary">Bugünlük tekrar yok, iyi gidiyorsun.</p>
-            )}
-            <div className="mt-4 flex items-center justify-between border-t pt-3 text-xs text-text-secondary">
-              <span>{st.notes || 0} not / vurgu</span>
-              <span>{st.pages || 0} sayfa</span>
             </div>
           </div>
         </div>
@@ -482,8 +525,9 @@ export default function CollectionPage({ params }: { params: { id: string } }) {
 
       {/* sekmeler */}
       <div className="mt-6 flex gap-1 overflow-x-auto border-b [-ms-overflow-style:none] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
-        {([["raf", "Raf", FileText], ["sor", "Konuya sor", Sparkles], ["sozluk", "Sözlük", BookMarked], ["harita", "Harita", Share2], ["zaman", "Zaman", Clock],
-           ["ders", "Sesli ders", Headphones], ["kart", "Kartlar", GraduationCap]] as const).map(
+        {([["raf", "Kaynaklar", FileText], ["sor", "Sohbet", Sparkles], ["taslak", "Taslak", PenLine],
+           ["sozluk", "Sözlük", BookMarked], ["harita", "Harita", Share2], ["zaman", "Zaman", Clock],
+           ["ders", "Sesli özet", Headphones]] as const).map(
           ([k, label, Icon]) => (
             <button key={k} onClick={() => setTab(k as any)}
                     className={cx("flex shrink-0 items-center gap-1.5 whitespace-nowrap px-3 py-2.5 text-sm md:px-4",
@@ -499,20 +543,20 @@ export default function CollectionPage({ params }: { params: { id: string } }) {
           {docs.length === 0 ? (
             <div className="rounded-2xl border border-dashed p-10 text-center">
               <p className="text-text-secondary">
-                Bu çalışma kitabı boş. Kütüphanendeki belgeleri buraya ekleyebilirsin.
+                Bu defter boş. Kütüphanendeki kaynakları buraya ekle.
               </p>
               <button onClick={openPicker}
                       className="mt-3 inline-flex items-center gap-1.5 rounded-xl bg-accent-purple px-4 py-2 text-sm text-white">
-                <Plus size={15} /> Belge ekle
+                <Plus size={15} /> Kaynak ekle
               </button>
             </div>
           ) : (
             <div className="rounded-2xl border bg-surface-muted/40 p-4">
               <div className="mb-3 flex items-center justify-between">
-                <p className="text-sm text-text-secondary">{docs.length} belge</p>
+                <p className="text-sm text-text-secondary">{docs.length} kaynak</p>
                 <button onClick={openPicker}
                         className="inline-flex items-center gap-1.5 rounded-lg border bg-surface px-3 py-1.5 text-sm text-accent-purple hover:border-accent-purple/50">
-                  <Plus size={15} /> Belge ekle
+                  <Plus size={15} /> Kaynak ekle
                 </button>
               </div>
               <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
@@ -524,7 +568,7 @@ export default function CollectionPage({ params }: { params: { id: string } }) {
                          onKeyDown={(e) => { if (e.key === "Enter") router.push("/documents/" + d.id); }}
                          className="lift group relative cursor-pointer rounded-xl border bg-surface p-4 hover:border-accent-purple/40">
                       <button onClick={(e) => { e.stopPropagation(); removeFromCollection(d.id); }}
-                              aria-label="Bu kitaptan çıkar" title="Bu kitaptan çıkar"
+                              aria-label="Bu defterden çıkar" title="Bu defterden çıkar"
                               className="absolute right-2 top-2 rounded-md p-1 text-text-secondary hover:bg-surface-muted hover:text-danger">
                         <X size={14} />
                       </button>
@@ -569,41 +613,100 @@ export default function CollectionPage({ params }: { params: { id: string } }) {
 
       {/* KONUYA SOR */}
       {tab === "sor" && (
-        <div className="mt-5">
-          <p className="mb-3 text-sm text-text-secondary">
-            Soru sor, <b>{col.title}</b> kitabındaki {st.documents} belgenin tamamında arayıp cevaplayayım.
-          </p>
-          <div className="flex gap-2">
+        <div className="mt-5 max-w-3xl">
+          {thread.length === 0 && !asking && (
+            <p className="mb-3 text-sm text-text-secondary">
+              Soru sor; <b>{col.title}</b> defterindeki {st.documents} kaynağın tamamında arayıp atıflı cevaplayayım.
+              Beğendiğin cevabı tek tuşla taslağa alırsın.
+            </p>
+          )}
+          <div className="space-y-4">
+            {thread.map((t, i) => (
+              <div key={i} className="fade-in">
+                <p className="mb-1.5 text-sm font-medium">{t.q}</p>
+                <div className="rounded-2xl border bg-surface p-4">
+                  <p className="whitespace-pre-wrap text-sm leading-relaxed">{t.answer}</p>
+                  <div className="mt-3 flex flex-wrap items-center gap-1.5 border-t pt-3">
+                    {t.sources.map((s: any, j: number) => (
+                      <button key={j} onClick={() => router.push("/documents/" + s.document_id + (s.page ? "?page=" + s.page : ""))}
+                              className="rounded-full border bg-surface px-2.5 py-1 text-xs text-text-secondary hover:border-accent-purple/50 hover:text-accent-purple">
+                        [K{j + 1}] {s.title} · s.{s.page}
+                      </button>
+                    ))}
+                    <button onClick={() => answerToDraft(t)}
+                            className="ml-auto flex items-center gap-1 rounded-full border border-accent-purple/40 bg-accent-purple/5 px-2.5 py-1 text-xs text-accent-purple">
+                      <PenLine size={12} /> Taslağa ekle
+                    </button>
+                  </div>
+                </div>
+              </div>
+            ))}
+            {asking && <p className="text-sm text-text-secondary">Kaynaklar taranıyor…</p>}
+          </div>
+          <div className="sticky bottom-20 mt-5 flex gap-2 md:bottom-4">
             <input value={q} onChange={(e) => setQ(e.target.value)}
                    onKeyDown={(e) => { if (e.key === "Enter") ask(); }}
-                   placeholder="Örn: Bu konudaki temel kavramlar neler?"
-                   className="flex-1 rounded-xl border bg-surface px-3 py-2.5 text-sm outline-none focus:border-accent-purple" />
+                   placeholder={thread.length ? "Devam et…" : "Örn: Bu kaynaklar Enver Paşa'nın Anadolu'ya girişini nasıl anlatıyor?"}
+                   className="flex-1 rounded-xl border bg-surface px-3 py-2.5 text-sm shadow-sm outline-none focus:border-accent-purple" />
             <button onClick={ask} disabled={asking}
                     className="flex items-center gap-1.5 rounded-xl bg-accent-purple px-4 py-2.5 text-sm text-white disabled:opacity-60">
               {asking ? <Loader2 size={15} className="animate-spin" /> : <Send size={15} />} Sor
             </button>
           </div>
+        </div>
+      )}
 
-          {asking && <p className="mt-4 text-sm text-text-secondary">Belgeler taranıyor…</p>}
-
-          {answer && (
-            <div className="mt-5 rounded-2xl border bg-surface p-4">
-              <p className="whitespace-pre-wrap text-sm leading-relaxed">{answer.answer}</p>
-              {answer.sources?.length > 0 && (
-                <div className="mt-4 border-t pt-3">
-                  <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-text-secondary">Kaynaklar</p>
-                  <div className="flex flex-wrap gap-1.5">
-                    {answer.sources.map((s: any, i: number) => (
-                      <button key={i} onClick={() => router.push("/documents/" + s.document_id)}
-                              className="rounded-full border bg-surface px-2.5 py-1 text-xs text-text-secondary hover:border-accent-purple/50">
-                        [K{i + 1}] {s.title} · s.{s.page}
-                      </button>
-                    ))}
-                  </div>
-                </div>
-              )}
+      {/* TASLAK: yazma alani */}
+      {tab === "taslak" && (
+        <div className="mt-5 grid grid-cols-1 gap-5 lg:grid-cols-[1fr_340px]">
+          <div>
+            <div className="mb-2 flex flex-wrap items-center gap-2 text-xs text-text-secondary">
+              <span>{draft.trim() ? draft.trim().split(/\s+/).length : 0} kelime</span>
+              <span>·</span>
+              <span className={draftSaved === "error" ? "text-danger" : ""}>
+                {draftSaved === "saving" ? "kaydediliyor…" : draftSaved === "saved" ? "kaydedildi" : draftSaved === "error" ? "kaydedilemedi" : ""}
+              </span>
+              {flash && <span className="text-accent-purple">{flash}</span>}
+              <span className="ml-auto flex gap-1.5">
+                <button onClick={() => exportDraft("md")} disabled={!draft.trim()} className="rounded-lg border bg-surface px-2.5 py-1 hover:border-accent-purple/50 disabled:opacity-40">Markdown</button>
+                <button onClick={() => exportDraft("doc")} disabled={!draft.trim()} className="rounded-lg border bg-surface px-2.5 py-1 hover:border-accent-purple/50 disabled:opacity-40">Word</button>
+              </span>
             </div>
-          )}
+            <textarea ref={draftRef} value={draft} onChange={(e) => onDraftChange(e.target.value)}
+                      placeholder={"Buraya yaz. Sağdaki notları tıklayarak atıflı olarak ekleyebilirsin; Sohbet'teki cevapları da \"Taslağa ekle\" ile.\n\nBiçim: # Başlık, ## Alt başlık, **kalın**, _eğik_, > alıntı"}
+                      className="min-h-[60vh] w-full resize-y rounded-2xl border bg-surface p-5 font-body text-[15px] leading-[1.75] outline-none focus:border-accent-purple"
+                      spellCheck={false} />
+          </div>
+          <aside className="lg:sticky lg:top-4 lg:self-start">
+            <div className="rounded-2xl border bg-surface p-3">
+              <div className="mb-2 flex items-center justify-between px-1">
+                <p className="text-xs font-semibold uppercase tracking-wide text-text-secondary">Malzeme</p>
+                <button onClick={loadMaterial} title="Yenile" className="rounded-md p-1 text-text-secondary hover:bg-surface-muted"><RefreshCw size={13} /></button>
+              </div>
+              <input value={matQ} onChange={(e) => setMatQ(e.target.value)} placeholder="Notlarda ara…"
+                     className="mb-2 w-full rounded-lg border bg-surface-muted px-2.5 py-1.5 text-sm outline-none focus:border-accent-purple" />
+              <div className="max-h-[55vh] space-y-1.5 overflow-y-auto pr-1">
+                {material === null ? (
+                  <p className="p-3 text-xs text-text-secondary">Yükleniyor…</p>
+                ) : material.length === 0 ? (
+                  <p className="p-3 text-xs text-text-secondary">Bu defterin kaynaklarında henüz vurgu/not yok. PDF'te metin seçip işaretle; burada belirir.</p>
+                ) : material
+                  .filter((n: any) => !matQ.trim() || (n.selected_text || "").toLowerCase().includes(matQ.toLowerCase()) || (n.note_content || "").toLowerCase().includes(matQ.toLowerCase()))
+                  .map((n: any) => (
+                    <button key={n.id}
+                            onClick={() => insertAtCursor(n.selected_text
+                              ? `> ${n.selected_text.trim().replace(/\n+/g, " ")} ${cite(n.document_title, n.page_number)}${n.note_content ? "\n\n" + n.note_content.trim() : ""}`
+                              : `${(n.note_content || "").trim()} ${cite(n.document_title, n.page_number)}`)}
+                            title="Taslağa atıfla ekle"
+                            className="block w-full rounded-lg border bg-surface p-2.5 text-left hover:border-accent-purple/50">
+                      {n.selected_text && <p className="line-clamp-3 text-xs leading-relaxed" style={{ borderLeft: "3px solid " + (n.highlight_color || "#FFE78A"), paddingLeft: 8 }}>{n.selected_text}</p>}
+                      {n.note_content && <p className="mt-1 line-clamp-2 text-xs text-text-secondary">{n.note_content}</p>}
+                      <p className="mt-1 text-[10px] text-text-secondary">{n.document_title}{n.page_number ? " · s." + n.page_number : ""}</p>
+                    </button>
+                  ))}
+              </div>
+            </div>
+          </aside>
         </div>
       )}
 
@@ -842,14 +945,14 @@ export default function CollectionPage({ params }: { params: { id: string } }) {
       {tab === "ders" && (
         <div className="mt-5 max-w-3xl">
           <p className="text-sm text-text-secondary">
-            Bu çalışma kitabındaki {st.ready || st.documents} belgeyi tek bir akıcı derse çeviririm;
-            yolda, sporda dinlersin.
+            Bu defterdeki {st.ready || st.documents} kaynağı tek bir akıcı sesli özete çeviririm;
+            yolda dinlersin.
           </p>
           <div className="mt-3 flex flex-wrap gap-2">
             <button onClick={makeLecture} disabled={lecBusy}
                     className="flex items-center gap-1.5 rounded-xl bg-accent-purple px-4 py-2.5 text-sm text-white disabled:opacity-60">
               {lecBusy ? <Loader2 size={15} className="animate-spin" /> : <Headphones size={15} />}
-              {lecBusy ? "Ders hazırlanıyor…" : lecture ? "Yeniden hazırla" : "Dersi hazırla"}
+              {lecBusy ? "Özet hazırlanıyor…" : lecture ? "Yeniden hazırla" : "Özeti hazırla"}
             </button>
             {lecture && !audioUrl && (
               <button onClick={playLecture} disabled={audioBusy}
@@ -862,7 +965,7 @@ export default function CollectionPage({ params }: { params: { id: string } }) {
           {lecErr && <p className="mt-3 text-sm text-danger">{lecErr}</p>}
           {audioUrl && (
             <div className="mt-4">
-              <PodcastPlayer src={audioUrl} title={col.title} subtitle={`Sesli ders · ${st.ready || st.documents} belge`}
+              <PodcastPlayer src={audioUrl} title={col.title} subtitle={`Sesli özet · ${st.ready || st.documents} belge`}
                              artwork="/icon" storageKey={"lecture.pos." + id} autoPlay />
               <p className="mt-2 text-[11px] text-text-secondary">
                 Ekran kilitliyken kulaklık/bildirim tuşlarıyla kontrol edebilirsin. Kaldığın yer hatırlanır; ses cihazda saklanır, tekrar üretilmez.
@@ -878,33 +981,6 @@ export default function CollectionPage({ params }: { params: { id: string } }) {
         </div>
       )}
 
-      {/* KARTLAR */}
-      {tab === "kart" && (
-        <div className="mt-5">
-          <p className="mb-3 text-sm text-text-secondary">
-            Bu kitaptaki tüm belgelerden karışık çalışma materyali üret.
-          </p>
-          <div className="flex flex-wrap gap-2">
-            <button onClick={() => generate("flashcard")} disabled={genBusy}
-                    className="flex items-center gap-1.5 rounded-xl bg-accent-purple px-4 py-2.5 text-sm text-white disabled:opacity-60">
-              {genBusy ? <Loader2 size={15} className="animate-spin" /> : <GraduationCap size={15} />} Bilgi kartı üret
-            </button>
-            <button onClick={() => generate("quiz")} disabled={genBusy}
-                    className="rounded-xl border px-4 py-2.5 text-sm hover:bg-black/5 disabled:opacity-60">
-              Quiz üret
-            </button>
-            <button onClick={() => router.push("/study")}
-                    className="rounded-xl border px-4 py-2.5 text-sm hover:bg-black/5">
-              Öğrenme sayfasına git
-            </button>
-          </div>
-          {genMsg && <p className="mt-3 text-sm text-accent-purple">{genMsg}</p>}
-          <p className="mt-4 text-sm text-text-secondary">
-            Şu an bu kitapta <b>{st.cards || 0}</b> kart var.
-          </p>
-        </div>
-      )}
-
       {/* BELGE SECICI */}
       {picker && (
         <div className="fixed inset-0 z-50 flex items-end justify-center bg-black/40 p-0 sm:items-center sm:p-4"
@@ -912,7 +988,7 @@ export default function CollectionPage({ params }: { params: { id: string } }) {
           <div onClick={(e) => e.stopPropagation()}
                className="flex max-h-[85vh] w-full max-w-lg flex-col rounded-t-2xl border bg-surface sm:rounded-2xl">
             <div className="flex items-center justify-between border-b px-4 py-3">
-              <h3 className="font-medium">Kütüphaneden belge ekle</h3>
+              <h3 className="font-medium">Kütüphaneden kaynak ekle</h3>
               <button onClick={() => setPicker(false)} aria-label="Kapat"
                       className="rounded-md p-1 text-text-secondary hover:bg-surface-muted">
                 <X size={18} />
@@ -937,10 +1013,10 @@ export default function CollectionPage({ params }: { params: { id: string } }) {
                   return (
                     <p className="p-6 text-center text-sm text-text-secondary">
                       {allDocs.length === 0
-                        ? "Kütüphanende hiç belge yok."
+                        ? "Kütüphanende hiç kaynak yok."
                         : pickQ.trim()
                           ? "Aramayla eşleşen belge yok."
-                          : "Kütüphanendeki tüm belgeler zaten bu kitapta."}
+                          : "Kütüphanendeki tüm kaynaklar zaten bu defterde."}
                     </p>
                   );
                 }
@@ -972,7 +1048,7 @@ export default function CollectionPage({ params }: { params: { id: string } }) {
               <button onClick={addPicked} disabled={addBusy || !Object.values(picked).some(Boolean)}
                       className="flex items-center gap-1.5 rounded-lg bg-accent-purple px-4 py-1.5 text-sm text-white disabled:opacity-50">
                 {addBusy && <Loader2 size={14} className="animate-spin" />}
-                {Object.values(picked).filter(Boolean).length || ""} belge ekle
+                {Object.values(picked).filter(Boolean).length || ""} kaynak ekle
               </button>
             </div>
           </div>

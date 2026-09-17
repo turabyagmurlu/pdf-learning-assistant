@@ -2,17 +2,16 @@
 import { useEffect } from "react";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
-import { Library, GraduationCap, LogOut, Compass, Highlighter, Sun, Moon, MonitorSmartphone } from "lucide-react";
+import { Library, LogOut, Search, Notebook, Sun, Moon, MonitorSmartphone } from "lucide-react";
 import { clearToken } from "@/lib/api";
 import { BrandMarkSvg } from "@/components/BrandMark";
 import ThemeToggle, { useTheme } from "@/components/ThemeToggle";
 import Shortcuts from "@/components/Shortcuts";
 
 const NAV = [
+  { href: "/notebooks", label: "Defterler", Icon: Notebook, title: "Defterler" },
   { href: "/library", label: "Kütüphane", Icon: Library, title: "Kütüphane" },
-  { href: "/study", label: "Öğrenme", Icon: GraduationCap, title: "Öğrenme" },
-  { href: "/notes", label: "Vurgular", Icon: Highlighter, title: "Vurgular" },
-  { href: "/search", label: "Keşfet", Icon: Compass, title: "Keşfet" },
+  { href: "/search", label: "Araştır", Icon: Search, title: "Araştır" },
 ];
 const cx = (...a: any[]) => a.filter(Boolean).join(" ");
 
@@ -27,7 +26,7 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
   useEffect(() => {
     const n = NAV.find((x) => active(x.href));
     const base = "TY PDF";
-    document.title = n ? `${n.title} · ${base}` : pathname.startsWith("/collections/") ? `Çalışma kitabı · ${base}` : base;
+    document.title = n ? `${n.title} · ${base}` : pathname.startsWith("/collections/") ? `Defter · ${base}` : base;
   }, [pathname]);
 
   const nextMode = mode === "light" ? "dark" : mode === "dark" ? "system" : "light";
@@ -37,7 +36,7 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
     <div className="flex min-h-screen">
       {/* Masaustu: sol menu */}
       <aside className="hidden w-56 shrink-0 flex-col gap-1 border-r bg-surface p-4 md:flex">
-        <Link href="/library" className="flex items-center gap-2.5 px-2 py-3">
+        <Link href="/notebooks" className="flex items-center gap-2.5 px-2 py-3">
           <BrandMarkSvg variant={dark ? "night" : "day"} size={34} title="TY PDF" />
           <span className="font-heading text-lg leading-tight">TY PDF</span>
         </Link>
@@ -66,7 +65,7 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
         {!isReader && (
           <header className="sticky top-0 z-30 flex items-center justify-between border-b bg-surface/95 px-4 backdrop-blur md:hidden"
                   style={{ paddingTop: "max(env(safe-area-inset-top), 8px)", paddingBottom: 8 }}>
-            <Link href="/library" className="flex items-center gap-2">
+            <Link href="/notebooks" className="flex items-center gap-2">
               <BrandMarkSvg variant={dark ? "night" : "day"} size={28} title="TY PDF" />
               <span className="font-heading text-base">TY PDF</span>
             </Link>
@@ -86,7 +85,7 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
 
         {/* Mobil: alt sekme cubugu */}
         {!isReader && (
-          <nav className="fixed inset-x-0 bottom-0 z-30 grid grid-cols-4 border-t bg-surface/95 backdrop-blur md:hidden"
+          <nav className="fixed inset-x-0 bottom-0 z-30 grid grid-cols-3 border-t bg-surface/95 backdrop-blur md:hidden"
                style={{ paddingBottom: "env(safe-area-inset-bottom)" }}>
             {NAV.map(({ href, label, Icon }) => (
               <Link key={href} href={href}
