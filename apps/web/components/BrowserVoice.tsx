@@ -6,7 +6,7 @@
  * sirayla okutuyoruz ve boylece ilerleme de gosterebiliyoruz.
  */
 import { useEffect, useRef, useState } from "react";
-import { Play, Pause, Square, Volume2 } from "lucide-react";
+import { Play, Pause, Square, Volume2, SkipBack, SkipForward } from "lucide-react";
 
 const SPEEDS = [0.9, 1, 1.15, 1.3, 1.5];
 
@@ -125,6 +125,26 @@ export default function BrowserVoice({ text, onClose }: { text: string; onClose?
     onClose?.();
   }
 
+  // Sentezde saniyeyle sarma yok; cumle cumle atliyoruz (2 cumle ≈ 10 sn).
+  function jump(n: number) {
+    const k = Math.max(0, Math.min(parts.current.length - 1, idx.current + n));
+    if (state === "idle") { idx.current = k; setPos(Math.round(((k + 1) / parts.current.length) * 100)); return; }
+    speakFrom(k);
+  }
+
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      const el = e.target as HTMLElement | null;
+      if (el && (el.tagName === "INPUT" || el.tagName === "TEXTAREA" || el.tagName === "SELECT" || el.isContentEditable)) return;
+      if (e.key === "ArrowLeft") { e.preventDefault(); jump(-2); }
+      else if (e.key === "ArrowRight") { e.preventDefault(); jump(2); }
+      else if (e.key === " ") { e.preventDefault(); toggle(); }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [state]);
+
   if (!browserVoiceSupported()) return null;
 
   return (
@@ -143,10 +163,18 @@ export default function BrowserVoice({ text, onClose }: { text: string; onClose?
       )}
 
       <div className="mt-3 flex flex-wrap items-center gap-2">
+        <button onClick={() => jump(-2)} title="2 cümle geri (←)" aria-label="Geri"
+                className="flex items-center gap-1 rounded-xl border px-3 py-2 text-sm hover:bg-black/5">
+          <SkipBack size={15} /> <span className="text-xs">2 cümle</span>
+        </button>
         <button onClick={toggle}
                 className="flex items-center gap-1.5 rounded-xl bg-accent-purple px-4 py-2 text-sm text-white">
           {state === "playing" ? <Pause size={15} /> : <Play size={15} />}
           {state === "playing" ? "Duraklat" : state === "paused" ? "Devam et" : "Oku"}
+        </button>
+        <button onClick={() => jump(2)} title="2 cümle ileri (→)" aria-label="İleri"
+                className="flex items-center gap-1 rounded-xl border px-3 py-2 text-sm hover:bg-black/5">
+          <span className="text-xs">2 cümle</span> <SkipForward size={15} />
         </button>
         <button onClick={stop} className="flex items-center gap-1.5 rounded-xl border px-3 py-2 text-sm">
           <Square size={13} /> Durdur
