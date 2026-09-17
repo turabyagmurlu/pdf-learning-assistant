@@ -279,7 +279,14 @@ export default function CollectionPage({ params }: { params: { id: string } }) {
   async function makeLecture() {
     setLecBusy(true); setLecErr(""); setLecture(""); stopAudio(); setAudioReady(false);
     try {
-      const r = await api(`/collections/${id}/lecture`, { method: "POST" });
+      let r: any = null, lastErr: any = null;
+      for (let attempt = 0; attempt < 3 && !r; attempt++) {
+        try { if (attempt > 0) { setLecErr(`Sunucu uyanıyor, tekrar deniyorum… (${attempt + 1}/3)`); await new Promise((x) => setTimeout(x, 4000 * attempt)); }
+              r = await api(`/collections/${id}/lecture`, { method: "POST" }); }
+        catch (e: any) { lastErr = e; if (!/fetch|bağlan|network|502|503|504/i.test(String(e?.message))) break; }
+      }
+      if (!r) throw lastErr || new Error("Özet oluşturulamadı.");
+      setLecErr("");
       const s = r.script || "";
       setLecture(s);
       try { localStorage.setItem(LEC_KEY, s); localStorage.removeItem("lecture.pos." + id); } catch {}
@@ -304,12 +311,22 @@ export default function CollectionPage({ params }: { params: { id: string } }) {
       } catch {}
       // 2) uret
       if (!blob) {
-        const res = await fetch(`${API}/tts`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json", Authorization: "Bearer " + getToken() },
-          body: JSON.stringify({ text: lecture.slice(0, 5500) }),
-        });
-        if (!res.ok) throw new Error("Seslendirme yapılamadı.");
+        // sunucu uyuyor / yeniden basliyor olabilir: 3 deneme, aralarinda bekleme
+        let res: Response | null = null, lastErr = "";
+        for (let attempt = 0; attempt < 3 && !res; attempt++) {
+          try {
+            if (attempt > 0) { setLecErr(`Sunucu uyanıyor, tekrar deniyorum… (${attempt + 1}/3)`); await new Promise((r) => setTimeout(r, 4000 * attempt)); }
+            const r = await fetch(`${API}/tts`, {
+              method: "POST",
+              headers: { "Content-Type": "application/json", Authorization: "Bearer " + getToken() },
+              body: JSON.stringify({ text: lecture.slice(0, 5500) }),
+            });
+            if (r.ok) res = r;
+            else { lastErr = (await r.text().catch(() => "")) || `HTTP ${r.status}`; if (r.status < 500) break; }
+          } catch (e: any) { lastErr = e?.message || "bağlantı hatası"; }
+        }
+        if (!res) throw new Error("Seslendirme yapılamadı: " + lastErr.slice(0, 160));
+        setLecErr("");
         blob = await res.blob();
         try {
           if ("caches" in window) {
