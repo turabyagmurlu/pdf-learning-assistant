@@ -2,6 +2,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { api, API, getToken } from "@/lib/api";
 import { CardSkeleton } from "@/components/Skeleton";
+import PageHeader from "@/components/PageHeader";
 import { GraduationCap, Layers, Trophy, Clock, Sparkles, RotateCcw, ChevronRight, Check, X, Play, BookOpen, Trash2, Pencil, Plus } from "lucide-react";
 
 type Doc = { id: string; title: string; status: string };
@@ -40,10 +41,8 @@ export default function StudyPage() {
 
   return (
     <div className="mx-auto w-full max-w-5xl px-4 py-5 md:px-6 md:py-8">
-      <div className="mb-5">
-        <h1 className="font-heading text-3xl">Öğrenme</h1>
-        <p className="mt-1 text-sm text-text-secondary">Belgelerinden AI ile flashcard ve quiz üret; aralıklı tekrarla kalıcı öğren.</p>
-      </div>
+      <PageHeader eyebrow="Çalış" title="Öğrenme"
+                  subtitle="Belgelerinden kart ve quiz üret; aralıklı tekrarla kalıcı öğren." />
 
       {/* kapsam secici: tum sayfayi etkiler */}
       <div className="mb-4 flex flex-wrap items-center gap-2 rounded-xl border bg-surface px-3 py-2">

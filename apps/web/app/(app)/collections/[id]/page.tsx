@@ -389,7 +389,7 @@ export default function CollectionPage({ params }: { params: { id: string } }) {
                         className="rounded-md bg-accent-purple p-1.5 text-white"><Check size={15} /></button>
               </div>
             ) : (
-              <h1 className="truncate font-heading text-3xl">{col.title}</h1>
+              <h1 className="truncate font-heading text-[34px] leading-[1.05] tracking-tight md:text-[40px]">{col.title}</h1>
             )}
             {!renaming && (
               <button onClick={() => setRenaming(true)} aria-label="Yeniden adlandır"

@@ -2,6 +2,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import { api } from "@/lib/api";
+import PageHeader from "@/components/PageHeader";
 import { Highlighter, Search, Trash2, Pencil, Check, GraduationCap, FileText, StickyNote, ExternalLink } from "lucide-react";
 
 type Note = {
@@ -81,12 +82,8 @@ export default function NotesPage() {
 
   return (
     <div className="mx-auto w-full max-w-5xl px-4 py-5 md:px-6 md:py-8">
-      <div className="mb-5">
-        <h1 className="font-heading text-3xl">Vurgular</h1>
-        <p className="mt-1 text-sm text-text-secondary">
-          Okurken işaretlediğin pasajlar ve notların, tek yerde. Tıkla → PDF o sayfada açılır.
-        </p>
-      </div>
+      <PageHeader eyebrow="Okurken" title="Vurgular"
+                  subtitle="İşaretlediğin pasajlar ve notların, tek yerde. Tıkla → PDF o sayfada açılır." />
 
       <div className="grid grid-cols-3 gap-3">
         <Stat label="Vurgu" value={total} />

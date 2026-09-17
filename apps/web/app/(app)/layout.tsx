@@ -6,6 +6,7 @@ import { Library, GraduationCap, LogOut, Compass, Highlighter, Sun, Moon, Monito
 import { clearToken } from "@/lib/api";
 import { BrandMarkSvg } from "@/components/BrandMark";
 import ThemeToggle, { useTheme } from "@/components/ThemeToggle";
+import Shortcuts from "@/components/Shortcuts";
 
 const NAV = [
   { href: "/library", label: "Kütüphane", Icon: Library, title: "Kütüphane" },
@@ -48,6 +49,10 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
           </Link>
         ))}
         <div className="mt-auto flex flex-col gap-1">
+          <button onClick={() => window.dispatchEvent(new KeyboardEvent("keydown", { key: "?" }))}
+                  className="flex items-center gap-2 rounded-md px-3 py-2 text-text-secondary hover:bg-surface-muted">
+            <span className="rounded border px-1.5 font-mono text-[11px]">?</span> Kısayollar
+          </button>
           <ThemeToggle />
           <button onClick={() => { clearToken(); router.replace("/login"); }}
                   className="flex items-center gap-2 rounded-md px-3 py-2 text-text-secondary hover:bg-surface-muted">
@@ -77,6 +82,7 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
         )}
 
         <main className={cx("flex-1 overflow-auto", !isReader && "pb-20 md:pb-0")}>{children}</main>
+        <Shortcuts />
 
         {/* Mobil: alt sekme cubugu */}
         {!isReader && (

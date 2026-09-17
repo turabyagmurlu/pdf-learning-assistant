@@ -3,6 +3,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { api, API, getToken } from "@/lib/api";
 import { CardSkeleton } from "@/components/Skeleton";
+import PageHeader from "@/components/PageHeader";
 import { UploadCloud, Search, Star, Trash2, Pencil, LayoutGrid, List, MoreVertical, X, FileText, FolderOpen, FolderPlus, Check, BookOpen } from "lucide-react";
 
 type Doc = {
@@ -147,10 +148,8 @@ export default function LibraryPage() {
 
   return (
     <div className="mx-auto w-full max-w-6xl px-4 py-5 md:px-6 md:py-8" onClick={() => { setMenuFor(null); setFolderMenu(null); }}>
-      <div className="mb-1">
-        <h1 className="font-heading text-3xl">Kütüphane</h1>
-        <p className="mt-1 text-sm text-text-secondary">PDF'lerini yükle, düzenle, kategorilere ayır; sana çalışılabilir hale getireyim.</p>
-      </div>
+      <PageHeader hero eyebrow="TY PDF" title="Kütüphane"
+                  subtitle="PDF'lerini yükle, raflara diz; ben özetleyip çalışılabilir hale getireyim." />
 
       <div className="mt-5 flex flex-col gap-6 lg:flex-row">
       <div className="min-w-0 flex-1">

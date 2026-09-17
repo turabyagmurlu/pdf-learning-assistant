@@ -2,6 +2,7 @@
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { api, API, getToken } from "@/lib/api";
+import PageHeader from "@/components/PageHeader";
 import { Search, FileText, ArrowRight, Compass } from "lucide-react";
 
 type Doc = { id: string; title: string; status: string };
@@ -34,11 +35,9 @@ export default function SearchPage() {
   }
 
   return (
-    <div className="mx-auto w-full max-w-4xl px-6 py-8">
-      <div className="mb-5">
-        <h1 className="font-heading text-3xl">Keşfet</h1>
-        <p className="mt-1 text-sm text-text-secondary">Tüm belgelerinde anlam bazlı ara; ilgili pasajları belge ve sayfa bilgisiyle bul.</p>
-      </div>
+    <div className="mx-auto w-full max-w-4xl px-4 py-5 md:px-6 md:py-8">
+      <PageHeader eyebrow="Ara" title="Keşfet"
+                  subtitle="Tüm belgelerinde anlam bazlı ara; ilgili pasajları belge ve sayfa bilgisiyle bul." />
 
       <div className="flex items-center gap-2 rounded-xl border bg-surface px-3">
         <Search size={18} className="text-text-secondary" />
