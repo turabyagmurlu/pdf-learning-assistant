@@ -1,5 +1,7 @@
 import asyncio
 import json
+import threading
+import time
 import asyncpg
 from pgvector.asyncpg import register_vector
 from app.workers.celery_app import celery
@@ -10,6 +12,17 @@ from app.pdf.chunking import chunk_pages
 from app.ai.factory import get_embeddings
 from app.services.analysis_service import analyze_document
 from app.core.errors import AppError
+
+# Ayni anda islenecek belge sayisi. Ucretsiz Gemini katmaninda gomme icin
+# dakikada 100 istek / 30K token siniri var; 17 belgeyi birden vermek kotayi
+# aninda yakiyordu. Iki belge paralel, gerisi sirada bekler.
+_SLOTS = threading.BoundedSemaphore(2)
+_QUEUED: set[str] = set()
+_QUEUED_LOCK = threading.Lock()
+
+# Gomme partisi: 20 parca x ~500 token = ~10K token/istek -> 30K TPM'e sigar.
+EMBED_BATCH = 20
+EMBED_PACE_SEC = 0.7      # istekler arasi nefes payi (100 RPM'in altinda kal)
 
 
 def _dsn() -> str:
@@ -26,6 +39,15 @@ async def _conn():
     return conn
 
 
+async def _set(conn, document_id: str, **fields):
+    """Belge alanlarini tek sorguda gunceller (ilerleme yazmak icin)."""
+    if not fields:
+        return
+    cols = list(fields.keys())
+    sets = ", ".join(f"{c}=${i + 2}" for i, c in enumerate(cols))
+    await conn.execute(f"UPDATE documents SET {sets} WHERE id=$1", document_id, *[fields[c] for c in cols])
+
+
 async def _run_ingest(document_id: str):
     conn = await _conn()
     try:
@@ -34,44 +56,54 @@ async def _run_ingest(document_id: str):
             return
         key = row["file_path"]
 
-        await conn.execute("UPDATE documents SET status='processing', processing_stage='extracting' WHERE id=$1",
-                           document_id)
+        await _set(conn, document_id, status="processing", processing_stage="extracting",
+                   progress_done=0, progress_total=0, error_message=None)
         pdf_bytes = get_object(key)
 
         try:
             pages = extract_pages(pdf_bytes)
         except AppError as e:
-            await conn.execute("UPDATE documents SET status='failed', error_message=$2 WHERE id=$1",
-                               document_id, e.user_message)
+            await _set(conn, document_id, status="failed", error_message=e.user_message, processing_stage=None)
             return
 
         pc = page_count(pdf_bytes)
-
-        await conn.execute("UPDATE documents SET processing_stage='chunking', page_count=$2 WHERE id=$1",
-                           document_id, pc)
+        await _set(conn, document_id, processing_stage="chunking", page_count=pc)
         chunks = chunk_pages(pages)
         if not chunks:
-            await conn.execute("UPDATE documents SET status='failed', error_message=$2 WHERE id=$1",
-                               document_id, "İçerik parçalanamadı.")
+            await _set(conn, document_id, status="failed", error_message="İçerik parçalanamadı.", processing_stage=None)
             return
 
-        await conn.execute("UPDATE documents SET processing_stage='embedding' WHERE id=$1", document_id)
-        embedder = get_embeddings()
-        await conn.execute("DELETE FROM document_chunks WHERE document_id=$1", document_id)
+        # Gomme: parca parca, ilerleme yazarak. Yarim kalmis bir islemde
+        # daha once gomulmus parcalar korunur (kaldigi yerden devam).
+        done_idx = {r["chunk_index"] for r in await conn.fetch(
+            "SELECT chunk_index FROM document_chunks WHERE document_id=$1", document_id)}
+        todo = [c for c in chunks if c["chunk_index"] not in done_idx]
+        if done_idx and len(done_idx) > len(chunks):      # eski/uyumsuz kalinti -> temizle
+            await conn.execute("DELETE FROM document_chunks WHERE document_id=$1", document_id)
+            done_idx, todo = set(), chunks
 
-        batch = 64
-        for i in range(0, len(chunks), batch):
-            part = chunks[i:i + batch]
-            vectors = embedder.embed([c["content"] for c in part])
+        total = len(chunks)
+        await _set(conn, document_id, processing_stage="embedding",
+                   progress_done=len(done_idx), progress_total=total)
+        embedder = get_embeddings()
+        done = len(done_idx)
+        for i in range(0, len(todo), EMBED_BATCH):
+            part = todo[i:i + EMBED_BATCH]
+            vectors = embedder.embed([c["content"] for c in part])     # kendi icinde retry yapar
             for c, vec in zip(part, vectors):
                 await conn.execute(
                     """INSERT INTO document_chunks
                        (document_id, chunk_index, page_number, page_end, section_title, content, token_count, embedding)
-                       VALUES ($1,$2,$3,$4,$5,$6,$7,$8)""",
+                       VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
+                       ON CONFLICT DO NOTHING""",
                     document_id, c["chunk_index"], c["page_number"], c["page_end"],
                     c["section_title"], c["content"], c["token_count"], vec)
+            done += len(part)
+            await _set(conn, document_id, progress_done=done, progress_total=total)
+            if i + EMBED_BATCH < len(todo):
+                time.sleep(EMBED_PACE_SEC)
 
-        await conn.execute("UPDATE documents SET processing_stage='analyzing' WHERE id=$1", document_id)
+        await _set(conn, document_id, processing_stage="analyzing")
         full_text = "\n".join(p["text"] for p in pages)
         try:
             a = analyze_document(full_text)
@@ -84,7 +116,14 @@ async def _run_ingest(document_id: str):
         except Exception:  # analiz başarısız olsa da belge yine de sohbete hazır
             pass
 
-        await conn.execute("UPDATE documents SET status='ready', processing_stage=NULL WHERE id=$1", document_id)
+        await _set(conn, document_id, status="ready", processing_stage=None,
+                   progress_done=total, progress_total=total)
+    except Exception as e:  # noqa - hicbir belge sessizce "isleniyor"da kalmasin
+        msg = getattr(e, "user_message", None) or "İşleme sırasında hata oluştu; 'Yeniden işle' ile tekrar dene."
+        try:
+            await _set(conn, document_id, status="failed", error_message=msg[:300], processing_stage=None)
+        except Exception:  # noqa
+            pass
     finally:
         await conn.close()
 
@@ -101,9 +140,38 @@ def ingest_document(self, document_id: str):
 
 def run_ingest_sync(document_id: str):
     """Backend içinde (ayrı worker olmadan) senkron ingest çalıştırıcı.
-    FastAPI BackgroundTasks ile threadpool'da çağrılır."""
+    FastAPI BackgroundTasks ile threadpool'da çağrılır; en fazla 2 belge paralel."""
+    with _QUEUED_LOCK:
+        if document_id in _QUEUED:
+            return                      # zaten sirada
+        _QUEUED.add(document_id)
     try:
         ensure_bucket()
     except Exception:  # noqa
         pass
-    asyncio.run(_run_ingest(document_id))
+    try:
+        with _SLOTS:
+            asyncio.run(_run_ingest(document_id))
+    finally:
+        with _QUEUED_LOCK:
+            _QUEUED.discard(document_id)
+
+
+def enqueue(document_id: str):
+    """Arka planda, kuyruk disiplinine uyarak isle (acilista yeniden kuyruklama icin)."""
+    threading.Thread(target=run_ingest_sync, args=(document_id,), daemon=True).start()
+
+
+async def resume_unfinished():
+    """Sunucu (yeniden) acilinca yarim kalmis belgeleri kuyruga geri koyar.
+    Render ucretsiz katmani uyuyunca arka plan isleri olur; bu olmadan belgeler
+    sonsuza kadar 'isleniyor'da kalir."""
+    conn = await _conn()
+    try:
+        rows = await conn.fetch(
+            "SELECT id FROM documents WHERE status IN ('uploaded','processing') ORDER BY created_at")
+    finally:
+        await conn.close()
+    for r in rows:
+        enqueue(str(r["id"]))
+    return len(rows)

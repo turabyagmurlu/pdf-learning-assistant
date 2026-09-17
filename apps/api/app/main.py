@@ -33,6 +33,14 @@ async def lifespan(app: FastAPI):
             await conn.execute("ALTER TABLE collections ADD COLUMN IF NOT EXISTS draft_at timestamptz")
             await conn.execute("ALTER TABLE collections ADD COLUMN IF NOT EXISTS lecture text")
             await conn.execute("ALTER TABLE collections ADD COLUMN IF NOT EXISTS lecture_at timestamptz")
+            # Isleme ilerlemesi (gomulen parca / toplam parca) ve kaldigi yerden devam icin tekillik
+            await conn.execute("ALTER TABLE documents ADD COLUMN IF NOT EXISTS progress_done int DEFAULT 0")
+            await conn.execute("ALTER TABLE documents ADD COLUMN IF NOT EXISTS progress_total int DEFAULT 0")
+            try:
+                await conn.execute(
+                    "CREATE UNIQUE INDEX IF NOT EXISTS uq_chunks_doc_idx ON document_chunks (document_id, chunk_index)")
+            except Exception:  # noqa - eski kalinti tekrarlar varsa indeks olmaz, islem yine calisir
+                pass
             # Uretilen seslendirmeler: ayni metin bir daha kota harcamasin.
             await conn.execute(
                 "CREATE TABLE IF NOT EXISTS tts_cache ("
@@ -43,6 +51,12 @@ async def lifespan(app: FastAPI):
                 " created_at timestamptz NOT NULL DEFAULT now())"
             )
             await conn.execute("CREATE INDEX IF NOT EXISTS tts_cache_used_idx ON tts_cache (used_at)")
+    except Exception:  # noqa
+        pass
+    # Yarim kalmis belgeleri kaldigi yerden isle (sunucu uyuyup uyandiginda sart)
+    try:
+        from app.workers.tasks import resume_unfinished
+        await resume_unfinished()
     except Exception:  # noqa
         pass
     yield

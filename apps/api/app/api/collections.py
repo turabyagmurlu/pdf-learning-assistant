@@ -57,7 +57,8 @@ async def get_collection(cid: str, conn=Depends(db), user=Depends(current_user))
         raise NotFound("Defter bulunamadı.")
     docs = await conn.fetch(
         """SELECT id, title, status, page_count, short_summary, category, tags,
-                  is_favorite, difficulty_level, created_at
+                  is_favorite, difficulty_level, created_at,
+                  processing_stage, progress_done, progress_total, error_message
            FROM documents WHERE user_id=$1 AND collection_id=$2
            ORDER BY created_at DESC""",
         user["id"], cid)

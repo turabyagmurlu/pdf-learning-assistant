@@ -4,6 +4,7 @@ import { useRouter } from "next/navigation";
 import { api, API, getToken } from "@/lib/api";
 import PodcastPlayer from "@/components/PodcastPlayer";
 import BrowserVoice, { browserVoiceSupported } from "@/components/BrowserVoice";
+import { stageInfo } from "@/lib/docstage";
 import { Skeleton, CardSkeleton } from "@/components/Skeleton";
 import ConceptMap, { CMNode, CMEdge } from "@/components/ConceptMap";
 import DraftEditor, { Block } from "@/components/DraftEditor";
@@ -16,6 +17,8 @@ import {
 type Doc = {
   id: string; title: string; status: string; page_count?: number | null;
   short_summary?: string | null; category?: string | null;
+  processing_stage?: string | null; progress_done?: number | null; progress_total?: number | null;
+  error_message?: string | null;
 };
 type Prog = { page: number; numPages: number; pct: number };
 type GItem = {
@@ -186,6 +189,45 @@ export default function CollectionPage({ params }: { params: { id: string } }) {
       setErr(e?.message || "Belgeler eklenemedi.");
     } finally { setAddBusy(false); }
   }
+  async function reprocessDoc(docId: string) {
+    try { await api("/documents/" + docId + "/reprocess", { method: "POST" }); } catch {}
+    load();
+  }
+
+  // Defter icinden dogrudan PDF yukleme: dosya yuklenir ve bu deftere baglanir.
+  const upRef = useRef<HTMLInputElement>(null);
+  const [upBusy, setUpBusy] = useState<{ done: number; total: number } | null>(null);
+  const [upDrag, setUpDrag] = useState(false);
+  async function uploadHere(files: FileList | File[] | null) {
+    const list = Array.from(files || []).filter((f) => f.type === "application/pdf" || f.name.toLowerCase().endsWith(".pdf"));
+    if (!list.length) return;
+    setUpBusy({ done: 0, total: list.length }); setErr("");
+    let failed = 0;
+    for (let i = 0; i < list.length; i++) {
+      const fd = new FormData();
+      fd.append("file", list[i]);
+      fd.append("collection_id", id);
+      try {
+        const r = await fetch(API + "/documents", { method: "POST", headers: { Authorization: "Bearer " + getToken() }, body: fd });
+        if (!r.ok) failed++;
+      } catch { failed++; }
+      setUpBusy({ done: i + 1, total: list.length });
+    }
+    setUpBusy(null); setPicker(false);
+    if (failed) setErr(`${failed} dosya yüklenemedi (PDF ve boyut sınırını kontrol et).`);
+    await load();
+  }
+
+  // Islenen belge varken defteri tazele (ilerleme canli aksin)
+  useEffect(() => {
+    const list: Doc[] = data?.documents || [];
+    const anyProc = list.some((d) => d.status !== "ready" && d.status !== "failed");
+    if (!anyProc) return;
+    const t = setInterval(load, 3000);
+    return () => clearInterval(t);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [data]);
+
   async function removeFromCollection(docId: string) {
     try {
       await api("/documents/" + docId, { method: "PATCH", body: JSON.stringify({ collection_id: "" }) });
@@ -618,8 +660,10 @@ export default function CollectionPage({ params }: { params: { id: string } }) {
                           )}
                           <div className="mt-1.5 flex flex-wrap items-center gap-1.5 text-[11px]">
                             <span className={cx("rounded-full px-2 py-0.5",
-                              d.status === "ready" ? "bg-green-100 text-green-700" : "bg-surface-muted text-text-secondary")}>
-                              {d.status === "ready" ? "Hazır" : "İşleniyor"}
+                              d.status === "ready" ? "bg-green-100 text-green-700"
+                                : d.status === "failed" ? "bg-red-100 text-red-700"
+                                : "bg-accent-purple/10 text-accent-purple")}>
+                              {stageInfo(d).label}
                             </span>
                             {d.page_count ? (
                               <span className="rounded-full bg-surface-muted px-2 py-0.5 text-text-secondary">
@@ -627,7 +671,27 @@ export default function CollectionPage({ params }: { params: { id: string } }) {
                               </span>
                             ) : null}
                           </div>
-                          {p && p.pct > 0 && (
+                          {d.status !== "ready" && d.status !== "failed" && (() => {
+                            const st = stageInfo(d);
+                            return (
+                              <div className="mt-2">
+                                <div className="h-1.5 w-full overflow-hidden rounded-full bg-surface-muted">
+                                  <div className="h-full rounded-full bg-accent-purple transition-all" style={{ width: (st.pct ?? 15) + "%" }} />
+                                </div>
+                                <p className="mt-1 text-[11px] text-text-secondary">{st.pct !== null ? `%${st.pct} · ` : ""}{st.label}</p>
+                              </div>
+                            );
+                          })()}
+                          {d.status === "failed" && (
+                            <div className="mt-2 text-[11px] text-red-700">
+                              <p className="line-clamp-2">{(d as any).error_message || "İşleme başarısız."}</p>
+                              <button onClick={(e) => { e.stopPropagation(); reprocessDoc(d.id); }}
+                                      className="mt-1 flex items-center gap-1 rounded-md border border-red-300 px-2 py-0.5 hover:bg-red-50">
+                                <RefreshCw size={11} /> Yeniden işle
+                              </button>
+                            </div>
+                          )}
+                          {d.status === "ready" && p && p.pct > 0 && (
                             <div className="mt-2">
                               <div className="h-1.5 w-full overflow-hidden rounded-full bg-surface-muted">
                                 <div className="h-full rounded-full bg-accent-purple" style={{ width: p.pct + "%" }} />
@@ -1036,14 +1100,40 @@ export default function CollectionPage({ params }: { params: { id: string } }) {
           <div onClick={(e) => e.stopPropagation()}
                className="flex max-h-[85vh] w-full max-w-lg flex-col rounded-t-2xl border bg-surface sm:rounded-2xl">
             <div className="flex items-center justify-between border-b px-4 py-3">
-              <h3 className="font-medium">Kütüphaneden kaynak ekle</h3>
-              <button onClick={() => setPicker(false)} aria-label="Kapat"
+              <h3 className="font-medium">Kaynak ekle</h3>
+              <button onClick={() => !upBusy && setPicker(false)} aria-label="Kapat"
                       className="rounded-md p-1 text-text-secondary hover:bg-surface-muted">
                 <X size={18} />
               </button>
             </div>
 
+            {/* 1) Bilgisayardan yukle -> dogrudan bu deftere */}
+            <div className="border-b px-4 py-3">
+              <input ref={upRef} type="file" accept="application/pdf" multiple hidden
+                     onChange={(e) => { uploadHere(e.target.files); if (upRef.current) upRef.current.value = ""; }} />
+              <div onClick={() => !upBusy && upRef.current?.click()}
+                   onDragOver={(e) => { e.preventDefault(); setUpDrag(true); }}
+                   onDragLeave={() => setUpDrag(false)}
+                   onDrop={(e) => { e.preventDefault(); setUpDrag(false); uploadHere(e.dataTransfer.files); }}
+                   className={cx("flex cursor-pointer items-center gap-3 rounded-xl border-2 border-dashed px-4 py-3 transition",
+                     upDrag ? "border-accent-purple bg-accent-purple/10" : "border-accent-purple/40 hover:bg-accent-purple/5")}>
+                <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-accent-purple/10 text-accent-purple">
+                  {upBusy ? <Loader2 size={18} className="animate-spin" /> : <Plus size={18} />}
+                </div>
+                <div className="min-w-0">
+                  <p className="text-sm font-medium">
+                    {upBusy ? `Yükleniyor… ${upBusy.done}/${upBusy.total}` : "Bilgisayardan PDF yükle"}
+                  </p>
+                  <p className="text-xs text-text-secondary">
+                    {upBusy ? "Dosyalar bu deftere düşer, işleme arka planda başlar." : "Sürükle-bırak ya da tıkla · çoklu seçim · doğrudan bu deftere eklenir"}
+                  </p>
+                </div>
+              </div>
+            </div>
+
+            {/* 2) Kutuphaneden sec */}
             <div className="border-b px-4 py-2.5">
+              <p className="mb-1.5 text-[11px] font-medium uppercase tracking-wide text-text-secondary">ya da kütüphaneden seç</p>
               <input value={pickQ} onChange={(e) => setPickQ(e.target.value)}
                      placeholder="Belge ara…"
                      className="w-full rounded-lg border bg-surface px-3 py-2 text-sm outline-none focus:border-accent-purple" />

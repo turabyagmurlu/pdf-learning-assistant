@@ -29,8 +29,12 @@ class GeminiEmbeddings(EmbeddingProvider):
         self.key = settings.gemini_api_key.strip()
 
     def embed(self, texts: Sequence[str]) -> list[list[float]]:
+        """Toplu gomme. Kota (429) ve gecici (5xx) hatalarda Google'in onerdigi kadar
+        bekleyip tekrar dener; ucretsiz katmanda 100 istek/dk ve 30K token/dk siniri var."""
         if not texts:
             return []
+        import re
+        import time
         url = f"{BASE}/models/{self.model}:batchEmbedContents?key={self.key}"
         payload = {"requests": [
             {"model": f"models/{self.model}",
@@ -38,12 +42,43 @@ class GeminiEmbeddings(EmbeddingProvider):
              "outputDimensionality": self.dim}
             for t in texts
         ]}
-        try:
-            r = httpx.post(url, json=payload, timeout=60)
-            r.raise_for_status()
-            return [e["values"] for e in r.json()["embeddings"]]
-        except Exception as e:  # noqa
-            raise AiUnavailable(detail=str(e))
+        last = ""
+        for attempt in range(6):
+            try:
+                r = httpx.post(url, json=payload, timeout=90)
+            except httpx.HTTPError as e:
+                last = str(e)
+                time.sleep(4 * (attempt + 1))
+                continue
+            if r.status_code == 200:
+                try:
+                    return [e["values"] for e in r.json()["embeddings"]]
+                except Exception as e:  # noqa
+                    raise AiUnavailable(detail=f"embedding parse: {e}")
+            if r.status_code in (429, 500, 502, 503, 504):
+                wait = 8.0 * (attempt + 1)
+                try:
+                    err = (r.json() or {}).get("error") or {}
+                    last = (err.get("message") or "")[:200]
+                    for d in err.get("details") or []:
+                        if str(d.get("@type", "")).endswith("RetryInfo"):
+                            m = re.match(r"(\d+(?:\.\d+)?)s", str(d.get("retryDelay") or ""))
+                            if m:
+                                wait = min(120.0, float(m.group(1)) + 1.0)
+                    if "PerDay" in last:
+                        raise AiUnavailable("Günlük gömme kotası doldu; yarın otomatik devam eder.", detail=last)
+                except AiUnavailable:
+                    raise
+                except Exception:  # noqa
+                    pass
+                time.sleep(wait)
+                continue
+            try:
+                last = (r.json().get("error") or {}).get("message", "")[:200]
+            except Exception:  # noqa
+                last = r.text[:200]
+            raise AiUnavailable(detail=f"embedding {r.status_code}: {last}")
+        raise AiUnavailable("Gömme servisi yoğun; belge daha sonra yeniden denenecek.", detail=last)
 
 
 class GeminiLLM(LLMProvider):

@@ -4,12 +4,14 @@ import { useRouter } from "next/navigation";
 import { api, API, getToken } from "@/lib/api";
 import { CardSkeleton } from "@/components/Skeleton";
 import PageHeader from "@/components/PageHeader";
-import { UploadCloud, Search, Star, Trash2, Pencil, LayoutGrid, List, MoreVertical, X, FileText, FolderOpen, FolderPlus, Check, BookOpen } from "lucide-react";
+import { stageInfo } from "@/lib/docstage";
+import { UploadCloud, Search, Star, Trash2, Pencil, LayoutGrid, List, MoreVertical, X, FileText, FolderOpen, FolderPlus, Check, BookOpen, RefreshCw } from "lucide-react";
 
 type Doc = {
   id: string; title: string; status: string; processing_stage?: string | null;
   page_count?: number | null; short_summary?: string | null; difficulty_level?: string | null;
   key_concepts?: any; category?: string | null; tags?: any; is_favorite?: boolean; collection_id?: string | null; created_at?: string;
+  progress_done?: number | null; progress_total?: number | null; error_message?: string | null;
 };
 
 const cx = (...a: any[]) => a.filter(Boolean).join(" ");
@@ -135,6 +137,11 @@ export default function LibraryPage() {
     setDocs((prev) => prev.map((d) => (d.id === id ? { ...d, ...body } : d)));
     try { const r = await fetch(API + "/documents/" + id, { method: "PATCH", headers: { Authorization: "Bearer " + getToken(), "Content-Type": "application/json" }, body: JSON.stringify(body) }); if (!r.ok) setDocs(prevDocs); } catch { setDocs(prevDocs); }
   }
+  async function reprocess(id: string) {
+    setDocs((prev) => prev.map((d) => (d.id === id ? { ...d, status: "uploaded", error_message: null } : d)));
+    try { await api("/documents/" + id + "/reprocess", { method: "POST" }); } catch {}
+    reload();
+  }
   async function removeDoc(id: string) {
     const prevDocs = docs;
     setDocs((prev) => prev.filter((d) => d.id !== id));
@@ -232,13 +239,37 @@ export default function LibraryPage() {
               </div>
               {d.short_summary && <p className="mt-1.5 line-clamp-2 text-sm text-text-secondary">{d.short_summary}</p>}
               <div className="mt-2 flex flex-wrap items-center gap-1.5 text-[11px]">
-                <span className={cx("rounded-full px-2 py-0.5", d.status === "ready" ? "bg-green-100 text-green-700" : d.status === "failed" ? "bg-red-100 text-red-700" : "bg-surface-muted text-text-secondary")}>{d.status === "ready" ? "Hazır" : d.status === "failed" ? "Hata" : "İşleniyor"}</span>
+                <span className={cx("rounded-full px-2 py-0.5", d.status === "ready" ? "bg-green-100 text-green-700" : d.status === "failed" ? "bg-red-100 text-red-700" : "bg-accent-purple/10 text-accent-purple")}>{stageInfo(d).label}</span>
                 {d.category && <span className="rounded-full bg-accent-purple/10 px-2 py-0.5 text-accent-purple">{d.category}</span>}
                 {d.difficulty_level && <span className="rounded-full bg-surface-muted px-2 py-0.5 text-text-secondary">{d.difficulty_level}</span>}
                 {d.page_count ? <span className="rounded-full bg-surface-muted px-2 py-0.5 text-text-secondary">{d.page_count} sayfa</span> : null}
                 {toArr(d.tags).slice(0, 4).map((t, i) => <span key={i} className="rounded-full bg-accent-amber/15 px-2 py-0.5 text-accent-amber">#{String(t)}</span>)}
               </div>
-              {prog[d.id] && prog[d.id].pct > 0 && (
+              {d.status !== "ready" && d.status !== "failed" && (() => {
+                const st = stageInfo(d);
+                return (
+                  <div className="mt-2.5">
+                    <div className="h-1.5 w-full overflow-hidden rounded-full bg-surface-muted">
+                      <div className="h-full rounded-full bg-accent-purple transition-all"
+                           style={{ width: (st.pct ?? 15) + "%" }} />
+                    </div>
+                    <p className="mt-1 text-[11px] text-text-secondary">
+                      {st.pct !== null ? `%${st.pct} · ` : ""}{st.label}
+                      {d.status === "uploaded" ? " — en fazla 2 belge aynı anda işlenir" : ""}
+                    </p>
+                  </div>
+                );
+              })()}
+              {d.status === "failed" && (
+                <div className="mt-2.5 rounded-lg bg-red-50 px-2.5 py-2 text-[11px] text-red-700 dark:bg-red-950/30 dark:text-red-300">
+                  <p>{d.error_message || "İşleme başarısız."}</p>
+                  <button onClick={(e) => { e.stopPropagation(); reprocess(d.id); }}
+                          className="mt-1.5 flex items-center gap-1 rounded-md border border-red-300 px-2 py-1 text-red-700 hover:bg-red-100 dark:border-red-800 dark:text-red-300">
+                    <RefreshCw size={12} /> Yeniden işle
+                  </button>
+                </div>
+              )}
+              {d.status === "ready" && prog[d.id] && prog[d.id].pct > 0 && (
                 <div className="mt-2.5">
                   <div className="h-1.5 w-full overflow-hidden rounded-full bg-surface-muted">
                     <div className="h-full rounded-full bg-accent-purple transition-all" style={{ width: prog[d.id].pct + "%" }} />
