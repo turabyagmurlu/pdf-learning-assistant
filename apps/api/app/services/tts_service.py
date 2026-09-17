@@ -15,6 +15,16 @@ from app.core.errors import AiUnavailable
 BASE = "https://generativelanguage.googleapis.com/v1beta"
 
 
+class TtsBusy(AiUnavailable):
+    """Gemini modeli gecici olarak yogun (500/503/504). Beklenip tekrar denenir."""
+
+    code, status = "TTS_BUSY", 503
+
+    def __init__(self, user_message: str | None = None, retry_after: int = 8):
+        super().__init__(user_message)
+        self.retry_after = retry_after
+
+
 class TtsQuota(AiUnavailable):
     """Gemini ses kotasi doldu (429). retry_after: onerilen bekleme (sn)."""
 
@@ -152,6 +162,8 @@ def synthesize_pcm(text: str, voice: str = DEFAULT_VOICE, style: str = "") -> by
         r = httpx.post(url, json=payload, timeout=httpx.Timeout(connect=10, read=170, write=30, pool=10))
         if r.status_code == 429:
             raise _quota_from_response(r)
+        if r.status_code in (500, 502, 503, 504):
+            raise TtsBusy("Ses motoru şu an yoğun; birkaç saniye içinde tekrar denenecek.")
         if r.status_code >= 400:
             detail = ""
             try:
@@ -179,5 +191,16 @@ def synthesize_pcm(text: str, voice: str = DEFAULT_VOICE, style: str = "") -> by
 
 
 def synthesize(text: str, voice: str = DEFAULT_VOICE, style: str = "") -> bytes:
-    """Tek parca WAV (kisa metinler icin)."""
-    return wav_from_pcm(synthesize_pcm(text, voice, style))
+    """Tek parca WAV (kisa metinler icin); gecici yogunlukta kendi kendine tekrar dener."""
+    import time as _time
+    last: Exception | None = None
+    for attempt in range(3):
+        try:
+            return wav_from_pcm(synthesize_pcm(text, voice, style))
+        except TtsBusy as e:
+            last = e
+            if attempt < 2:
+                _time.sleep(e.retry_after)
+        except Exception as e:  # noqa - kota ve diger hatalar dogrudan yukari
+            raise
+    raise last or AiUnavailable("Seslendirme başarısız.")

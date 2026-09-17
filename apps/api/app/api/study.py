@@ -9,7 +9,7 @@ from app.deps import db, current_user
 from app.core.errors import NotFound, AppError
 from app.services.analysis_service import generate_study_items, cards_from_text, explain_page
 from app.services.tts_service import (synthesize, synthesize_pcm, wav_from_pcm, split_for_tts,
-                                      cache_key, TtsQuota, FEMALE_VOICES, DEFAULT_VOICE)
+                                      cache_key, TtsQuota, TtsBusy, FEMALE_VOICES, DEFAULT_VOICE)
 from app.db.session import get_pool
 
 router = APIRouter(tags=["study"])
@@ -219,20 +219,27 @@ async def _run_tts_job(job_id: str, chunks: list[str], voice: str, style: str, k
                 parts.append(hit)
                 job["done"] = i + 1
                 continue
-            for attempt in range(4):
+            for attempt in range(5):
                 try:
                     pcm = await asyncio.to_thread(synthesize_pcm, text, voice, style)
                     parts.append(pcm)
                     await _cache_put("pcm:" + ck, pcm, len(text))
                     break
                 except TtsQuota as q:
-                    if q.daily or attempt == 3:
+                    if q.daily or attempt == 4:
                         raise
                     job["waiting"] = int(q.retry_after)
                     job["note"] = f"Kota doldu; {int(q.retry_after)} sn bekleniyor…"
                     await asyncio.sleep(q.retry_after)
-                    job["waiting"] = 0
-                    job["note"] = ""
+                    job["waiting"], job["note"] = 0, ""
+                except TtsBusy as b:
+                    if attempt == 4:
+                        raise
+                    wait = b.retry_after * (attempt + 1)     # 8, 16, 24, 32 sn
+                    job["waiting"] = wait
+                    job["note"] = f"Ses motoru yoğun; {wait} sn sonra tekrar denenecek…"
+                    await asyncio.sleep(wait)
+                    job["waiting"], job["note"] = 0, ""
                 except Exception:  # noqa
                     if attempt >= 1:
                         raise
