@@ -1,3 +1,4 @@
+import asyncio
 import json
 import uuid
 from datetime import datetime, timedelta, timezone
@@ -60,7 +61,8 @@ async def generate(doc_id: str, body: GenerateIn, conn=Depends(db), user=Depends
             kc = []
     kc_txt = ", ".join(str(k.get("term") if isinstance(k, dict) else k) for k in (kc or [])[:15])
     hint = f"Başlık: {doc['title']}\nÖzet: {doc['short_summary'] or ''}\nKavramlar: {kc_txt}"
-    items = generate_study_items(context, body.type, max(1, min(20, body.count)), existing=existing, topic_hint=hint)
+    items = await asyncio.to_thread(generate_study_items, context, body.type, max(1, min(20, body.count)),
+                                     existing=existing, topic_hint=hint)
     created = []
     for it in items:
         sid = str(uuid.uuid4())
@@ -90,7 +92,7 @@ async def study_from_text(doc_id: str, body: FromTextIn, conn=Depends(db), user=
     txt = (body.text or "").strip()
     if len(txt) < 15:
         raise AppError("Seçilen metin çok kısa. Biraz daha uzun bir bölüm seç.")
-    items = cards_from_text(txt, max(1, min(5, body.count)))
+    items = await asyncio.to_thread(cards_from_text, txt, max(1, min(5, body.count)))
     created = 0
     for it in items:
         sid = str(uuid.uuid4())
@@ -124,7 +126,7 @@ async def explain(doc_id: str, body: ExplainIn, conn=Depends(db), user=Depends(c
         txt = "\n".join(r["content"] for r in rows).strip()
     if len(txt) < 40:
         raise AppError("Bu sayfada anlatılacak yeterli metin bulunamadı.")
-    return {"explanation": explain_page(txt)}
+    return {"explanation": await asyncio.to_thread(explain_page, txt)}
 
 
 class TtsIn(BaseModel):
@@ -146,7 +148,7 @@ async def tts(body: TtsIn, user=Depends(current_user)):
     txt = (body.text or "").strip()
     if len(txt) < 2:
         raise AppError("Seslendirilecek metin boş.")
-    wav = synthesize(txt, body.voice or DEFAULT_VOICE, body.style or "")
+    wav = await asyncio.to_thread(synthesize, txt, body.voice or DEFAULT_VOICE, body.style or "")
     return Response(content=wav, media_type="audio/wav",
                     headers={"Cache-Control": "no-store"})
 

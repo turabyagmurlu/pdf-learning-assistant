@@ -1,3 +1,4 @@
+import asyncio
 import json
 import uuid
 from datetime import datetime, timezone
@@ -174,7 +175,7 @@ async def ask_collection(cid: str, body: AskIn, conn=Depends(db), user=Depends(c
             "biçiminde belirt. Sade ve öğretici anlat."},
         {"role": "user", "content": f"Kaynaklar:\n\n{ctx}\n\nSoru: {q}"},
     ]
-    answer = llm.complete(messages, model=settings.active_llm_model)
+    answer = await asyncio.to_thread(llm.complete, messages, model=settings.active_llm_model)
     sources = [{"document_id": str(c["document_id"]), "title": c.get("doc_title"),
                 "page": c["page_number"], "score": round(float(c["score"]), 3)} for c in chunks]
     return {"answer": answer, "sources": sources}
@@ -207,7 +208,7 @@ async def feynman(cid: str, body: FeynmanIn, conn=Depends(db), user=Depends(curr
     if not chunks:
         raise AppError("Bu kavramla ilgili kaynak bulamadım. Farklı bir kavram dene.")
     ctx = rag_service.build_context(chunks)
-    review = feynman_review(concept, expl, ctx)
+    review = await asyncio.to_thread(feynman_review, concept, expl, ctx)
     sources = [{"document_id": str(c["document_id"]), "title": c.get("doc_title"),
                 "page": c["page_number"]} for c in chunks[:5]]
     return {"review": review, "sources": sources}
@@ -233,7 +234,7 @@ async def lecture(cid: str, conn=Depends(db), user=Depends(current_user)):
     context = "\n".join(parts) + "\n\n" + "\n\n".join(r["content"] for r in rows)
     if len(context) < 200:
         raise AppError("Ders oluşturmak için yeterli içerik yok.")
-    script = lecture_script(context, col["title"])
+    script = await asyncio.to_thread(lecture_script, context, col["title"])
     return {"script": script, "title": col["title"], "documents": len(docs)}
 
 
@@ -294,7 +295,7 @@ async def build_glossary(cid: str, conn=Depends(db), user=Depends(current_user))
         if len(ctx) < 200:
             continue
         try:
-            items = extract_glossary(ctx, d["title"])
+            items = await asyncio.to_thread(extract_glossary, ctx, d["title"])
         except Exception:
             continue
         for it in items:
@@ -369,7 +370,7 @@ async def build_concept_map(cid: str, conn=Depends(db), user=Depends(current_use
         doc_terms = [it["term"] for it in items
                      if any(m.get("document_id") == str(d["id"]) for m in it.get("mentions", []))] or terms
         try:
-            rels = extract_relations(ctx, d["title"], doc_terms)
+            rels = await asyncio.to_thread(extract_relations, ctx, d["title"], doc_terms)
         except Exception:
             continue
         for r in rels:
@@ -422,7 +423,7 @@ async def build_timeline(cid: str, conn=Depends(db), user=Depends(current_user))
         if len(ctx) < 200:
             continue
         try:
-            evs = extract_timeline(ctx, d["title"])
+            evs = await asyncio.to_thread(extract_timeline, ctx, d["title"])
         except Exception:
             continue
         for ev in evs:
@@ -486,9 +487,9 @@ async def draft_assist(cid: str, body: DraftAssistIn, conn=Depends(db), user=Dep
         # embedding ile siralama
         try:
             emb = get_embeddings()
-            qv = emb.embed([text])[0]
+            qv = (await asyncio.to_thread(emb.embed, [text]))[0]
             cands = [r["selected_text"] for r in rows]
-            vs = emb.embed(cands)
+            vs = await asyncio.to_thread(emb.embed, cands)
             import math
             def cos(a, b):
                 dot = sum(x * y for x, y in zip(a, b)); na = math.sqrt(sum(x * x for x in a)); nb = math.sqrt(sum(y * y for y in b))
@@ -503,7 +504,7 @@ async def draft_assist(cid: str, body: DraftAssistIn, conn=Depends(db), user=Dep
         why = ""
         try:
             listing = "\n".join(f"[{i+1}] {t['text'][:300]}" for i, t in enumerate(top[:4]))
-            why = llm.complete([
+            why = await asyncio.to_thread(llm.complete, [
                 {"role": "system", "content": "Yalnızca Türkçe. Çok kısa yaz."},
                 {"role": "user", "content": f"Paragraf:\n{text}\n\nAday alıntılar:\n{listing}\n\n"
                                             "Her aday için tek satır: [n] bu paragrafı nasıl destekler ya da desteklemez. En fazla 4 satır."},
@@ -513,7 +514,7 @@ async def draft_assist(cid: str, body: DraftAssistIn, conn=Depends(db), user=Dep
         return {"action": body.action, "suggestions": top, "why": why}
     else:
         raise AppError("Bilinmeyen işlem.")
-    out = llm.complete([{"role": "system", "content": sysm}, {"role": "user", "content": usr}], model=settings.active_llm_model)
+    out = await asyncio.to_thread(llm.complete, [{"role": "system", "content": sysm}, {"role": "user", "content": usr}], model=settings.active_llm_model)
     return {"action": body.action, "text": (out or "").strip()}
 
 
@@ -541,7 +542,7 @@ async def collection_study(cid: str, body: ColStudyIn, conn=Depends(db), user=De
     context = "\n\n".join(r["content"] for r in rows)
     if len(context) < 100:
         raise AppError("Kart üretmek için yeterli içerik bulunamadı.")
-    items = generate_study_items(context, body.type, per)
+    items = await asyncio.to_thread(generate_study_items, context, body.type, per)
     created = 0
     first_doc = ids[0]
     for it in items:
@@ -565,7 +566,7 @@ class SearchIn(BaseModel):
 @router.post("/search")
 async def search(body: SearchIn, conn=Depends(db), user=Depends(current_user)):
     """Kullanıcının belgeleri arasında semantik arama (çoklu belge)."""
-    emb = get_embeddings().embed([body.query])[0]
+    emb = (await asyncio.to_thread(get_embeddings().embed, [body.query]))[0]
     if body.document_ids:
         rows = await conn.fetch(
             """SELECT dc.id, dc.document_id, dc.page_number, dc.section_title, dc.content,

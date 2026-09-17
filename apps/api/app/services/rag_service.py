@@ -1,10 +1,11 @@
+import asyncio
 from app.ai.provider import EmbeddingProvider
 
 MIN_SCORE = 0.20
 
 
 async def retrieve(conn, document_id: str, question: str, embedder: EmbeddingProvider, k: int = 8):
-    q_emb = embedder.embed([question])[0]
+    q_emb = (await asyncio.to_thread(embedder.embed, [question]))[0]
     rows = await conn.fetch(
         """
         SELECT id, page_number, section_title, content,
@@ -29,7 +30,7 @@ async def retrieve_many(conn, document_ids: list[str], question: str,
     """Birden fazla belge icinde arama (calisma kitabi icin)."""
     if not document_ids:
         return []
-    q_emb = embedder.embed([question])[0]
+    q_emb = (await asyncio.to_thread(embedder.embed, [question]))[0]
     rows = await conn.fetch(
         """
         SELECT dc.id, dc.page_number, dc.section_title, dc.content,

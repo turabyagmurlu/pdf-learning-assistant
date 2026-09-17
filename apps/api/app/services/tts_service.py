@@ -68,9 +68,16 @@ def synthesize(text: str, voice: str = DEFAULT_VOICE, style: str = "") -> bytes:
         },
     }
     try:
-        r = httpx.post(url, json=payload, timeout=120)
+        r = httpx.post(url, json=payload, timeout=httpx.Timeout(connect=10, read=100, write=30, pool=10))
+        if r.status_code == 429:
+            raise AiUnavailable("Seslendirme kotası doldu. Biraz sonra tekrar dene.")
         if r.status_code >= 400:
-            raise AiUnavailable(f"Seslendirme başarısız (kod {r.status_code}).")
+            detail = ""
+            try:
+                detail = (r.json().get("error") or {}).get("message", "")[:160]
+            except Exception:
+                pass
+            raise AiUnavailable(f"Seslendirme başarısız (kod {r.status_code}). {detail}".strip())
         data = r.json()
         parts = data["candidates"][0]["content"]["parts"]
         b64 = None
@@ -85,5 +92,7 @@ def synthesize(text: str, voice: str = DEFAULT_VOICE, style: str = "") -> bytes:
         return _wav_header(len(pcm)) + pcm
     except AiUnavailable:
         raise
+    except httpx.TimeoutException:
+        raise AiUnavailable("Seslendirme çok uzun sürdü. Metni kısaltıp tekrar dene.")
     except Exception:  # noqa
         raise AiUnavailable("Seslendirme servisi şu an yanıt vermiyor.")
