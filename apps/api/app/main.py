@@ -33,6 +33,17 @@ async def lifespan(app: FastAPI):
             await conn.execute("ALTER TABLE collections ADD COLUMN IF NOT EXISTS draft_at timestamptz")
             await conn.execute("ALTER TABLE collections ADD COLUMN IF NOT EXISTS lecture text")
             await conn.execute("ALTER TABLE collections ADD COLUMN IF NOT EXISTS lecture_at timestamptz")
+            # Belge bazli cikarim onbellegi: sozluk/iliski/olay sonucu belgeye yazilir,
+            # "Yenile" yalniz yeni belgeler icin LLM'e gider.
+            await conn.execute(
+                "CREATE TABLE IF NOT EXISTS doc_extracts ("
+                " document_id uuid NOT NULL REFERENCES documents(id) ON DELETE CASCADE,"
+                " kind text NOT NULL,"
+                " input_hash text NOT NULL,"
+                " payload jsonb,"
+                " created_at timestamptz NOT NULL DEFAULT now(),"
+                " PRIMARY KEY (document_id, kind))"
+            )
             # Isleme ilerlemesi (gomulen parca / toplam parca) ve kaldigi yerden devam icin tekillik
             await conn.execute("ALTER TABLE documents ADD COLUMN IF NOT EXISTS progress_done int DEFAULT 0")
             await conn.execute("ALTER TABLE documents ADD COLUMN IF NOT EXISTS progress_total int DEFAULT 0")

@@ -8,6 +8,7 @@ import { stageInfo } from "@/lib/docstage";
 import CitedText from "@/components/CitedText";
 import { useRefreshOn } from "@/components/Wake";
 import { useConfirm } from "@/components/Confirm";
+import NotebookSearch from "@/components/NotebookSearch";
 import { Skeleton, CardSkeleton } from "@/components/Skeleton";
 import ConceptMap, { CMNode, CMEdge } from "@/components/ConceptMap";
 import DraftEditor, { Block } from "@/components/DraftEditor";
@@ -90,6 +91,79 @@ export default function CollectionPage({ params }: { params: { id: string } }) {
   const [cmAt, setCmAt] = useState<string | null>(null);
   const [cmBusy, setCmBusy] = useState(false);
   const [cmErr, setCmErr] = useState("");
+
+  // Kota bilinci: her belgenin cikarimi belgeye kaydedilir; "Yenile" yalniz yeni belgeleri isler.
+  type ExtKind = "glossary" | "relations" | "timeline";
+  const [extStat, setExtStat] = useState<Record<ExtKind, { cached: number; pending: number }> | null>(null);
+  const [extNote, setExtNote] = useState<Record<string, string>>({});
+  async function loadExtractStatus() {
+    try {
+      const r = await api(`/collections/${id}/extract-status`);
+      const s = { glossary: r.glossary, relations: r.relations, timeline: r.timeline };
+      setExtStat(s); return s;
+    } catch { setExtStat(null); return null; }
+  }
+  useEffect(() => { if (["sozluk", "harita", "zaman"].includes(tab)) loadExtractStatus(); /* eslint-disable-line */ }, [tab]);
+
+  /** Yenile dugmesi: kac kaynagin yeni isleneceğini soyler; hepsi hazirsa "kota harcamaz" der. */
+  function RefreshBtn({ kind, busy, onClick, small }: { kind: ExtKind; busy: boolean; onClick: () => void; small?: boolean }) {
+    const st = extStat?.[kind];
+    const pending = st?.pending ?? 0, cached = st?.cached ?? 0;
+    const label = busy ? "İşleniyor…"
+      : !st ? "Yenile"
+      : pending > 0 ? `${pending} yeni kaynağı işle`
+      : cached > 0 ? "Yenile (kota harcamaz)"
+      : "Oluştur";
+    const tip = !st ? "Belgeler değiştiyse yeniden çıkar"
+      : pending > 0 ? `${pending} kaynak ilk kez işlenecek (kota), ${cached} kaynak hazırdan gelir`
+      : "Tüm kaynaklar daha önce işlenmiş; birleştirme kota harcamaz";
+    return (
+      <span className="flex items-center gap-2">
+        <button onClick={onClick} disabled={busy} title={tip}
+                className={cx("flex items-center gap-1.5 rounded-xl border text-text-secondary hover:border-accent-purple/50 disabled:opacity-60",
+                  small ? "px-2.5 py-1.5 text-xs" : "px-3 py-2 text-sm",
+                  pending > 0 && "border-accent-amber/50 text-accent-amber")}>
+          {busy ? <Loader2 size={small ? 13 : 14} className="animate-spin" /> : <RefreshCw size={small ? 13 : 14} />} {label}
+        </button>
+        {extNote[kind] && <span className="text-[11px] text-text-secondary">{extNote[kind]}</span>}
+      </span>
+    );
+  }
+
+  /** Yenile: yeni belge yoksa kota harcanmaz; sifirdan uretmek icin force (onayli). */
+  async function refreshWithBudget(kind: ExtKind, run: (force: boolean) => Promise<any>) {
+    const fresh = await loadExtractStatus();       // her seferinde guncel say
+    const st = fresh?.[kind];
+    const pending = st?.pending ?? 0, cached = st?.cached ?? 0;
+    let force = false;
+    if (pending === 0 && cached > 0) {
+      const again = await confirm({
+        title: "Yeni kaynak yok",
+        description: `${cached} kaynağın hepsi daha önce işlenmiş. Kota harcamadan mevcut sonuçlar yeniden birleştirilir.`,
+        keeps: ["Birleştir: anında, kota harcamaz (önerilen)"],
+        losses: ["Sıfırdan üret: her kaynak yeniden yapay zekâya gider, günlük kotadan " + cached + " istek düşer"],
+        confirmLabel: "Birleştir", cancelLabel: "Sıfırdan üret",
+      });
+      force = !again;      // "Sifirdan uret" secildiyse force
+      if (force) {
+        const ok = await confirm({
+          title: `${cached} kaynak sıfırdan işlensin mi?`,
+          description: "Bu, günlük yapay zekâ kotasından " + cached + " istek harcar. Sadece sonuçlardan memnun değilsen gerekli.",
+          confirmLabel: "Evet, sıfırdan üret", danger: true,
+        });
+        if (!ok) return;
+      }
+    } else if (pending > 0 && cached > 0) {
+      setExtNote((n) => ({ ...n, [kind]: `${cached} kaynak hazırdan, ${pending} kaynak için kota harcanıyor…` }));
+    } else if (pending > 0) {
+      setExtNote((n) => ({ ...n, [kind]: `${pending} kaynak işleniyor…` }));
+    }
+    const r = await run(force);
+    setExtNote((n) => ({ ...n, [kind]: r && typeof r.cached === "number"
+      ? `${r.cached} kaynak önbellekten, ${r.fresh} kaynak yeni işlendi` : "" }));
+    loadExtractStatus();
+    return r;
+  }
   async function loadMap() {
     try { const r = await api(`/collections/${id}/concept-map`); setCm({ nodes: r?.nodes || [], edges: r?.edges || [] }); setCmAt(r?.generated_at || null); }
     catch { setCm({ nodes: [], edges: [] }); }
@@ -98,7 +172,9 @@ export default function CollectionPage({ params }: { params: { id: string } }) {
   async function buildMap() {
     setCmBusy(true); setCmErr("");
     try {
-      const r = await api(`/collections/${id}/concept-map`, { method: "POST" });
+      const r = await refreshWithBudget("relations", (force) =>
+        api(`/collections/${id}/concept-map${force ? "?force=1" : ""}`, { method: "POST" }));
+      if (!r) return;
       setCm({ nodes: r?.nodes || [], edges: r?.edges || [] }); setCmAt(r?.generated_at || null);
       if (!(r?.nodes || []).length) setCmErr("Harita için madde bulunamadı.");
     } catch (e: any) { setCmErr(e?.message || "Harita oluşturulamadı."); if (cm === null) setCm({ nodes: [], edges: [] }); }
@@ -120,7 +196,9 @@ export default function CollectionPage({ params }: { params: { id: string } }) {
   async function buildTimeline() {
     setTBusy(true); setTErr("");
     try {
-      const r = await api(`/collections/${id}/timeline`, { method: "POST" });
+      const r = await refreshWithBudget("timeline", (force) =>
+        api(`/collections/${id}/timeline${force ? "?force=1" : ""}`, { method: "POST" }));
+      if (!r) return;
       setTEvents(r?.events || []); setTAt(r?.generated_at || null);
       if (!(r?.events || []).length) setTErr("Belgelerde tarihli olay bulunamadı.");
     } catch (e: any) { setTErr(e?.message || "Zaman çizelgesi oluşturulamadı."); if (tEvents === null) setTEvents([]); }
@@ -299,7 +377,9 @@ export default function CollectionPage({ params }: { params: { id: string } }) {
   async function buildGlossary() {
     setGBusy(true); setGErr("");
     try {
-      const r = await api(`/collections/${id}/glossary`, { method: "POST" });
+      const r = await refreshWithBudget("glossary", (force) =>
+        api(`/collections/${id}/glossary${force ? "?force=1" : ""}`, { method: "POST" }));
+      if (!r) return;
       setGItems(r?.items || []); setGAt(r?.generated_at || null);
       if (!(r?.items || []).length) setGErr("Belgelerden madde çıkarılamadı.");
     } catch (e: any) {
@@ -649,6 +729,9 @@ export default function CollectionPage({ params }: { params: { id: string } }) {
       {/* RAF */}
       {tab === "raf" && (
         <div className="mt-5">
+          {docs.some((d) => d.status === "ready") && (
+            <NotebookSearch collectionId={id} readyCount={docs.filter((d) => d.status === "ready").length} />
+          )}
           {docs.length === 0 ? (
             <div className="rounded-2xl border border-dashed p-10 text-center">
               <p className="text-text-secondary">
@@ -826,10 +909,7 @@ export default function CollectionPage({ params }: { params: { id: string } }) {
                   <input value={gQ} onChange={(e) => setGQ(e.target.value)} placeholder="Ara: ad, kavram, açıklama…"
                          className="w-full bg-transparent py-2 text-sm outline-none" />
                 </div>
-                <button onClick={buildGlossary} disabled={gBusy} title="Belgeler değiştiyse yeniden çıkar"
-                        className="flex items-center gap-1.5 rounded-xl border px-3 py-2 text-sm text-text-secondary hover:border-accent-purple/50 disabled:opacity-60">
-                  {gBusy ? <Loader2 size={14} className="animate-spin" /> : <RefreshCw size={14} />} Yenile
-                </button>
+                <RefreshBtn kind="glossary" busy={gBusy} onClick={buildGlossary} />
               </div>
 
               <div className="mt-3 flex flex-wrap gap-1.5">
@@ -926,10 +1006,7 @@ export default function CollectionPage({ params }: { params: { id: string } }) {
             <>
               <div className="mb-2 flex items-center justify-between">
                 <p className="text-sm text-text-secondary">{cm.nodes.length} madde · {cm.edges.length} ilişki</p>
-                <button onClick={buildMap} disabled={cmBusy} title="Belgeler değiştiyse yeniden çıkar"
-                        className="flex items-center gap-1.5 rounded-xl border px-3 py-1.5 text-xs text-text-secondary hover:border-accent-purple/50 disabled:opacity-60">
-                  {cmBusy ? <Loader2 size={13} className="animate-spin" /> : <RefreshCw size={13} />} Yenile
-                </button>
+                <RefreshBtn kind="relations" busy={cmBusy} onClick={buildMap} small />
               </div>
               <ConceptMap nodes={cm.nodes} edges={cm.edges} height={Math.max(420, Math.min(720, 300 + cm.nodes.length * 8))} />
               {cmAt && <p className="mt-1 text-[11px] text-text-secondary">Oluşturma: {new Date(cmAt).toLocaleDateString("tr-TR")}</p>}
@@ -987,10 +1064,7 @@ export default function CollectionPage({ params }: { params: { id: string } }) {
                       {docsIn.map(([did, t]) => <option key={did} value={did}>{t}</option>)}
                     </select>
                   )}
-                  <button onClick={buildTimeline} disabled={tBusy} title="Belgeler değiştiyse yeniden çıkar"
-                          className="ml-auto flex items-center gap-1.5 rounded-xl border px-3 py-1.5 text-xs text-text-secondary hover:border-accent-purple/50 disabled:opacity-60">
-                    {tBusy ? <Loader2 size={13} className="animate-spin" /> : <RefreshCw size={13} />} Yenile
-                  </button>
+                  <span className="ml-auto"><RefreshBtn kind="timeline" busy={tBusy} onClick={buildTimeline} small /></span>
                 </div>
 
                 <div className="relative mt-6 pl-6">

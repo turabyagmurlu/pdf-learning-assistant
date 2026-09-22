@@ -1,5 +1,6 @@
 import asyncio
 import json
+import re
 import uuid
 from datetime import datetime, timezone
 from fastapi import APIRouter, Depends
@@ -287,9 +288,63 @@ async def get_glossary(cid: str, conn=Depends(db), user=Depends(current_user)):
             "generated_at": col["glossary_at"].isoformat() if col["glossary_at"] else None}
 
 
+# ---- Belge bazli cikarim onbellegi -------------------------------------------
+# Sozluk / iliski / olay cikarimi belge basina yapilir ve sonuc BELGEYE yazilir.
+# Boylece "Yenile" yalniz yeni (ya da degisen) belgeler icin LLM'e gider;
+# 17 kaynakli defterde 1 yeni kaynak = 1 istek, 17 degil. Kota boşa yanmaz.
+
+def _ctx_hash(ctx: str, extra: str = "") -> str:
+    import hashlib
+    return hashlib.sha256((ctx + "\x00" + extra).encode("utf-8")).hexdigest()[:24]
+
+
+async def _extract_cached(conn, doc_id, kind: str, ctx: str, extra: str, fn, *args):
+    """Onbellekte ayni girdiye ait sonuc varsa onu dondur; yoksa uret ve sakla.
+    Donen: (sonuc_listesi, onbellekten_mi)"""
+    h = _ctx_hash(ctx, extra)
+    row = await conn.fetchrow(
+        "SELECT payload FROM doc_extracts WHERE document_id=$1 AND kind=$2 AND input_hash=$3", doc_id, kind, h)
+    if row and row["payload"] is not None:
+        p = row["payload"]
+        if isinstance(p, str):
+            try:
+                p = json.loads(p)
+            except Exception:
+                p = None
+        if isinstance(p, list):
+            return p, True
+    out = await asyncio.to_thread(fn, *args)
+    await conn.execute(
+        """INSERT INTO doc_extracts (document_id, kind, input_hash, payload, created_at)
+           VALUES ($1,$2,$3,$4,now())
+           ON CONFLICT (document_id, kind) DO UPDATE SET input_hash=EXCLUDED.input_hash,
+             payload=EXCLUDED.payload, created_at=now()""",
+        doc_id, kind, h, out)
+    return out, False
+
+
+@router.get("/collections/{cid}/extract-status")
+async def extract_status(cid: str, conn=Depends(db), user=Depends(current_user)):
+    """Yenile butonuna basmadan once: kac belge onbellekte, kac belge yeni islenecek?
+    Arayuz bunu 'X belge hazir, Y belge icin kota harcanir' diye gosterir."""
+    col = await conn.fetchrow("SELECT id FROM collections WHERE id=$1 AND user_id=$2", cid, user["id"])
+    if not col:
+        raise NotFound("Defter bulunamadı.")
+    docs = await conn.fetch(
+        "SELECT id FROM documents WHERE user_id=$1 AND collection_id=$2 AND status='ready'", user["id"], cid)
+    ids = [d["id"] for d in docs]
+    out = {}
+    for kind in ("glossary", "relations", "timeline"):
+        n = await conn.fetchval(
+            "SELECT count(*) FROM doc_extracts WHERE kind=$1 AND document_id = ANY($2::uuid[])", kind, ids) if ids else 0
+        out[kind] = {"cached": int(n or 0), "pending": max(0, len(ids) - int(n or 0))}
+    return {"documents": len(ids), **out}
+
+
 @router.post("/collections/{cid}/glossary")
-async def build_glossary(cid: str, conn=Depends(db), user=Depends(current_user)):
-    """Kitaptaki tum belgelerden kisi / yer / olay / antlasma / kurum / kavram sozlugu cikarir."""
+async def build_glossary(cid: str, force: bool = False, conn=Depends(db), user=Depends(current_user)):
+    """Kitaptaki tum belgelerden kisi / yer / olay / antlasma / kurum / kavram sozlugu cikarir.
+    force=1 -> onbellegi yok say, her belgeyi yeniden uret (kota harcar)."""
     col = await conn.fetchrow("SELECT id, title FROM collections WHERE id=$1 AND user_id=$2", cid, user["id"])
     if not col:
         raise NotFound("Çalışma kitabı bulunamadı.")
@@ -300,6 +355,7 @@ async def build_glossary(cid: str, conn=Depends(db), user=Depends(current_user))
         raise AppError("Bu çalışma kitabında hazır belge yok.")
 
     merged: dict[str, dict] = {}
+    cached_n = fresh_n = 0
     for d in docs:
         rows = await conn.fetch(
             "SELECT content, page_number FROM document_chunks WHERE document_id=$1 ORDER BY chunk_index", d["id"])
@@ -307,7 +363,10 @@ async def build_glossary(cid: str, conn=Depends(db), user=Depends(current_user))
         if len(ctx) < 200:
             continue
         try:
-            items = await asyncio.to_thread(extract_glossary, ctx, d["title"])
+            if force:
+                await conn.execute("DELETE FROM doc_extracts WHERE document_id=$1 AND kind='glossary'", d["id"])
+            items, hit = await _extract_cached(conn, d["id"], "glossary", ctx, "", extract_glossary, ctx, d["title"])
+            cached_n += int(hit); fresh_n += int(not hit)
         except Exception:
             continue
         for it in items:
@@ -324,7 +383,8 @@ async def build_glossary(cid: str, conn=Depends(db), user=Depends(current_user))
     payload = {"items": items}
     now = datetime.now(timezone.utc)
     await conn.execute("UPDATE collections SET glossary=$1, glossary_at=$2 WHERE id=$3", payload, now, cid)
-    return {"items": items, "generated_at": now.isoformat(), "documents": len(docs)}
+    return {"items": items, "generated_at": now.isoformat(), "documents": len(docs),
+            "cached": cached_n, "fresh": fresh_n}
 
 
 @router.get("/collections/{cid}/concept-map")
@@ -345,9 +405,9 @@ async def get_concept_map(cid: str, conn=Depends(db), user=Depends(current_user)
 
 
 @router.post("/collections/{cid}/concept-map")
-async def build_concept_map(cid: str, conn=Depends(db), user=Depends(current_user)):
+async def build_concept_map(cid: str, force: bool = False, conn=Depends(db), user=Depends(current_user)):
     """Sozluk maddelerini dugum, metindeki iliskileri kenar yaparak kavram haritasi kurar.
-    Sozluk yoksa once onu uretir."""
+    Sozluk yoksa once onu uretir. force=1 -> belge onbellegini yok say."""
     col = await conn.fetchrow("SELECT id, title, glossary FROM collections WHERE id=$1 AND user_id=$2", cid, user["id"])
     if not col:
         raise NotFound("Çalışma kitabı bulunamadı.")
@@ -359,8 +419,9 @@ async def build_concept_map(cid: str, conn=Depends(db), user=Depends(current_use
             g = None
     items = (g or {}).get("items", []) if isinstance(g, dict) else []
     if not items:
-        r = await build_glossary(cid, conn, user)  # type: ignore[arg-type]
+        r = await build_glossary(cid, force, conn, user)  # type: ignore[arg-type]
         items = r["items"]
+    cached_n = fresh_n = 0
     if not items:
         raise AppError("Sözlük boş; önce belge ekle.")
     terms = [it["term"] for it in items]
@@ -382,7 +443,12 @@ async def build_concept_map(cid: str, conn=Depends(db), user=Depends(current_use
         doc_terms = [it["term"] for it in items
                      if any(m.get("document_id") == str(d["id"]) for m in it.get("mentions", []))] or terms
         try:
-            rels = await asyncio.to_thread(extract_relations, ctx, d["title"], doc_terms)
+            if force:
+                await conn.execute("DELETE FROM doc_extracts WHERE document_id=$1 AND kind='relations'", d["id"])
+            # Terim listesi degisirse iliskiler de yeniden cikarilmali -> hash'e katiyoruz
+            rels, hit = await _extract_cached(conn, d["id"], "relations", ctx, "|".join(sorted(doc_terms)),
+                                              extract_relations, ctx, d["title"], doc_terms)
+            cached_n += int(hit); fresh_n += int(not hit)
         except Exception:
             continue
         for r in rels:
@@ -396,7 +462,8 @@ async def build_concept_map(cid: str, conn=Depends(db), user=Depends(current_use
     payload = {"nodes": nodes, "edges": edges}
     now = datetime.now(timezone.utc)
     await conn.execute("UPDATE collections SET concept_map=$1, concept_map_at=$2 WHERE id=$3", payload, now, cid)
-    return {"nodes": nodes, "edges": edges, "generated_at": now.isoformat()}
+    return {"nodes": nodes, "edges": edges, "generated_at": now.isoformat(),
+            "cached": cached_n, "fresh": fresh_n}
 
 
 @router.get("/collections/{cid}/timeline")
@@ -416,8 +483,8 @@ async def get_timeline(cid: str, conn=Depends(db), user=Depends(current_user)):
 
 
 @router.post("/collections/{cid}/timeline")
-async def build_timeline(cid: str, conn=Depends(db), user=Depends(current_user)):
-    """Kitaptaki belgelerden tarihli olaylari cikarip kronolojik birlestirir."""
+async def build_timeline(cid: str, force: bool = False, conn=Depends(db), user=Depends(current_user)):
+    """Kitaptaki belgelerden tarihli olaylari cikarip kronolojik birlestirir. force=1 -> onbellegi yok say."""
     col = await conn.fetchrow("SELECT id, title FROM collections WHERE id=$1 AND user_id=$2", cid, user["id"])
     if not col:
         raise NotFound("Çalışma kitabı bulunamadı.")
@@ -428,6 +495,7 @@ async def build_timeline(cid: str, conn=Depends(db), user=Depends(current_user))
         raise AppError("Bu çalışma kitabında hazır belge yok.")
     events: list[dict] = []
     seen: set[tuple] = set()
+    cached_n = fresh_n = 0
     for d in docs:
         rows = await conn.fetch(
             "SELECT content, page_number FROM document_chunks WHERE document_id=$1 ORDER BY chunk_index", d["id"])
@@ -435,7 +503,10 @@ async def build_timeline(cid: str, conn=Depends(db), user=Depends(current_user))
         if len(ctx) < 200:
             continue
         try:
-            evs = await asyncio.to_thread(extract_timeline, ctx, d["title"])
+            if force:
+                await conn.execute("DELETE FROM doc_extracts WHERE document_id=$1 AND kind='timeline'", d["id"])
+            evs, hit = await _extract_cached(conn, d["id"], "timeline", ctx, "", extract_timeline, ctx, d["title"])
+            cached_n += int(hit); fresh_n += int(not hit)
         except Exception:
             continue
         for ev in evs:
@@ -449,7 +520,8 @@ async def build_timeline(cid: str, conn=Depends(db), user=Depends(current_user))
     payload = {"events": events}
     now = datetime.now(timezone.utc)
     await conn.execute("UPDATE collections SET timeline=$1, timeline_at=$2 WHERE id=$3", payload, now, cid)
-    return {"events": events, "generated_at": now.isoformat(), "documents": len(docs)}
+    return {"events": events, "generated_at": now.isoformat(), "documents": len(docs),
+            "cached": cached_n, "fresh": fresh_n}
 
 
 class DraftAssistIn(BaseModel):
@@ -596,6 +668,111 @@ async def search(body: SearchIn, conn=Depends(db), user=Depends(current_user)):
                ORDER BY dc.embedding <=> $1 LIMIT 15""",
             emb, user["id"])
     return [dict(r) for r in rows]
+
+
+def _snippet(text: str, q: str, width: int = 220) -> str:
+    """Eslesen kelimenin etrafindan kisa bir parca; yoksa bastan."""
+    t = " ".join((text or "").split())
+    low, terms = t.lower(), [w for w in q.lower().split() if len(w) >= 3]
+    pos = -1
+    for w in terms:
+        i = low.find(w)
+        if i >= 0 and (pos < 0 or i < pos):
+            pos = i
+    if pos < 0:
+        return t[:width] + ("…" if len(t) > width else "")
+    a = max(0, pos - width // 3)
+    b = min(len(t), a + width)
+    return ("…" if a > 0 else "") + t[a:b] + ("…" if b < len(t) else "")
+
+
+@router.get("/collections/{cid}/search")
+async def search_collection(cid: str, q: str, mode: str = "hybrid",
+                            conn=Depends(db), user=Depends(current_user)):
+    """Defter ici arama: yalniz bu defterin hazir kaynaklarinda.
+
+    mode=text   -> tam metin (kelime birebir; hic kota harcamaz, aninda)
+    mode=meaning-> anlamsal (yakin kavramlar; 1 gomme istegi)
+    mode=hybrid -> ikisi birlesik (varsayilan). Sonuclar belgeye gore gruplanir.
+    """
+    q = (q or "").strip()
+    if len(q) < 2:
+        raise AppError("En az 2 karakter yaz.")
+    col = await conn.fetchrow("SELECT id FROM collections WHERE id=$1 AND user_id=$2", cid, user["id"])
+    if not col:
+        raise NotFound("Defter bulunamadı.")
+    docs = await conn.fetch(
+        "SELECT id, title FROM documents WHERE user_id=$1 AND collection_id=$2 AND status='ready'",
+        user["id"], cid)
+    if not docs:
+        return {"query": q, "groups": [], "total": 0, "mode": mode}
+    ids = [str(d["id"]) for d in docs]
+    titles = {str(d["id"]): d["title"] for d in docs}
+
+    hits: dict[str, dict] = {}     # chunk_id -> satir
+
+    if mode in ("text", "hybrid"):
+        # Kelime birebir: her terim parcada gecmeli (ILIKE -> Turkce ekleri de yakalar:
+        # "kreatin" -> "kreatinin", "kreatini"). Tirnakli ifade tek terim sayilir.
+        terms = [t.strip('"') for t in re.findall(r'"[^"]+"|\S+', q) if len(t.strip('"')) >= 2][:6]
+        if terms:
+            conds = " AND ".join(f"dc.content ILIKE ${i + 3}" for i in range(len(terms)))
+            pats = [f"%{t}%" for t in terms]
+            rows = await conn.fetch(
+                f"""SELECT dc.id, dc.document_id, dc.page_number, dc.section_title, dc.content,
+                           ts_rank_cd(dc.content_tsv, plainto_tsquery('simple', $1)) AS trank
+                    FROM document_chunks dc
+                    WHERE dc.document_id = ANY($2::uuid[]) AND {conds}
+                    ORDER BY trank DESC, dc.page_number LIMIT 80""", q, ids, *pats)
+            for r in rows:
+                low = (r["content"] or "").lower()
+                occ = sum(low.count(t.lower()) for t in terms)
+                hits[str(r["id"])] = {**dict(r), "score": 1.0 + min(occ, 8) * 0.15 + float(r["trank"]),
+                                      "how": "text"}
+
+    if mode in ("meaning", "hybrid"):
+        try:
+            emb = (await asyncio.to_thread(get_embeddings().embed, [q]))[0]
+            rows = await conn.fetch(
+                """SELECT dc.id, dc.document_id, dc.page_number, dc.section_title, dc.content,
+                          1 - (dc.embedding <=> $1) AS sim
+                   FROM document_chunks dc
+                   WHERE dc.document_id = ANY($2::uuid[]) AND dc.embedding IS NOT NULL
+                   ORDER BY dc.embedding <=> $1 LIMIT 40""", emb, ids)
+            for r in rows:
+                sim = float(r["sim"])
+                if sim < 0.35:
+                    continue
+                k = str(r["id"])
+                if k in hits:
+                    hits[k]["score"] += sim
+                    hits[k]["how"] = "both"
+                else:
+                    hits[k] = {**dict(r), "score": sim, "how": "meaning"}
+        except Exception:  # noqa - gomme kotasi dolsa bile tam-metin sonuclar gelsin
+            if mode == "meaning":
+                raise
+            mode = "text"
+
+    # Belgeye gore grupla; her belgede en iyi 6 parca, sayfaya gore sirali
+    by_doc: dict[str, list[dict]] = {}
+    for h in hits.values():
+        by_doc.setdefault(str(h["document_id"]), []).append(h)
+    groups = []
+    for did, lst in by_doc.items():
+        lst.sort(key=lambda x: -x["score"])
+        top = lst[:6]
+        top.sort(key=lambda x: (x["page_number"] or 0))
+        groups.append({
+            "document_id": did, "title": titles.get(did, "Belge"),
+            "best": max(x["score"] for x in lst), "count": len(lst),
+            "hits": [{"page": x["page_number"], "section": x.get("section_title"),
+                      "snippet": _snippet(x["content"], q), "how": x["how"],
+                      "score": round(x["score"], 3)} for x in top],
+        })
+    groups.sort(key=lambda g: -g["best"])
+    return {"query": q, "groups": groups, "total": len(hits), "mode": mode,
+            "documents": len(docs)}
 
 
 @router.get("/documents/{doc_id}/connections")
