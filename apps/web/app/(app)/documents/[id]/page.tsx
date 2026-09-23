@@ -230,7 +230,7 @@ export default function DocumentPage({ params }: { params: { id: string } }) {
   }
 
   if (!doc) return <div className="p-8 text-text-secondary">Yükleniyor…</div>;
-  if (doc.source_type === "youtube") return <VideoReader id={id} doc={doc} />;
+  if (doc.source_type === "youtube" || doc.source_type === "audio") return <VideoReader id={id} doc={doc} />;
   if (doc.source_type && doc.source_type !== "pdf") return <TextReader id={id} doc={doc} />;
 
   function startResize(side: "left" | "right", e: any) {
