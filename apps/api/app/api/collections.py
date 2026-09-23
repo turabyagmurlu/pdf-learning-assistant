@@ -323,16 +323,88 @@ async def _extract_cached(conn, doc_id, kind: str, ctx: str, extra: str, fn, *ar
     return out, False
 
 
+def _jload(v):
+    if isinstance(v, str):
+        try:
+            return json.loads(v)
+        except Exception:
+            return None
+    return v
+
+
+async def _seed_from_collection(conn, cid: str, docs) -> int:
+    """Onbellek bu ozellikten ONCE uretilmis defterler icin: defter duzeyindeki
+    sozluk/harita/zaman sonucunu belgelere geri dagitip onbellege yazar.
+    Boylece ilk 'Yenile' de kota harcamaz. Yalniz onbellegi olmayan belgeler icin calisir."""
+    col = await conn.fetchrow("SELECT glossary, concept_map, timeline FROM collections WHERE id=$1", cid)
+    if not col:
+        return 0
+    g = _jload(col["glossary"]) or {}
+    m = _jload(col["concept_map"]) or {}
+    t = _jload(col["timeline"]) or {}
+    items = g.get("items", []) if isinstance(g, dict) else []
+    edges = m.get("edges", []) if isinstance(m, dict) else []
+    events = t.get("events", []) if isinstance(t, dict) else []
+    if not (items or edges or events):
+        return 0
+    all_terms = [it["term"] for it in items]
+    seeded = 0
+    for d in docs:
+        did = str(d["id"])
+        have = {r["kind"] for r in await conn.fetch(
+            "SELECT kind FROM doc_extracts WHERE document_id=$1", d["id"])}
+        need = {"glossary", "relations", "timeline"} - have
+        if not need:
+            continue
+        rows = await conn.fetch(
+            "SELECT content, page_number FROM document_chunks WHERE document_id=$1 ORDER BY chunk_index", d["id"])
+        ctx = _glossary_context(rows)
+        if len(ctx) < 200:
+            continue
+
+        async def put(kind, extra, payload):
+            nonlocal seeded
+            await conn.execute(
+                """INSERT INTO doc_extracts (document_id, kind, input_hash, payload, created_at)
+                   VALUES ($1,$2,$3,$4,now()) ON CONFLICT (document_id, kind) DO NOTHING""",
+                d["id"], kind, _ctx_hash(ctx, extra), payload)
+            seeded += 1
+
+        if "glossary" in need and items:
+            mine = []
+            for it in items:
+                for mn in it.get("mentions", []):
+                    if mn.get("document_id") == did:
+                        mine.append({"term": it["term"], "kind": it["kind"],
+                                     "definition": it["definition"], "pages": mn.get("pages", [])})
+                        break
+            await put("glossary", "", mine)
+        if "relations" in need and edges:
+            doc_terms = [it["term"] for it in items
+                         if any(mn.get("document_id") == did for mn in it.get("mentions", []))] or all_terms
+            mine = [e for e in edges if e.get("document_id") == did]
+            await put("relations", "|".join(sorted(doc_terms)), mine)
+        if "timeline" in need and events:
+            mine = [e for e in events if e.get("document_id") == did]
+            await put("timeline", "", mine)
+    return seeded
+
+
 @router.get("/collections/{cid}/extract-status")
 async def extract_status(cid: str, conn=Depends(db), user=Depends(current_user)):
     """Yenile butonuna basmadan once: kac belge onbellekte, kac belge yeni islenecek?
-    Arayuz bunu 'X belge hazir, Y belge icin kota harcanir' diye gosterir."""
+    Arayuz bunu 'X belge hazir, Y belge icin kota harcanir' diye gosterir.
+    Eski defterlerde onbellegi mevcut sonuctan tohumlar (kota harcamadan)."""
     col = await conn.fetchrow("SELECT id FROM collections WHERE id=$1 AND user_id=$2", cid, user["id"])
     if not col:
         raise NotFound("Defter bulunamadı.")
     docs = await conn.fetch(
         "SELECT id FROM documents WHERE user_id=$1 AND collection_id=$2 AND status='ready'", user["id"], cid)
     ids = [d["id"] for d in docs]
+    try:
+        await _seed_from_collection(conn, cid, docs)
+    except Exception:  # noqa - tohumlama basarisiz olsa da durum donsun
+        pass
     out = {}
     for kind in ("glossary", "relations", "timeline"):
         n = await conn.fetchval(
