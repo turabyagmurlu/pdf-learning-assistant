@@ -142,7 +142,8 @@ async def verify(cid: str, body: VerifyIn, conn=Depends(db), user=Depends(curren
                     "verdict: destek (kanıt iddiayı açıkça doğruluyor), kismi (kısmen ya da daha zayıf/koşullu doğruluyor), "
                     "yok (kanıtlarda bu konuda bilgi yok), celiski (kanıt iddianın tersini söylüyor).\n"
                     "evidence: en ilgili kanıtın numarası (1-3), yoksa 0.\n"
-                    "note: Türkçe, en fazla 20 kelime; neden bu karar, varsa düzeltme önerisi.\n"
+                    "note: Türkçe, en fazla 20 kelime; neden bu karar, varsa düzeltme önerisi. 'E1/E2' gibi "
+                    "numara ya da 'kanıt' kelimesi yazma; doğrudan içeriği söyle (örn. 'Kaynak 2-3 dakika diyor').\n"
                     "i: İDDİA numarası."},
                 {"role": "user", "content": "\n\n".join(blocks)},
             ]
