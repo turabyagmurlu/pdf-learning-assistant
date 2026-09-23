@@ -131,34 +131,77 @@ def _en_query(topic: str) -> str:
         return topic
 
 
-def _openalex(query: str, n: int = 8) -> list[dict]:
-    """OpenAlex: 250M+ akademik yayin, ucretsiz, anahtarsiz. Yalniz acik erisimli olanlar (eklenebilsin diye)."""
+def _reachable(url: str) -> bool:
+    """Link gercekten acilip okunabiliyor mu (404 / abonelik duvari / bot engeli degil)?"""
+    try:
+        _safe_host(url)
+        with httpx.Client(timeout=httpx.Timeout(9, connect=5), follow_redirects=True, headers=UA) as c:
+            with c.stream("GET", url) as r:
+                if r.status_code >= 400:
+                    return False
+                ct = (r.headers.get("content-type") or "").lower()
+                if not ("html" in ct or "pdf" in ct or "xml" in ct):
+                    return False
+                got = 0
+                for ch in r.iter_bytes():
+                    got += len(ch)
+                    if got > 4000:
+                        break
+                return got > 500
+    except Exception:  # noqa
+        return False
+
+
+def _pick_url(cands: list[str]) -> str | None:
+    for u in cands:
+        if u and _reachable(u):
+            return u
+    return None
+
+
+def _openalex(query: str, n: int = 10) -> list[dict]:
+    """OpenAlex: 250M+ akademik yayin, ucretsiz, anahtarsiz. Yalniz acik erisimli ve
+    linki gercekten acilabilenler (PMC > acik PDF > yayinci sayfasi) listelenir."""
     try:
         r = httpx.get("https://api.openalex.org/works", timeout=15, headers=UA, params={
             "search": query, "per_page": n, "filter": "is_oa:true,type:article|review|book-chapter",
             "sort": "relevance_score:desc", "mailto": "typdf@example.com",
-            "select": "id,display_name,doi,publication_year,open_access,primary_location,cited_by_count,"
-                      "abstract_inverted_index,authorships"})
+            "select": "id,display_name,doi,ids,publication_year,open_access,best_oa_location,locations,"
+                      "primary_location,cited_by_count,abstract_inverted_index,authorships"})
         if r.status_code != 200:
             return []
-        out = []
-        for w in r.json().get("results", []):
-            url = ((w.get("open_access") or {}).get("oa_url")) or (w.get("doi") or "")
-            if not url:
-                continue
-            inv = w.get("abstract_inverted_index") or {}
-            words = sorted(((i, k) for k, idx in inv.items() for i in idx))
-            abstract = " ".join(k for _, k in words)[:300]
-            src = ((w.get("primary_location") or {}).get("source") or {}).get("display_name")
-            auth = ", ".join(a["author"]["display_name"] for a in (w.get("authorships") or [])[:2] if a.get("author"))
-            meta = " · ".join(filter(None, [auth, src, str(w.get("publication_year") or ""),
-                                            f"{w.get('cited_by_count', 0)} atıf" if w.get("cited_by_count") else ""]))
-            out.append({"url": url, "title": w.get("display_name") or url, "description": abstract,
-                        "site": meta or "OpenAlex", "kind": "pdf" if url.lower().endswith(".pdf") else "web",
-                        "academic": True, "words": 4000, "origin": "openalex"})
-        return out
+        works = r.json().get("results", [])
     except Exception:  # noqa
         return []
+
+    def build(w):
+        ids = w.get("ids") or {}
+        cands = []
+        if ids.get("pmcid"):
+            cands.append(ids["pmcid"] if ids["pmcid"].startswith("http")
+                         else f"https://www.ncbi.nlm.nih.gov/pmc/articles/{ids['pmcid']}/")
+        best = w.get("best_oa_location") or {}
+        for loc in [best] + (w.get("locations") or []):
+            if (loc or {}).get("is_oa"):
+                cands += [loc.get("landing_page_url"), loc.get("pdf_url")]
+        cands += [(w.get("open_access") or {}).get("oa_url"), w.get("doi")]
+        cands = [c for c in dict.fromkeys(cands) if c and not c.lower().endswith((".epub", ".zip"))][:5]
+        url = _pick_url(cands)
+        if not url:
+            return None
+        inv = w.get("abstract_inverted_index") or {}
+        words = sorted(((i, k) for k, idx in inv.items() for i in idx))
+        abstract = " ".join(k for _, k in words)[:300]
+        src = ((w.get("primary_location") or {}).get("source") or {}).get("display_name")
+        auth = ", ".join(a["author"]["display_name"] for a in (w.get("authorships") or [])[:2] if a.get("author"))
+        meta = " · ".join(filter(None, [auth, src, str(w.get("publication_year") or ""),
+                                        f"{w.get('cited_by_count', 0)} atıf" if w.get("cited_by_count") else ""]))
+        return {"url": url, "title": w.get("display_name") or url, "description": abstract,
+                "site": meta or "OpenAlex", "kind": "pdf" if ".pdf" in url.lower() else "web",
+                "academic": True, "words": 4000, "origin": "openalex"}
+
+    with ThreadPoolExecutor(max_workers=8) as ex:
+        return [x for x in ex.map(build, works) if x]
 
 
 def _wikipedia(query: str, lang: str, n: int = 2) -> list[dict]:
@@ -183,7 +226,7 @@ def discover(topic: str, context: str = "", exclude: set[str] | None = None) -> 
         raise AppError("Aramak istediğin konuyu yaz.")
     seen = set(exclude or ())
     # 1) Google aramasi destekli model (kota varsa)
-    overview, queries, web_results, web_err = "", [], [], None
+    overview, queries, web_results, web_err, web_debug = "", [], [], None, None
     try:
         j = _call(topic, context)
         cand = (j.get("candidates") or [{}])[0]
@@ -208,6 +251,7 @@ def discover(topic: str, context: str = "", exclude: set[str] | None = None) -> 
             p["origin"] = "google"
     except (AiUnavailable, AppError) as e:
         web_err = getattr(e, "user_message", str(e))
+        web_debug = getattr(e, "detail", None)
     # 2) acik kaynaklar: akademik (OpenAlex) + ansiklopedi (Vikipedi) - kota harcamaz
     q_en = _en_query(topic)
     with ThreadPoolExecutor(max_workers=3) as ex:
@@ -223,4 +267,5 @@ def discover(topic: str, context: str = "", exclude: set[str] | None = None) -> 
     note = None
     if web_err:
         note = "Google araması şu an kullanılamadı; akademik yayın ve ansiklopedi kaynakları gösteriliyor."
-    return {"topic": topic, "overview": overview[:1500], "queries": queries, "results": results, "note": note}
+    return {"topic": topic, "overview": overview[:1500], "queries": queries, "results": results, "note": note,
+            "debug": (web_debug or "")[:400] or None}
