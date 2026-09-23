@@ -33,7 +33,8 @@ async def _dump(conn, where_user: str | None = None) -> dict:
         if t not in exists:
             continue
         cols = [r["column_name"] for r in await conn.fetch(
-            "SELECT column_name, data_type FROM information_schema.columns WHERE table_name=$1", t)
+            "SELECT column_name, data_type FROM information_schema.columns "
+            "WHERE table_schema='public' AND table_name=$1 ORDER BY ordinal_position", t)
             if r["column_name"] not in ("embedding", "qvec")]
         sel = ", ".join(f'"{c}"' for c in cols)
         if where_user is None:
