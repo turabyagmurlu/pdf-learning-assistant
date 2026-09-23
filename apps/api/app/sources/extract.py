@@ -24,7 +24,7 @@ KINDS = {
     "htm": ("html", "böl."),
 }
 UNIT = {"docx": "böl.", "md": "böl.", "txt": "böl.", "rtf": "böl.", "xlsx": "tablo", "csv": "tablo",
-        "pptx": "slayt", "epub": "böl.", "html": "böl.", "web": "böl.", "text": "böl."}
+        "pptx": "slayt", "epub": "böl.", "html": "böl.", "web": "böl.", "text": "böl.", "audio": "böl."}
 UNSUPPORTED_OLD = {"doc": "Word (.doc) eski biçim; Word'de 'Farklı kaydet → .docx' yapıp yükle.",
                    "xls": "Excel (.xls) eski biçim; Excel'de 'Farklı kaydet → .xlsx' yapıp yükle.",
                    "ppt": "PowerPoint (.ppt) eski biçim; '.pptx' olarak kaydedip yükle."}
