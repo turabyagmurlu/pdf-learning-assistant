@@ -8,7 +8,8 @@ from pydantic import BaseModel
 from app.deps import db, current_user
 from app.services import rag_service
 from app.services.analysis_service import (generate_study_items, feynman_review, lecture_script,
-                                           extract_glossary, extract_timeline, extract_relations)
+                                           extract_glossary, extract_timeline, extract_relations,
+                                           notebook_suggestions, template_suggestions)
 from app.ai.factory import get_embeddings, get_llm
 from app.core.errors import NotFound, AppError
 from app.config import settings
@@ -174,13 +175,96 @@ async def ask_collection(cid: str, body: AskIn, conn=Depends(db), user=Depends(c
         {"role": "system", "content":
             "Sen bir çalışma asistanısın. SADECE verilen kaynaklara dayanarak Türkçe cevap ver. "
             "Kaynakta olmayan bir şey uydurma. Cevabında hangi kaynağa dayandığını [K1], [K2] "
-            "biçiminde belirt. Sade ve öğretici anlat."},
+            "biçiminde belirt. Sade ve öğretici anlat.\n\n"
+            "Cevabın EN SONUNA ayrı bir satırda '### Devam soruları' başlığı koy ve altına, kullanıcının "
+            "bu konuda bir adım daha derine inmesini sağlayacak 3 kısa soru yaz (her biri '- ' ile başlasın, "
+            "en fazla 15 kelime). Sorular kaynaklarda cevabı bulunabilecek türden olsun; tekrar etme."},
         {"role": "user", "content": f"Kaynaklar:\n\n{ctx}\n\nSoru: {q}"},
     ]
-    answer = await asyncio.to_thread(llm.complete, messages, model=settings.active_llm_model)
+    raw = await asyncio.to_thread(llm.complete, messages, model=settings.active_llm_model)
+    answer, followups = _split_followups(raw)
     sources = [{"document_id": str(c["document_id"]), "title": c.get("doc_title"),
                 "page": c["page_number"], "score": round(float(c["score"]), 3)} for c in chunks]
-    return {"answer": answer, "sources": sources}
+    return {"answer": answer, "sources": sources, "followups": followups}
+
+
+def _split_followups(text: str) -> tuple[str, list[str]]:
+    """Cevabin sonundaki '### Devam sorulari' bolumunu ayirir (ek istek harcamadan gelen oneriler)."""
+    m = re.search(r"\n[\s#*_]*devam\s+soru(?:lar[ıi])?[\s*_:]*\n", text or "", flags=re.I)
+    if not m:
+        return (text or "").strip(), []
+    body, tail = text[:m.start()].rstrip(), text[m.end():]
+    qs = []
+    for line in tail.splitlines():
+        s = re.sub(r"^\s*(?:[-*•]|\d+[.)])\s*", "", line).strip().strip("*").strip()
+        if len(s) >= 8 and s not in qs:
+            qs.append(s)
+        if len(qs) >= 3:
+            break
+    return body, qs
+
+
+def _suggest_digest(docs, max_chars: int = 14000) -> tuple[str, list[str]]:
+    """Kaynak ozetlerinden kisa bir 'defter ozeti' (PDF'lerin tamami okunmaz)."""
+    parts, concepts = [], []
+    per = max(400, max_chars // max(1, len(docs)))
+    for i, d in enumerate(docs, 1):
+        kc = _jload(d["key_concepts"]) or []
+        terms = [k.get("term") for k in kc if isinstance(k, dict) and k.get("term")][:8]
+        concepts += terms
+        diff = _jload(d["difficult_concepts"]) or []
+        s = f"[{i}] {d['title']}\n"
+        if d["purpose"]:
+            s += f"Amaç: {d['purpose']}\n"
+        if d["short_summary"]:
+            s += f"Özet: {d['short_summary']}\n"
+        if terms:
+            s += "Kavramlar: " + ", ".join(terms) + "\n"
+        if diff:
+            s += "Zor noktalar: " + ", ".join(str(x) for x in diff[:4]) + "\n"
+        parts.append(s[:per])
+    # en sik gecen kavramlar one
+    from collections import Counter
+    freq = [t for t, _ in Counter(c.strip() for c in concepts if c).most_common(12)]
+    return "\n".join(parts)[:max_chars], freq
+
+
+@router.get("/collections/{cid}/suggestions")
+async def suggestions(cid: str, refresh: bool = False, conn=Depends(db), user=Depends(current_user)):
+    """Sohbet icin yonlendirici soru onerileri.
+    Kaynak ozetlerinden TEK istekte uretilir; kaynak kumesi degismedikce onbellekten gelir (0 kota).
+    Kota yoksa sablon sorulara duser."""
+    col = await conn.fetchrow(
+        "SELECT id, title, suggestions, suggestions_hash, suggestions_at FROM collections WHERE id=$1 AND user_id=$2",
+        cid, user["id"])
+    if not col:
+        raise NotFound("Defter bulunamadı.")
+    docs = await conn.fetch(
+        """SELECT id, title, short_summary, purpose, key_concepts, difficult_concepts
+           FROM documents WHERE user_id=$1 AND collection_id=$2 AND status='ready' ORDER BY created_at""",
+        user["id"], cid)
+    if not docs:
+        return {"theme": "", "groups": [], "source": "bos", "documents": 0}
+    h = _ctx_hash("|".join(sorted(str(d["id"]) for d in docs)))
+    cached = _jload(col["suggestions"])
+    if not refresh and cached and col["suggestions_hash"] == h and cached.get("groups"):
+        return {**cached, "source": cached.get("source", "ai"), "cached": True, "documents": len(docs),
+                "generated_at": col["suggestions_at"].isoformat() if col["suggestions_at"] else None}
+
+    digest, freq = _suggest_digest(docs)
+    try:
+        data = await asyncio.to_thread(notebook_suggestions, digest, col["title"])
+        if not data.get("groups"):
+            raise ValueError("bos")
+        data["source"] = "ai"
+    except Exception:  # noqa - kota/yogunluk: sablona dus, onbellege YAZMA (sonra tekrar denensin)
+        data = template_suggestions(freq, [d["title"] for d in docs])
+        return {**data, "source": "sablon", "cached": False, "documents": len(docs), "generated_at": None}
+    now = datetime.now(timezone.utc)
+    await conn.execute(
+        "UPDATE collections SET suggestions=$1, suggestions_hash=$2, suggestions_at=$3 WHERE id=$4",
+        data, h, now, cid)
+    return {**data, "cached": False, "documents": len(docs), "generated_at": now.isoformat()}
 
 
 class FeynmanIn(BaseModel):
