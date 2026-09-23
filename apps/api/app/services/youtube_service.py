@@ -116,9 +116,29 @@ def _parse_ts(text: str, offset: int, clip_end: int | None) -> list[dict]:
     return rows
 
 
+_MODELS = ["gemini-flash-latest", settings.gemini_model, "gemini-2.5-flash"]
+_dead: set[str] = set()
+
+
 def _gemini_clip(vid: str, start: int | None, end: int | None) -> str:
+    """Model adlari zamanla emekliye ayriliyor: 404 alirsa siradakini dener."""
+    last = None
+    for model in dict.fromkeys(_MODELS):
+        if model in _dead:
+            continue
+        try:
+            return _gemini_clip_model(model, vid, start, end)
+        except _ModelGone as e:
+            _dead.add(model); last = e
+    raise AppError("Video işleyebilecek bir yapay zekâ modeli bulunamadı." + (f" ({last})" if last else ""))
+
+
+class _ModelGone(Exception):
+    pass
+
+
+def _gemini_clip_model(model: str, vid: str, start: int | None, end: int | None) -> str:
     key = settings.gemini_api_key.strip()
-    model = "gemini-2.5-flash"
     part = {"file_data": {"file_uri": f"https://www.youtube.com/watch?v={vid}"}}
     if start is not None:
         part["video_metadata"] = {"start_offset": f"{int(start)}s", "end_offset": f"{int(end)}s"}
@@ -150,8 +170,14 @@ def _gemini_clip(vid: str, start: int | None, end: int | None) -> str:
             raise AppError("Günlük video işleme kotası doldu; yarın 'Yeniden işle' ile devam edebilirsin.")
         if r.status_code in (429, 500, 502, 503, 504) and attempt < len(waits):
             time.sleep(waits[attempt]); continue
+        if r.status_code == 404:
+            raise _ModelGone(model)
         if r.status_code == 400:
-            raise AppError("Bu video işlenemedi. Videonun herkese açık olduğundan emin ol.")
+            if "thinking" in last.lower() and body["generationConfig"].pop("thinkingConfig", None) is not None:
+                continue                     # model dusunme ayarini desteklemiyor -> ayarsiz tekrar
+            if "mediaresolution" in last.lower().replace("_", "") and body["generationConfig"].pop("mediaResolution", None):
+                continue
+            raise AppError("Bu video işlenemedi. Videonun herkese açık olduğundan emin ol. " + last[:160])
         raise AppError(f"Video işlenemedi ({r.status_code}); biraz sonra tekrar dene.")
     raise AppError("Video işlenemedi: " + last[:120])
 
