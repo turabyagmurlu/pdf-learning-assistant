@@ -197,6 +197,7 @@ def _split_followups(text: str) -> tuple[str, list[str]]:
     qs = []
     for line in tail.splitlines():
         s = re.sub(r"^\s*(?:[-*•]|\d+[.)])\s*", "", line).strip().strip("*").strip()
+        s = re.sub(r"\s*\[K\s*\d+(?:\s*[,;]\s*K?\s*\d+)*\]", "", s).strip()     # atif etiketi soruda olmasin
         if len(s) >= 8 and s not in qs:
             qs.append(s)
         if len(qs) >= 3:
