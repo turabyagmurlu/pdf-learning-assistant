@@ -6,7 +6,11 @@ import PodcastPlayer from "@/components/PodcastPlayer";
 import BrowserVoice, { browserVoiceSupported } from "@/components/BrowserVoice";
 import { stageInfo } from "@/lib/docstage";
 import CitedText, { citeLoc } from "@/components/CitedText";
-import YoutubeAdd, { YoutubeIcon } from "@/components/YoutubeAdd";
+import YoutubeAdd from "@/components/YoutubeAdd";
+import TextAdd from "@/components/TextAdd";
+import DiscoverPanel from "@/components/DiscoverPanel";
+import SourceIcon, { sourceColor } from "@/components/SourceIcon";
+import { ACCEPT, TYPES_HINT, rejectReason } from "@/lib/sources";
 import { useRefreshOn } from "@/components/Wake";
 import { useConfirm } from "@/components/Confirm";
 import NotebookSearch from "@/components/NotebookSearch";
@@ -297,8 +301,10 @@ export default function CollectionPage({ params }: { params: { id: string } }) {
   const [upBusy, setUpBusy] = useState<{ done: number; total: number } | null>(null);
   const [upDrag, setUpDrag] = useState(false);
   async function uploadHere(files: FileList | File[] | null) {
-    const list = Array.from(files || []).filter((f) => f.type === "application/pdf" || f.name.toLowerCase().endsWith(".pdf"));
-    if (!list.length) return;
+    const all = Array.from(files || []);
+    const bad = all.map(rejectReason).filter(Boolean) as string[];
+    const list = all.filter((f) => !rejectReason(f));
+    if (!list.length) { if (bad.length) setErr(bad[0]); return; }
     setUpBusy({ done: 0, total: list.length }); setErr("");
     let failed = 0;
     for (let i = 0; i < list.length; i++) {
@@ -312,7 +318,7 @@ export default function CollectionPage({ params }: { params: { id: string } }) {
       setUpBusy({ done: i + 1, total: list.length });
     }
     setUpBusy(null); setPicker(false);
-    if (failed) setErr(`${failed} dosya yüklenemedi (PDF ve boyut sınırını kontrol et).`);
+    if (failed || bad.length) setErr([failed ? `${failed} dosya yüklenemedi (bozuk olabilir ya da boyut sınırını aşıyor).` : "", ...bad].filter(Boolean).join(" "));
     await load();
   }
 
@@ -791,11 +797,11 @@ export default function CollectionPage({ params }: { params: { id: string } }) {
                         <X size={14} />
                       </button>
                       <div className="flex items-start gap-2">
-                        <div className={cx("mt-0.5 h-10 w-1.5 shrink-0 rounded-full",
-                          (d as any).source_type === "youtube" ? "bg-red-500/80" : "bg-accent-purple/70")} />
+                        <div className={cx("mt-0.5 h-10 w-1.5 shrink-0 rounded-full bg-current opacity-70",
+                          sourceColor((d as any).source_type))} />
                         <div className="min-w-0 flex-1">
                           <h3 className="flex items-center gap-1.5 truncate pr-6 text-sm font-medium">
-                            {(d as any).source_type === "youtube" && <YoutubeIcon size={15} className="shrink-0 text-red-600" />}
+                            {(d as any).source_type && (d as any).source_type !== "pdf" && <SourceIcon kind={(d as any).source_type} size={15} />}
                             <span className="truncate">{d.title}</span>
                           </h3>
                           {d.short_summary && (
@@ -944,7 +950,7 @@ export default function CollectionPage({ params }: { params: { id: string } }) {
                   <div className="mt-3 flex flex-wrap items-center gap-1.5 border-t pt-3">
                     {t.sources.map((s: any, j: number) => (
                       <button key={j} onClick={() => router.push("/documents/" + s.document_id + (s.page ? "?page=" + s.page : ""))}
-                              title={`${s.title} · ${citeLoc(s)} — ${s.kind === "youtube" ? "videoda o ana git" : "PDF'te aç"}`}
+                              title={`${s.title} · ${citeLoc(s)} — ${s.kind === "youtube" ? "videoda o ana git" : s.kind ? "kaynakta aç" : "PDF'te aç"}`}
                               className="rounded-full border bg-surface px-2.5 py-1 text-xs text-text-secondary hover:border-accent-purple/50 hover:text-accent-purple">
                         K{j + 1} · {s.title} · {citeLoc(s)}
                       </button>
@@ -1334,7 +1340,7 @@ export default function CollectionPage({ params }: { params: { id: string } }) {
 
             {/* 1) Bilgisayardan yukle -> dogrudan bu deftere */}
             <div className="border-b px-4 py-3">
-              <input ref={upRef} type="file" accept="application/pdf" multiple hidden
+              <input ref={upRef} type="file" accept={ACCEPT} multiple hidden
                      onChange={(e) => { uploadHere(e.target.files); if (upRef.current) upRef.current.value = ""; }} />
               <div onClick={() => !upBusy && upRef.current?.click()}
                    onDragOver={(e) => { e.preventDefault(); setUpDrag(true); }}
@@ -1347,18 +1353,20 @@ export default function CollectionPage({ params }: { params: { id: string } }) {
                 </div>
                 <div className="min-w-0">
                   <p className="text-sm font-medium">
-                    {upBusy ? `Yükleniyor… ${upBusy.done}/${upBusy.total}` : "Bilgisayardan PDF yükle"}
+                    {upBusy ? `Yükleniyor… ${upBusy.done}/${upBusy.total}` : "Bilgisayardan dosya yükle"}
                   </p>
                   <p className="text-xs text-text-secondary">
-                    {upBusy ? "Dosyalar bu deftere düşer, işleme arka planda başlar." : "Sürükle-bırak ya da tıkla · çoklu seçim · doğrudan bu deftere eklenir"}
+                    {upBusy ? "Dosyalar bu deftere düşer, işleme arka planda başlar." : TYPES_HINT + " · sürükle-bırak, çoklu seçim"}
                   </p>
                 </div>
               </div>
             </div>
 
-            {/* 1b) YouTube videosu -> kaynak */}
-            <div className="border-b px-4 py-3">
+            {/* 1b) Link (YouTube / web / PDF linki), metin yapistir, web'de kaynak bul */}
+            <div className="space-y-3 border-b px-4 py-3">
               <YoutubeAdd collectionId={id} onAdded={() => load()} />
+              <TextAdd collectionId={id} onAdded={() => load()} />
+              <DiscoverPanel collectionId={id} onAdded={() => load()} />
             </div>
 
             {/* 2) Kutuphaneden sec */}

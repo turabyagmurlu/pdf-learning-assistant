@@ -16,7 +16,7 @@ type U = {
   embed: { model: string; status: string };
 };
 
-const KIND: Record<string, string> = { metin: "Soru-cevap ve özetler", dizin: "PDF dizinleme", ses: "Seslendirme", video: "Video dökümü" };
+const KIND: Record<string, string> = { metin: "Soru-cevap ve özetler", dizin: "Kaynak dizinleme", ses: "Seslendirme", video: "Video dökümü", arama: "Web araması" };
 const ST: Record<string, { t: string; c: string }> = {
   aktif: { t: "aktif", c: "bg-green-500/15 text-green-700" },
   dakikalik_dolu: { t: "dakikalık dolu", c: "bg-amber-500/15 text-amber-700" },

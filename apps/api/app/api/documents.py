@@ -13,30 +13,135 @@ router = APIRouter(prefix="/documents", tags=["documents"])
 @router.post("")
 async def upload(file: UploadFile = File(...), collection_id: str | None = Form(None),
                  conn=Depends(db), user=Depends(current_user)):
-    """PDF yukle. collection_id verilirse belge dogrudan o deftere duser
-    (defter icinden yukleme). Isleme kendi kuyrugunda, en fazla 2 belge paralel."""
-    if file.content_type not in ("application/pdf", "application/x-pdf"):
-        raise AppError("Yalnızca PDF dosyaları yüklenebilir.")
+    """Kaynak yukle: PDF, Word, Excel/CSV, PowerPoint, Markdown/TXT/RTF, EPUB, HTML.
+    collection_id verilirse belge dogrudan o deftere duser. Isleme kuyrukta."""
+    from app.sources.extract import kind_of
+    fname = file.filename or "Adsız"
+    is_pdf = file.content_type in ("application/pdf", "application/x-pdf") or fname.lower().endswith(".pdf")
+    kind = "pdf" if is_pdf else kind_of(fname)
+    if not kind:
+        raise AppError("Bu dosya türü desteklenmiyor. PDF, Word, Excel, CSV, PowerPoint, Markdown, TXT, RTF, EPUB veya HTML yükleyebilirsin.")
     data = await file.read()
     if len(data) > settings.max_upload_mb * 1024 * 1024:
         raise FileTooLarge(f"Dosya sınırı {settings.max_upload_mb} MB.")
-    cid = None
-    if collection_id:
-        ok = await conn.fetchval("SELECT 1 FROM collections WHERE id=$1 AND user_id=$2", collection_id, user["id"])
-        if not ok:
-            raise NotFound("Defter bulunamadı.")
-        cid = collection_id
+    if kind == "pdf" and data[:5] != b"%PDF-":
+        raise AppError("Bu dosya geçerli bir PDF değil.")
+    cid = await _check_collection(conn, user, collection_id)
+    title = fname.rsplit(".", 1)[0]
+    ext = fname.rsplit(".", 1)[-1].lower() if "." in fname else kind
+    doc_id = await _create_doc(conn, user, cid, kind, title, fname, data, ext)
+    return {"id": doc_id, "title": title, "status": "uploaded", "collection_id": cid, "source_type": kind}
+
+
+_CTYPES = {"pdf": "application/pdf", "json": "application/json", "html": "text/html; charset=utf-8",
+           "txt": "text/plain; charset=utf-8", "md": "text/markdown; charset=utf-8", "csv": "text/csv"}
+
+
+async def _check_collection(conn, user, collection_id):
+    if not collection_id:
+        return None
+    ok = await conn.fetchval("SELECT 1 FROM collections WHERE id=$1 AND user_id=$2", collection_id, user["id"])
+    if not ok:
+        raise NotFound("Defter bulunamadı.")
+    return collection_id
+
+
+async def _create_doc(conn, user, cid, kind, title, fname, data: bytes, ext: str,
+                      source_url: str | None = None, media: dict | None = None) -> str:
     doc_id = str(uuid.uuid4())
-    key = f"{user['id']}/{doc_id}.pdf"
-    put_object(key, data)
-    title = (file.filename or "Adsız").rsplit(".", 1)[0]
+    key = f"{user['id']}/{doc_id}.{ext}"
+    put_object(key, data, content_type=_CTYPES.get(ext, "application/octet-stream"))
     await conn.execute(
-        """INSERT INTO documents (id, user_id, title, original_filename, file_path, file_size, status, collection_id)
-           VALUES ($1,$2,$3,$4,$5,$6,'uploaded',$7)""",
-        doc_id, user["id"], title, file.filename, key, len(data), cid,
+        """INSERT INTO documents (id, user_id, title, original_filename, file_path, file_size, status,
+                                  collection_id, source_type, source_url, media)
+           VALUES ($1,$2,$3,$4,$5,$6,'uploaded',$7,$8,$9,$10)""",
+        doc_id, user["id"], (title or "Adsız")[:300], fname, key, len(data), cid, kind, source_url, media,
     )
     enqueue(doc_id)
-    return {"id": doc_id, "title": title, "status": "uploaded", "collection_id": cid}
+    return doc_id
+
+
+class WebIn(BaseModel):
+    url: str
+    collection_id: str | None = None
+
+
+@router.post("/web")
+async def add_web(body: WebIn, conn=Depends(db), user=Depends(current_user)):
+    """Web sayfasini (ya da PDF linkini) kaynak olarak ekler. YouTube linki gelirse videoya yonlendirir."""
+    import asyncio
+    from app.services import youtube_service as yt
+    from app.sources import web
+    from app.sources.extract import html_to_sections
+    if yt.video_id(body.url) and ("youtu" in body.url):
+        return await add_youtube(YoutubeIn(url=body.url, collection_id=body.collection_id), conn, user)
+    cid = await _check_collection(conn, user, body.collection_id)
+    got = await asyncio.to_thread(web.fetch, body.url)
+    final = got["final_url"]
+    dup = await conn.fetchval(
+        "SELECT id FROM documents WHERE user_id=$1 AND source_url=$2 AND collection_id IS NOT DISTINCT FROM $3",
+        user["id"], final, cid)
+    if dup:
+        raise AppError("Bu sayfa zaten eklenmiş.")
+    from urllib.parse import urlparse
+    host = urlparse(final).hostname or ""
+    if got["kind"] == "pdf":
+        name = final.rstrip("/").rsplit("/", 1)[-1].split("?")[0] or host
+        title = name.rsplit(".", 1)[0] if name.lower().endswith(".pdf") else name
+        doc_id = await _create_doc(conn, user, cid, "pdf", title, name, got["data"], "pdf", source_url=final,
+                                   media={"site": host})
+        return {"id": doc_id, "title": title, "status": "uploaded", "collection_id": cid, "source_type": "pdf"}
+    title, meta = None, {}
+    if got["kind"] == "html":
+        secs, title, meta = await asyncio.to_thread(html_to_sections, got["data"].decode("utf-8", "ignore"))
+        words = sum(len(t.split()) for _, t in secs)
+        if words < 60:
+            raise AppError("Bu sayfada okunabilir bir yazı bulunamadı (sayfa içeriğini tarayıcıda "
+                           "yüklüyor ya da giriş istiyor olabilir). Metni kopyalayıp 'Metin yapıştır' ile ekleyebilirsin.")
+    title = (title or host).strip()
+    ext = "html" if got["kind"] == "html" else "txt"
+    doc_id = await _create_doc(conn, user, cid, "web", title, final, got["data"], ext, source_url=final,
+                               media={"site": meta.get("site") or host, "author": meta.get("author"),
+                                      "date": meta.get("date"), "description": meta.get("description"),
+                                      "format": ext})
+    return {"id": doc_id, "title": title, "status": "uploaded", "collection_id": cid, "source_type": "web"}
+
+
+class TextIn(BaseModel):
+    text: str
+    title: str | None = None
+    collection_id: str | None = None
+
+
+@router.post("/text")
+async def add_text(body: TextIn, conn=Depends(db), user=Depends(current_user)):
+    """Yapistirilan metni (not, e-posta, yazisma, makale parcasi) kaynak yapar."""
+    text = (body.text or "").strip()
+    if len(text) < 40:
+        raise AppError("Metin çok kısa (en az birkaç cümle yapıştır).")
+    if len(text) > 2_000_000:
+        raise AppError("Metin çok uzun; dosya olarak yüklemeyi dene.")
+    cid = await _check_collection(conn, user, body.collection_id)
+    title = (body.title or "").strip() or next((l.strip() for l in text.splitlines() if l.strip()), "Not")[:90]
+    doc_id = await _create_doc(conn, user, cid, "text", title, "yapistirilan-metin.md", text.encode("utf-8"), "md")
+    return {"id": doc_id, "title": title, "status": "uploaded", "collection_id": cid, "source_type": "text"}
+
+
+@router.get("/{doc_id}/content")
+async def content(doc_id: str, conn=Depends(db), user=Depends(current_user)):
+    """PDF disi kaynaklarin okunabilir hali: bolumler (baslik, metin, varsa tablo)."""
+    import asyncio, json as _json
+    from app.storage.object_store import get_object
+    row = await conn.fetchrow("SELECT file_path, source_type, source_url, media FROM documents WHERE id=$1 AND user_id=$2",
+                              doc_id, user["id"])
+    if not row:
+        raise NotFound("Belge bulunamadı.")
+    try:
+        pages = _json.loads((await asyncio.to_thread(get_object, row["file_path"] + ".pages.json")).decode("utf-8"))
+    except Exception:  # noqa - henuz islenmedi
+        return {"ready": False, "pages": [], "source_type": row["source_type"]}
+    return {"ready": True, "pages": pages, "source_type": row["source_type"],
+            "source_url": row["source_url"], "media": row["media"]}
 
 
 class YoutubeIn(BaseModel):
@@ -182,10 +287,11 @@ async def delete_doc(doc_id: str, conn=Depends(db), user=Depends(current_user)):
     row = await conn.fetchrow("SELECT file_path FROM documents WHERE id=$1 AND user_id=$2", doc_id, user["id"])
     if not row:
         raise NotFound("Belge bulunamadı.")
-    try:
-        delete_object(row["file_path"])
-    except Exception:  # noqa
-        pass
+    for k in (row["file_path"], row["file_path"] + ".pages.json"):
+        try:
+            delete_object(k)
+        except Exception:  # noqa
+            pass
     await conn.execute("DELETE FROM documents WHERE id=$1 AND user_id=$2", doc_id, user["id"])
     return {"ok": True}
 

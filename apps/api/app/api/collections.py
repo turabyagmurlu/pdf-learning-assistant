@@ -224,25 +224,31 @@ async def ask_collection(cid: str, body: AskIn, conn=Depends(db), user=Depends(c
 
 
 async def annotate_media(conn, sources: list[dict]):
-    """Video kaynaklarinda 'sayfa' yerine videodaki zamani ekler (start sn + etiket)."""
+    """Kaynak turune gore konum etiketi: videoda zaman, Word'de bolum, sunumda slayt, tabloda blok."""
     ids = list({s["document_id"] for s in sources if s.get("document_id")})
     if not ids:
         return sources
     rows = await conn.fetch(
-        "SELECT id, media FROM documents WHERE id = ANY($1::uuid[]) AND source_type='youtube'", ids)
+        "SELECT id, source_type, media FROM documents WHERE id = ANY($1::uuid[]) AND COALESCE(source_type,'pdf') <> 'pdf'",
+        ids)
     if not rows:
         return sources
     from app.services.youtube_service import fmt
-    secs = {str(r["id"]): {int(x["page"]): x["start"] for x in ((r["media"] or {}).get("sections") or [])}
-            for r in rows}
+    from app.sources.extract import UNIT
+    info = {str(r["id"]): r for r in rows}
     for s in sources:
-        m = secs.get(s.get("document_id"))
-        if m is not None:
-            st = m.get(int(s.get("page") or 0))
-            s["kind"] = "youtube"
+        r = info.get(s.get("document_id"))
+        if not r:
+            continue
+        s["kind"] = r["source_type"]
+        if r["source_type"] == "youtube":
+            secs = {int(x["page"]): x["start"] for x in ((r["media"] or {}).get("sections") or [])}
+            st = secs.get(int(s.get("page") or 0))
             if st is not None:
                 s["start"] = st
                 s["time"] = fmt(st)
+        else:
+            s["unit"] = UNIT.get(r["source_type"], "böl.")
     return sources
 
 
@@ -1039,3 +1045,32 @@ async def graph(conn=Depends(db), user=Depends(current_user)):
         """SELECT e.source_id, e.target_id, e.relation FROM concept_edges e
            JOIN concepts c ON c.id = e.source_id WHERE c.user_id=$1""", user["id"])
     return {"nodes": [dict(n) for n in nodes], "edges": [dict(e) for e in edges]}
+
+
+class DiscoverIn(BaseModel):
+    topic: str | None = None
+
+
+@router.post("/collections/{cid}/discover")
+async def discover_sources(cid: str, body: DiscoverIn, conn=Depends(db), user=Depends(current_user)):
+    """Web'de bu defterin konusuna uygun kaynaklar bulur (Google aramasi destekli, 1 istek).
+    Dondurulen linkler arama sonuclarindan gelir; model uydurmaz."""
+    from app.sources.discover import discover
+    col = await conn.fetchrow("SELECT id, title, suggestions FROM collections WHERE id=$1 AND user_id=$2",
+                              cid, user["id"])
+    if not col:
+        raise NotFound("Defter bulunamadı.")
+    docs = await conn.fetch(
+        "SELECT title, short_summary, source_url FROM documents WHERE user_id=$1 AND collection_id=$2",
+        user["id"], cid)
+    theme = ""
+    try:
+        sg = col["suggestions"]
+        sg = json.loads(sg) if isinstance(sg, str) else sg
+        theme = (sg or {}).get("theme") or ""
+    except Exception:  # noqa
+        pass
+    topic = (body.topic or "").strip() or theme or col["title"]
+    context = " ".join(filter(None, [theme] + [f"{d['title']}: {d['short_summary'] or ''}" for d in docs[:8]]))
+    exclude = {d["source_url"] for d in docs if d["source_url"]}
+    return await asyncio.to_thread(discover, topic, context, exclude)

@@ -7,12 +7,13 @@
 import { Fragment } from "react";
 
 export type CiteTarget = { document_id?: string; title?: string | null; page?: number | null;
-  kind?: string; time?: string; start?: number };
+  kind?: string; time?: string; start?: number; unit?: string };
 
 /** Rozet konumu: videoda "▶ 04:00", PDF'te "s.12". */
 export function citeLoc(src?: CiteTarget | null): string {
   if (!src) return "";
   if (src.time) return "▶ " + src.time;
+  if (src.unit && src.page) return src.unit + " " + src.page;
   return src.page ? "s." + src.page : "";
 }
 

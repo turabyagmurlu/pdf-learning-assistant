@@ -80,6 +80,22 @@ async def _youtube_pages(conn, document_id: str, key: str, media: dict):
     return [{"page_number": s["page"], "text": s["text"]} for s in secs], len(secs)
 
 
+def _other_pages(stype: str, key: str, media: dict) -> list[dict]:
+    """PDF/video disi kaynaklari bolumlere cevirir; okuyucu icin bolumleri de saklar."""
+    from app.sources.extract import extract, text_pages, _decode
+    data = get_object(key)
+    if stype == "text":
+        pages = text_pages(_decode(data))
+    elif stype == "web":
+        fmt = (media or {}).get("format") or ("html" if key.endswith(".html") else "txt")
+        pages, _ = extract("html" if fmt == "html" else "txt", data)
+    else:
+        pages, _ = extract(stype, data)
+    put_object(key + ".pages.json", json.dumps(pages, ensure_ascii=False).encode("utf-8"),
+               content_type="application/json")
+    return [{"page_number": p["page_number"], "text": p["text"]} for p in pages]
+
+
 async def _run_ingest(document_id: str):
     conn = await _conn()
     try:
@@ -91,12 +107,21 @@ async def _run_ingest(document_id: str):
         await _set(conn, document_id, status="processing", processing_stage="extracting",
                    progress_done=0, progress_total=0, error_message=None)
 
-        if (row["source_type"] or "pdf") == "youtube":
+        stype = row["source_type"] or "pdf"
+        if stype == "youtube":
             try:
                 pages, pc = await _youtube_pages(conn, document_id, key, row["media"] or {})
             except AppError as e:
                 await _set(conn, document_id, status="failed", error_message=e.user_message, processing_stage=None)
                 return
+        elif stype != "pdf":
+            # Word, Excel, sunum, web, metin...: yerel okuyucu, kota yok
+            try:
+                pages = await asyncio.to_thread(_other_pages, stype, key, row["media"] or {})
+            except AppError as e:
+                await _set(conn, document_id, status="failed", error_message=e.user_message, processing_stage=None)
+                return
+            pc = len(pages)
         else:
             pdf_bytes = get_object(key)
             try:

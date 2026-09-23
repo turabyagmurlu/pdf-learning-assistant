@@ -5,7 +5,10 @@ import { api, API, getToken } from "@/lib/api";
 import { CardSkeleton } from "@/components/Skeleton";
 import PageHeader from "@/components/PageHeader";
 import { stageInfo } from "@/lib/docstage";
-import YoutubeAdd, { YoutubeIcon } from "@/components/YoutubeAdd";
+import YoutubeAdd from "@/components/YoutubeAdd";
+import TextAdd from "@/components/TextAdd";
+import SourceIcon from "@/components/SourceIcon";
+import { ACCEPT, TYPES_HINT, rejectReason } from "@/lib/sources";
 import { useRefreshOn } from "@/components/Wake";
 import { useConfirm } from "@/components/Confirm";
 import { UploadCloud, Search, Star, Trash2, Pencil, LayoutGrid, List, MoreVertical, X, FileText, FolderOpen, FolderPlus, Check, BookOpen, RefreshCw } from "lucide-react";
@@ -135,7 +138,7 @@ export default function LibraryPage() {
     if (!files || !files.length) return;
     setUploading(true);
     for (const f of Array.from(files)) {
-      if (f.type !== "application/pdf" && !f.name.toLowerCase().endsWith(".pdf")) continue;
+      if (rejectReason(f)) { alert(rejectReason(f)); continue; }
       const fd = new FormData(); fd.append("file", f);
       try { await fetch(API + "/documents", { method: "POST", headers: { Authorization: "Bearer " + getToken() }, body: fd }); } catch {}
     }
@@ -222,22 +225,24 @@ export default function LibraryPage() {
         onClick={() => fileRef.current?.click()}
         role="button" tabIndex={0}
         onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") fileRef.current?.click(); }}
-        aria-label="PDF yükle"
+        aria-label="Dosya yükle"
         className={cx("mt-5 flex cursor-pointer flex-col items-center justify-center rounded-2xl border-2 border-dashed py-10 transition", drag ? "border-accent-purple bg-accent-purple/5" : "border-black/15")}
       >
         <UploadCloud size={26} className="text-accent-purple" />
-        <p className="mt-2 text-sm text-text-secondary">{uploading ? "Yükleniyor…" : "PDF yüklemek için tıkla veya sürükle"}</p>
-        <input ref={fileRef} type="file" accept="application/pdf" multiple hidden onChange={(e) => onFiles(e.target.files)} />
+        <p className="mt-2 text-sm text-text-secondary">{uploading ? "Yükleniyor…" : "Dosya yüklemek için tıkla veya sürükle"}</p>
+        <p className="mt-0.5 text-xs text-text-secondary/80">{TYPES_HINT}</p>
+        <input ref={fileRef} type="file" accept={ACCEPT} multiple hidden onChange={(e) => onFiles(e.target.files)} />
       </div>
       <div className="mt-3 rounded-2xl border bg-surface px-4 py-3">
         <YoutubeAdd onAdded={() => reload()} />
+        <div className="mt-2"><TextAdd onAdded={() => reload()} /></div>
       </div>
 
       {loading ? (
         <div className="mt-6"><CardSkeleton n={3} /></div>
       ) : filtered.length === 0 ? (
         <div className="mt-6 rounded-2xl border bg-surface p-10 text-center text-sm text-text-secondary">
-          {docs.length === 0 ? "Henüz bir PDF yüklemedin. İlk belgeni yükle; senin için özetleyeyim ve çalışılabilir hale getireyim." : "Filtreyle eşleşen belge yok."}
+          {docs.length === 0 ? "Henüz kaynak eklemedin. PDF, Word, Excel, sunum, link ya da metin ekle; senin için özetleyeyim ve çalışılabilir hale getireyim." : "Filtreyle eşleşen belge yok."}
         </div>
       ) : (
         <div className={view === "grid" ? "mt-6 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 " + gap : "mt-6 flex flex-col " + gap}>
@@ -247,9 +252,7 @@ export default function LibraryPage() {
                  className={cx("lift group relative cursor-pointer rounded-2xl border bg-surface", pad, "hover:border-accent-purple/40")}>
               <div className="flex items-start justify-between gap-2">
                 <div className="flex min-w-0 items-center gap-2">
-                  {(d as any).source_type === "youtube"
-                    ? <YoutubeIcon size={16} className="shrink-0 text-red-600" />
-                    : <FileText size={16} className="shrink-0 text-accent-purple" />}
+                  <SourceIcon kind={(d as any).source_type} size={16} />
                   <h3 className="truncate font-medium text-text-primary">{d.title}</h3>
                 </div>
                 <div className="flex shrink-0 items-center gap-0.5">
