@@ -20,8 +20,9 @@ import DraftEditor, { Block } from "@/components/DraftEditor";
 import {
   BookOpen, Sparkles, FileText, ArrowLeft, PenLine,
   Loader2, Send, Pencil, Check, Headphones, Plus, X, Square, CheckSquare, Trash2,
-  BookMarked, Search, RefreshCw, Clock, Share2, Volume2,
+  BookMarked, Search, RefreshCw, Clock, Share2, Volume2, MessageSquare, Scale,
 } from "lucide-react";
+import ComparePanel from "@/components/ComparePanel";
 
 type Doc = {
   id: string; title: string; status: string; page_count?: number | null;
@@ -89,7 +90,7 @@ export default function CollectionPage({ params }: { params: { id: string } }) {
   const router = useRouter();
   const [data, setData] = useState<any>(null);
   const [err, setErr] = useState("");
-  const [tab, setTab] = useState<"raf" | "sor" | "taslak" | "sozluk" | "harita" | "zaman" | "ders">("raf");
+  const [tab, setTab] = useState<"raf" | "sor" | "taslak" | "karsilastir" | "sozluk" | "harita" | "zaman" | "ders">("raf");
 
   // Kavram haritasi
   const [cm, setCm] = useState<{ nodes: CMNode[]; edges: CMEdge[] } | null>(null);
@@ -236,6 +237,34 @@ export default function CollectionPage({ params }: { params: { id: string } }) {
   const [asking, setAsking] = useState(false);
   const [thread, setThread] = useState<{ q: string; answer: string; sources: any[]; followups?: string[]; cached?: boolean; cachedQ?: string }[]>([]);
 
+  // Sohbet gecmisi: her soru-cevap sunucuda saklanir; sayfa yenilense de kaybolmaz
+  const [chatId, setChatId] = useState<string | null>(null);
+  const [chats, setChats] = useState<{ id: string; title: string; updated_at: string; n: number }[] | null>(null);
+  const [chatsOpen, setChatsOpen] = useState(false);
+  function toThread(msgs: any[]) {
+    return (msgs || []).map((m: any) => ({ q: m.q, answer: m.answer || "", sources: m.sources || [],
+      followups: m.followups || [], cached: !!m.cached, cachedQ: m.cached_question }));
+  }
+  async function loadChats(openLatest = false) {
+    try {
+      const list = await api(`/collections/${id}/chats`, {}, 1);
+      setChats(list);
+      if (openLatest && list.length && thread.length === 0) await openChat(list[0].id);
+    } catch { setChats([]); }
+  }
+  async function openChat(cid2: string) {
+    try {
+      const r = await api(`/collections/${id}/chats/${cid2}`, {}, 1);
+      setThread(toThread(r.messages)); setChatId(cid2); setChatsOpen(false); setSuggOpen(false);
+    } catch {}
+  }
+  function newChat() { setThread([]); setChatId(null); setChatsOpen(false); setSuggOpen(true); }
+  async function deleteChat(cid2: string) {
+    try { await api(`/collections/${id}/chats/${cid2}`, { method: "DELETE" }, 1); } catch {}
+    if (cid2 === chatId) newChat();
+    loadChats();
+  }
+
   // Yonlendirici soru onerileri: kaynak ozetlerinden, kaynaklar degismedikce onbellekten (kota harcamaz)
   type SGroup = { kind: string; label: string; questions: { q: string; why: string }[] };
   const [sugg, setSugg] = useState<{ theme: string; groups: SGroup[]; source: string } | null>(null);
@@ -375,20 +404,22 @@ export default function CollectionPage({ params }: { params: { id: string } }) {
     setProg(out);
   }, [data]);
 
-  useEffect(() => { if (tab === "sor" && sugg === null) loadSuggestions(); /* eslint-disable-line */ }, [tab]);
+  useEffect(() => { if ((tab === "sor" || tab === "karsilastir") && sugg === null) loadSuggestions(); /* eslint-disable-line */ }, [tab]);
+  useEffect(() => { if (tab === "sor" && chats === null) loadChats(true); /* eslint-disable-line */ }, [tab]);
 
   async function ask(text?: string, fresh = false) {
     const question = (text ?? q).trim();
     if (question.length < 3 || asking) return;
     setAsking(true); setQ(""); setSuggOpen(false);
     try {
-      const r = await api(`/collections/${id}/ask`, { method: "POST", body: JSON.stringify({ question, fresh }) });
+      const r = await api(`/collections/${id}/ask`, { method: "POST", body: JSON.stringify({ question, fresh, chat_id: chatId }) });
       let fu: string[] = (r.followups || []).map((s: string) => s.replace(/\s*\[K\s*\d+(?:\s*[,;]\s*K?\s*\d+)*\]/g, "").trim()).filter(Boolean);
       if (!fu.length && sugg?.groups?.length) {
         // Model devam sorusu vermediyse: henuz sorulmamis onerilerden 3 tane (ek kota yok)
         const asked = new Set([...thread.map((x) => x.q), question]);
         fu = sugg.groups.flatMap((g) => g.questions.map((x) => x.q)).filter((x) => !asked.has(x)).slice(0, 3);
       }
+      if (r.chat_id && r.chat_id !== chatId) { setChatId(r.chat_id); loadChats(); }
       const item = { q: question, answer: r.answer, sources: r.sources || [], followups: fu,
                      cached: !!r.cached, cachedQ: r.cached_question };
       // "Yeniden sor": ayni sorunun kayitli cevabini tazesiyle degistir
@@ -747,7 +778,7 @@ export default function CollectionPage({ params }: { params: { id: string } }) {
       {/* sekmeler */}
       <div className="mt-6 flex gap-1 overflow-x-auto border-b [-ms-overflow-style:none] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
         {([["raf", "Kaynaklar", FileText], ["sor", "Sohbet", Sparkles], ["taslak", "Taslak", PenLine],
-           ["sozluk", "Sözlük", BookMarked], ["harita", "Harita", Share2], ["zaman", "Zaman", Clock],
+           ["karsilastir", "Karşılaştır", Scale], ["sozluk", "Sözlük", BookMarked], ["harita", "Harita", Share2], ["zaman", "Zaman", Clock],
            ["ders", "Sesli özet", Headphones]] as const).map(
           ([k, label, Icon]) => (
             <button key={k} onClick={() => setTab(k as any)}
@@ -864,6 +895,41 @@ export default function CollectionPage({ params }: { params: { id: string } }) {
       {/* KONUYA SOR */}
       {tab === "sor" && (
         <div className="mt-5 max-w-3xl">
+          {/* Sohbet gecmisi */}
+          <div className="relative mb-3 flex items-center gap-2">
+            <button onClick={() => { setChatsOpen((o) => !o); if (!chatsOpen) loadChats(); }}
+                    className="flex min-w-0 items-center gap-1.5 rounded-lg border bg-surface px-3 py-1.5 text-sm hover:border-accent-purple/40">
+              <MessageSquare size={14} className="shrink-0 text-accent-purple" />
+              <span className="truncate">{chatId ? (chats?.find((c) => c.id === chatId)?.title || "Bu sohbet") : "Yeni sohbet"}</span>
+              <span className="shrink-0 text-[11px] text-text-secondary">· {chats?.length || 0} kayıtlı</span>
+            </button>
+            {thread.length > 0 && (
+              <button onClick={newChat} className="flex shrink-0 items-center gap-1 rounded-lg px-2.5 py-1.5 text-sm text-accent-purple hover:bg-accent-purple/10">
+                <Plus size={14} /> Yeni sohbet
+              </button>
+            )}
+            {chatsOpen && (
+              <div className="absolute left-0 top-full z-20 mt-1 max-h-80 w-full max-w-md overflow-y-auto rounded-xl border bg-surface p-1.5 shadow-lg">
+                {!chats?.length ? (
+                  <p className="p-3 text-sm text-text-secondary">Henüz kayıtlı sohbet yok. Sorduğun her şey burada saklanacak.</p>
+                ) : chats.map((c) => (
+                  <div key={c.id} className={cx("group flex items-center gap-2 rounded-lg px-2.5 py-2 text-sm hover:bg-surface-muted",
+                                                c.id === chatId && "bg-accent-purple/10")}>
+                    <button onClick={() => openChat(c.id)} className="min-w-0 flex-1 text-left">
+                      <span className="block truncate">{c.title || "Sohbet"}</span>
+                      <span className="block text-[11px] text-text-secondary">
+                        {c.n} soru · {new Date(c.updated_at).toLocaleString("tr-TR", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" })}
+                      </span>
+                    </button>
+                    <button onClick={() => deleteChat(c.id)} aria-label="Sohbeti sil" title="Sohbeti sil"
+                            className="rounded p-1 text-text-secondary opacity-0 hover:text-danger group-hover:opacity-100">
+                      <Trash2 size={13} />
+                    </button>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
           {thread.length === 0 && !asking && (
             <p className="mb-3 text-sm text-text-secondary">
               Soru sor; <b>{col.title}</b> defterindeki {st.documents} kaynağın tamamında arayıp atıflı cevaplayayım.
@@ -1141,6 +1207,14 @@ export default function CollectionPage({ params }: { params: { id: string } }) {
       )}
 
       {/* ZAMAN CIZELGESI */}
+      {tab === "karsilastir" && (
+        <div className="mt-5">
+          <ComparePanel notebookId={id}
+                        hints={(sugg?.groups || []).filter((g) => g.kind === "karsilastir" || g.kind === "elestir")
+                          .flatMap((g) => g.questions.map((x) => x.q)).slice(0, 6)} />
+        </div>
+      )}
+
       {tab === "zaman" && (
         <div className="mt-5">
           {tEvents === null ? (
