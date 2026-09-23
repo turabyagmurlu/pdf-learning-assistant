@@ -136,6 +136,9 @@ def _gemini_clip(vid: str, start: int | None, end: int | None) -> str:
             _dead.add(model); last = e
         except _ModelBusy as e:          # yogun: bir sonraki modelle dene (bu model olu sayilmaz)
             last = e
+    if isinstance(last, _ModelBusy) and ": 400" in str(last):
+        raise AppError("Bu video işlenemedi; video gizli, yaş sınırlı ya da bölgeye kapalı olabilir. "
+                       "Birkaç dakika sonra 'Yeniden işle' ile tekrar deneyebilirsin.")
     if isinstance(last, _ModelBusy):
         raise AppError("Yapay zekâ modelleri şu an yoğun; birkaç dakika sonra 'Yeniden işle' ile tekrar dene.")
     raise AppError("Video işleyebilecek bir yapay zekâ modeli bulunamadı." + (f" ({last})" if last else ""))
@@ -185,11 +188,11 @@ def _gemini_clip_model(model: str, vid: str, start: int | None, end: int | None)
         if r.status_code == 404:
             raise _ModelGone(model)
         if r.status_code == 400:
-            if "thinking" in last.lower() and body["generationConfig"].pop("thinkingConfig", None) is not None:
-                continue                     # model dusunme ayarini desteklemiyor -> ayarsiz tekrar
-            if "mediaresolution" in last.lower().replace("_", "") and body["generationConfig"].pop("mediaResolution", None):
+            # Model bazi ayarlari desteklemiyor olabilir: sirayla cikarip yeniden dene
+            gc = body["generationConfig"]
+            if gc.pop("thinkingConfig", None) is not None or gc.pop("mediaResolution", None) is not None:
                 continue
-            raise AppError("Bu video işlenemedi. Videonun herkese açık olduğundan emin ol. " + last[:160])
+            raise _ModelBusy(f"{model}: 400 {last[:120]}")
         if r.status_code in (429, 500, 502, 503, 504):
             raise _ModelBusy(f"{model}: {r.status_code}")
         raise AppError(f"Video işlenemedi ({r.status_code}); biraz sonra tekrar dene.")
