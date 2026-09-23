@@ -229,7 +229,21 @@ export default function CollectionPage({ params }: { params: { id: string } }) {
   // sohbet (kaynakli)
   const [q, setQ] = useState("");
   const [asking, setAsking] = useState(false);
-  const [thread, setThread] = useState<{ q: string; answer: string; sources: any[] }[]>([]);
+  const [thread, setThread] = useState<{ q: string; answer: string; sources: any[]; followups?: string[] }[]>([]);
+
+  // Yonlendirici soru onerileri: kaynak ozetlerinden, kaynaklar degismedikce onbellekten (kota harcamaz)
+  type SGroup = { kind: string; label: string; questions: { q: string; why: string }[] };
+  const [sugg, setSugg] = useState<{ theme: string; groups: SGroup[]; source: string } | null>(null);
+  const [suggBusy, setSuggBusy] = useState(false);
+  const [suggOpen, setSuggOpen] = useState(true);
+  async function loadSuggestions(refresh = false) {
+    setSuggBusy(true);
+    try {
+      const r = await api(`/collections/${id}/suggestions${refresh ? "?refresh=1" : ""}`);
+      setSugg({ theme: r.theme || "", groups: r.groups || [], source: r.source || "ai" });
+    } catch { if (!sugg) setSugg({ theme: "", groups: [], source: "hata" }); }
+    finally { setSuggBusy(false); }
+  }
 
   // taslak (blok editor): Sohbet'ten gelen bloklar kuyrukta bekler
   const [inbox, setInbox] = useState<Block[]>([]);
@@ -354,13 +368,15 @@ export default function CollectionPage({ params }: { params: { id: string } }) {
     setProg(out);
   }, [data]);
 
-  async function ask() {
-    const question = q.trim();
-    if (question.length < 3) return;
-    setAsking(true); setQ("");
+  useEffect(() => { if (tab === "sor" && sugg === null) loadSuggestions(); /* eslint-disable-line */ }, [tab]);
+
+  async function ask(text?: string) {
+    const question = (text ?? q).trim();
+    if (question.length < 3 || asking) return;
+    setAsking(true); setQ(""); setSuggOpen(false);
     try {
       const r = await api(`/collections/${id}/ask`, { method: "POST", body: JSON.stringify({ question }) });
-      setThread((t) => [...t, { q: question, answer: r.answer, sources: r.sources || [] }]);
+      setThread((t) => [...t, { q: question, answer: r.answer, sources: r.sources || [], followups: r.followups || [] }]);
     } catch (e: any) {
       setThread((t) => [...t, { q: question, answer: e?.message || "Cevap alınamadı.", sources: [] }]);
     } finally { setAsking(false); }
@@ -834,6 +850,65 @@ export default function CollectionPage({ params }: { params: { id: string } }) {
               Beğendiğin cevabı tek tuşla taslağa alırsın.
             </p>
           )}
+
+          {/* Yonlendirici sorular: bos sohbette acik, sonra katlanir */}
+          {(thread.length === 0 || suggOpen) && (
+            <div className="mb-5 rounded-2xl border bg-surface p-4">
+              <div className="flex flex-wrap items-start justify-between gap-2">
+                <div className="min-w-0">
+                  <p className="flex items-center gap-1.5 text-sm font-medium">
+                    <Sparkles size={14} className="text-accent-purple" /> Nereden başlamalı?
+                  </p>
+                  {sugg?.theme && <p className="mt-0.5 text-xs text-text-secondary">{sugg.theme}</p>}
+                </div>
+                {thread.length > 0 && (
+                  <button onClick={() => setSuggOpen(false)} aria-label="Kapat"
+                          className="rounded-md p-1 text-text-secondary hover:bg-surface-muted"><X size={14} /></button>
+                )}
+              </div>
+
+              {suggBusy && !sugg?.groups?.length ? (
+                <div className="mt-3 space-y-2">
+                  {[0, 1, 2].map((i) => <div key={i} className="h-8 animate-pulse rounded-lg bg-surface-muted" />)}
+                  <p className="text-[11px] text-text-secondary">Kaynak özetlerinden sorular hazırlanıyor…</p>
+                </div>
+              ) : (
+                <div className="mt-3 space-y-3">
+                  {(sugg?.groups || []).map((g) => (
+                    <div key={g.kind}>
+                      <p className="mb-1.5 text-[11px] font-medium uppercase tracking-wide text-text-secondary">{g.label}</p>
+                      <div className="flex flex-col gap-1.5">
+                        {g.questions.map((s, k) => (
+                          <button key={k} onClick={() => ask(s.q)} disabled={asking}
+                                  title={s.why}
+                                  className="group flex items-start gap-2 rounded-xl border bg-surface px-3 py-2 text-left text-sm transition hover:border-accent-purple/50 hover:bg-accent-purple/5 disabled:opacity-60">
+                            <Send size={12} className="mt-1 shrink-0 text-text-secondary group-hover:text-accent-purple" />
+                            <span className="min-w-0 flex-1">
+                              {s.q}
+                              {s.why && <span className="ml-1.5 text-[11px] text-text-secondary">· {s.why}</span>}
+                            </span>
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+
+              <div className="mt-3 flex flex-wrap items-center gap-2 border-t pt-2.5 text-[11px] text-text-secondary">
+                {sugg?.source === "sablon" ? (
+                  <span>Yapay zekâ kotası şu an dolu; genel şablon sorular gösteriliyor.</span>
+                ) : (
+                  <span>Kaynak özetlerinden üretildi · kaynak ekleyince kendiliğinden yenilenir</span>
+                )}
+                <button onClick={() => loadSuggestions(true)} disabled={suggBusy}
+                        className="ml-auto flex items-center gap-1 rounded-md px-2 py-1 hover:bg-surface-muted disabled:opacity-60">
+                  {suggBusy ? <Loader2 size={11} className="animate-spin" /> : <RefreshCw size={11} />} Başka öneriler <span className="opacity-60">(1 istek)</span>
+                </button>
+              </div>
+            </div>
+          )}
+
           <div className="space-y-4">
             {thread.map((t, i) => (
               <div key={i} className="fade-in">
@@ -855,16 +930,35 @@ export default function CollectionPage({ params }: { params: { id: string } }) {
                     </button>
                   </div>
                 </div>
+                {/* Devam sorulari: ayni cevapla gelir, ek kota yok */}
+                {!!t.followups?.length && i === thread.length - 1 && (
+                  <div className="mt-2 flex flex-col gap-1.5 pl-1">
+                    <p className="text-[11px] font-medium uppercase tracking-wide text-text-secondary">Daha derine in</p>
+                    {t.followups.map((f, k) => (
+                      <button key={k} onClick={() => ask(f)} disabled={asking}
+                              className="group flex items-start gap-2 self-start rounded-xl border border-dashed bg-surface px-3 py-1.5 text-left text-sm text-text-secondary transition hover:border-accent-purple/50 hover:text-text-primary disabled:opacity-60">
+                        <Send size={12} className="mt-1 shrink-0 group-hover:text-accent-purple" /> {f}
+                      </button>
+                    ))}
+                  </div>
+                )}
               </div>
             ))}
             {asking && <p className="text-sm text-text-secondary">Kaynaklar taranıyor…</p>}
           </div>
           <div className="sticky bottom-20 mt-5 flex gap-2 md:bottom-4">
+            {thread.length > 0 && !suggOpen && (
+              <button onClick={() => { setSuggOpen(true); if (!sugg) loadSuggestions(); window.scrollTo({ top: 0, behavior: "smooth" }); }}
+                      title="Soru önerilerini göster" aria-label="Soru önerileri"
+                      className="flex items-center justify-center rounded-xl border bg-surface px-3 text-accent-purple shadow-sm hover:border-accent-purple/50">
+                <Sparkles size={16} />
+              </button>
+            )}
             <input value={q} onChange={(e) => setQ(e.target.value)}
                    onKeyDown={(e) => { if (e.key === "Enter") ask(); }}
                    placeholder={thread.length ? "Devam et…" : "Örn: Bu kaynaklar Enver Paşa'nın Anadolu'ya girişini nasıl anlatıyor?"}
                    className="flex-1 rounded-xl border bg-surface px-3 py-2.5 text-sm shadow-sm outline-none focus:border-accent-purple" />
-            <button onClick={ask} disabled={asking}
+            <button onClick={() => ask()} disabled={asking}
                     className="flex items-center gap-1.5 rounded-xl bg-accent-purple px-4 py-2.5 text-sm text-white disabled:opacity-60">
               {asking ? <Loader2 size={15} className="animate-spin" /> : <Send size={15} />} Sor
             </button>
