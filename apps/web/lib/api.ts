@@ -36,6 +36,15 @@ export async function api(path: string, opts: RequestInit = {}, retries = 3) {
       lastErr = new ApiError("Sunucu yeniden başlıyor; tekrar deneniyor…", res.status, true);
       continue;
     }
+    if (res.status === 401 && token && !path.startsWith("/auth/")) {
+      // Oturum suresi dolmus: kafa karistiran hata yerine giris sayfasina yonlendir, donunce ayni sayfaya gel
+      clearToken();
+      if (typeof window !== "undefined" && !window.location.pathname.startsWith("/login")) {
+        const next = window.location.pathname + window.location.search;
+        window.location.href = "/login?next=" + encodeURIComponent(next) + "&expired=1";
+      }
+      throw new ApiError("Oturum süresi doldu; yeniden giriş yapman gerekiyor.", 401);
+    }
     if (!res.ok) {
       let msg = "İstek başarısız.";
       try { const j = await res.json(); msg = j?.error?.user_message || j?.detail || msg; } catch {}
@@ -44,4 +53,18 @@ export async function api(path: string, opts: RequestInit = {}, retries = 3) {
     return res.status === 204 ? null : res.json();
   }
   throw lastErr || new ApiError("Sunucuya ulaşılamadı.", 0, true);
+}
+
+/** Token suresi 5 gunden az kaldiysa sessizce yeniler (uygulama acildikca). */
+export async function refreshSessionIfNeeded() {
+  const t = getToken();
+  if (!t) return;
+  try {
+    const p = JSON.parse(atob(t.split(".")[1].replace(/-/g, "+").replace(/_/g, "/")));
+    const left = p.exp * 1000 - Date.now();
+    if (left <= 0) return;                             // dolmus: ilk istek giris sayfasina goturur
+    if (left > 5 * 24 * 3600 * 1000) return;
+    const r = await api("/auth/refresh", { method: "POST" }, 1);
+    if (r?.token) setToken(r.token);
+  } catch {}
 }

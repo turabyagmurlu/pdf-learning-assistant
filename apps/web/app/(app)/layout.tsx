@@ -3,7 +3,7 @@ import { useEffect } from "react";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { Library, LogOut, Search, Notebook, Sun, Moon, MonitorSmartphone } from "lucide-react";
-import { clearToken } from "@/lib/api";
+import { clearToken, refreshSessionIfNeeded } from "@/lib/api";
 import { BrandMarkSvg } from "@/components/BrandMark";
 import ThemeToggle, { useTheme } from "@/components/ThemeToggle";
 import Shortcuts from "@/components/Shortcuts";
@@ -34,6 +34,9 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
     if (firstPath.current === null) { firstPath.current = pathname; return; }
     if (pathname !== firstPath.current) { try { sessionStorage.setItem("typdf.nav", "1"); } catch {} }
   }, [pathname]);
+
+  // oturumu sessizce uzat (duzenli kullananin oturumu hic dusmez)
+  useEffect(() => { refreshSessionIfNeeded(); }, []);
 
   // sekme basligi rotaya gore
   useEffect(() => {

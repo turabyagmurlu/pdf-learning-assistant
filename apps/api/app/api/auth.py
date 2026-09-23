@@ -63,3 +63,10 @@ async def login(body: LoginIn, conn=Depends(db)):
 @router.get("/me")
 async def me(user=Depends(current_user)):
     return {"user": {"id": str(user["id"]), "name": user["name"], "email": user["email"]}}
+
+
+@router.post("/refresh")
+async def refresh(user=Depends(current_user)):
+    """Oturumu sessizce uzatir: gecerli token ile yeni (7 gunluk) token verir.
+    Uygulama acildikca calistigi icin duzenli kullanan kisi hic cikis yapmak zorunda kalmaz."""
+    return {"token": create_token(str(user["id"]))}

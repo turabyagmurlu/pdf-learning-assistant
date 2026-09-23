@@ -1,5 +1,5 @@
 "use client";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { api, setToken } from "@/lib/api";
 import { BrandMarkSvg, BrandScene } from "@/components/BrandMark";
@@ -15,6 +15,9 @@ export default function LoginPage() {
   const [password, setPassword] = useState("");
   const [err, setErr] = useState("");
   const [busy, setBusy] = useState(false);
+  useEffect(() => {
+    if (new URLSearchParams(window.location.search).get("expired")) setErr("Oturum süren doldu; kaldığın yere dönmek için tekrar giriş yap.");
+  }, []);
 
   async function submit(e: React.FormEvent) {
     e.preventDefault(); setErr(""); setBusy(true);
@@ -22,7 +25,9 @@ export default function LoginPage() {
       const body = mode === "register" ? { name, email, password } : { email, password };
       const r = await api(`/auth/${mode}`, { method: "POST", body: JSON.stringify(body) });
       setToken(r.token);
-      router.replace("/notebooks");
+      // oturum dolup buraya yonlendirildiysek kalinan sayfaya geri don
+      const next = new URLSearchParams(window.location.search).get("next") || "";
+      router.replace(next.startsWith("/") && !next.startsWith("//") ? next : "/notebooks");
     } catch (e: any) { setErr(e.message); } finally { setBusy(false); }
   }
 
