@@ -177,7 +177,7 @@ export default function TextReader({ id, doc }: { id: string; doc: any }) {
       {/* sag: sohbet */}
       <aside className="flex h-[45vh] shrink-0 flex-col border-t bg-surface lg:h-auto lg:w-[400px] lg:border-l lg:border-t-0">
         <div className="min-h-0 flex-1">
-          <ChatPanel documentId={id} onGoPage={(n) => go(n)} />
+          <ChatPanel documentId={id} onGoPage={(n) => go(n)} generic />
         </div>
       </aside>
     </div>

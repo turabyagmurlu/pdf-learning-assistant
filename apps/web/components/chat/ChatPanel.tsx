@@ -10,7 +10,7 @@ const MODES = [
   ["exam", "Sınav"], ["academic", "Akademik"], ["critical", "Eleştirel"],
 ];
 
-export function ChatPanel({ documentId, onGoPage, video }: { documentId: string; onGoPage?: (page: number) => void; video?: boolean }) {
+export function ChatPanel({ documentId, onGoPage, video, generic }: { documentId: string; onGoPage?: (page: number) => void; video?: boolean; generic?: boolean }) {
   const [sessionId, setSessionId] = useState<string | null>(null);
   const [mode, setMode] = useState("default");
   const [q, setQ] = useState("");
@@ -38,7 +38,7 @@ export function ChatPanel({ documentId, onGoPage, video }: { documentId: string;
   const suggestions = video
     ? ["Bu videonun ana fikri nedir?", "Videoda öne sürülen iddiaları ve dayanaklarını listele.",
        "Bu videoyu 5 maddede özetle (zamanlarıyla).", "En önemli kavramları çıkar."]
-    : ["Bu PDF'in ana fikri nedir?", "Bu konuyu bana yeni başlayan biri gibi anlat.",
+    : [generic ? "Bu kaynağın ana fikri nedir?" : "Bu PDF'in ana fikri nedir?", "Bu konuyu bana yeni başlayan biri gibi anlat.",
        "Bu belgeden 10 sınav sorusu hazırla.", "En önemli 10 kavramı çıkar."];
 
   return (
