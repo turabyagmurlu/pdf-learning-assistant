@@ -37,3 +37,20 @@ def presigned_url(key: str, expires=3600) -> str:
         "get_object", Params={"Bucket": settings.s3_bucket, "Key": key}, ExpiresIn=expires)
     # container-içi endpoint'i tarayıcının erişebileceği public endpoint'e çevir
     return url.replace(settings.s3_endpoint, settings.s3_public_endpoint)
+
+
+def list_keys(prefix: str) -> list[dict]:
+    """[{key, size, modified}] (en yeni sonda)."""
+    out, token = [], None
+    while True:
+        kw = {"Bucket": settings.s3_bucket, "Prefix": prefix}
+        if token:
+            kw["ContinuationToken"] = token
+        r = _s3.list_objects_v2(**kw)
+        for o in r.get("Contents") or []:
+            out.append({"key": o["Key"], "size": o.get("Size", 0), "modified": o.get("LastModified")})
+        if not r.get("IsTruncated"):
+            break
+        token = r.get("NextContinuationToken")
+    out.sort(key=lambda o: o["modified"] or 0)
+    return out
