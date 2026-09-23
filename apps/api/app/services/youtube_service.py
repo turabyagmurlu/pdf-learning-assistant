@@ -134,10 +134,18 @@ def _gemini_clip(vid: str, start: int | None, end: int | None) -> str:
             return _gemini_clip_model(model, vid, start, end)
         except _ModelGone as e:
             _dead.add(model); last = e
+        except _ModelBusy as e:          # yogun: bir sonraki modelle dene (bu model olu sayilmaz)
+            last = e
+    if isinstance(last, _ModelBusy):
+        raise AppError("Yapay zekâ modelleri şu an yoğun; birkaç dakika sonra 'Yeniden işle' ile tekrar dene.")
     raise AppError("Video işleyebilecek bir yapay zekâ modeli bulunamadı." + (f" ({last})" if last else ""))
 
 
 class _ModelGone(Exception):
+    pass
+
+
+class _ModelBusy(Exception):
     pass
 
 
@@ -153,7 +161,7 @@ def _gemini_clip_model(model: str, vid: str, start: int | None, end: int | None)
                              "thinkingConfig": {"thinkingBudget": 0}},
     }
     url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={key}"
-    waits = (20, 45, 70)
+    waits = (10, 30)       # sonra siradaki modele gecilir
     last = ""
     for attempt in range(len(waits) + 1):
         try:
@@ -182,6 +190,8 @@ def _gemini_clip_model(model: str, vid: str, start: int | None, end: int | None)
             if "mediaresolution" in last.lower().replace("_", "") and body["generationConfig"].pop("mediaResolution", None):
                 continue
             raise AppError("Bu video işlenemedi. Videonun herkese açık olduğundan emin ol. " + last[:160])
+        if r.status_code in (429, 500, 502, 503, 504):
+            raise _ModelBusy(f"{model}: {r.status_code}")
         raise AppError(f"Video işlenemedi ({r.status_code}); biraz sonra tekrar dene.")
     raise AppError("Video işlenemedi: " + last[:120])
 
