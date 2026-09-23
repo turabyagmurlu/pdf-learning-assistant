@@ -13,7 +13,7 @@ from app.pdf.extractor import extract_pages, page_count
 from app.pdf.chunking import chunk_pages
 from app.ai.factory import get_embeddings
 from app.services.analysis_service import analyze_document
-from app.core.errors import AppError
+from app.core.errors import AppError, PdfNoText
 
 # Ayni anda islenecek belge sayisi. Ucretsiz Gemini katmaninda gomme icin
 # dakikada 100 istek / 30K token siniri var; 17 belgeyi birden vermek kotayi
@@ -80,6 +80,54 @@ async def _youtube_pages(conn, document_id: str, key: str, media: dict):
     return [{"page_number": s["page"], "text": s["text"]} for s in secs], len(secs)
 
 
+def _progress_cb(conn, document_id, loop):
+    def prog(i, n):
+        try:
+            asyncio.run_coroutine_threadsafe(
+                _set(conn, document_id, progress_done=i, progress_total=n), loop).result(timeout=15)
+        except Exception:  # noqa
+            pass
+    return prog
+
+
+async def _ocr_pages(conn, document_id: str, key: str, pdf_bytes: bytes) -> list[dict]:
+    from app.sources.ocr import ocr_pdf
+    try:
+        cached = json.loads(get_object(key + ".ocr.json").decode("utf-8"))
+        if cached:
+            return cached
+    except Exception:  # noqa
+        pass
+    await _set(conn, document_id, processing_stage="ocr", progress_done=0, progress_total=0)
+    pages = await asyncio.to_thread(ocr_pdf, pdf_bytes, _progress_cb(conn, document_id, asyncio.get_running_loop()))
+    put_object(key + ".ocr.json", json.dumps(pages, ensure_ascii=False).encode("utf-8"), content_type="application/json")
+    media = {"ocr": True}
+    await _set(conn, document_id, media=media)
+    return pages
+
+
+async def _audio_pages(conn, document_id: str, key: str, media: dict):
+    """Ses kaydi: dokum (depoda varsa kota yok) -> 2 dakikalik bolumler."""
+    from app.sources import audio
+    from app.services import youtube_service as yt
+    tkey = key + ".transcript.json"
+    try:
+        tr = json.loads(get_object(tkey).decode("utf-8"))
+    except Exception:  # noqa
+        tr = None
+    if not tr or not tr.get("segments"):
+        data = get_object(key)
+        ext = key.rsplit(".", 1)[-1].lower()
+        tr = await asyncio.to_thread(audio.build_transcript, data, ext,
+                                     _progress_cb(conn, document_id, asyncio.get_running_loop()))
+        put_object(tkey, yt.dumps(tr), content_type="application/json")
+    secs = yt.sections(tr)
+    media = {**media, "method": tr.get("method"), "duration": tr.get("duration") or (secs[-1]["end"] if secs else None),
+             "sections": [{"page": s["page"], "start": s["start"], "end": s["end"]} for s in secs]}
+    await _set(conn, document_id, media=media)
+    return [{"page_number": s["page"], "text": s["text"]} for s in secs], len(secs)
+
+
 def _other_pages(stype: str, key: str, media: dict) -> list[dict]:
     """PDF/video disi kaynaklari bolumlere cevirir; okuyucu icin bolumleri de saklar."""
     from app.sources.extract import extract, text_pages, _decode
@@ -114,6 +162,12 @@ async def _run_ingest(document_id: str):
             except AppError as e:
                 await _set(conn, document_id, status="failed", error_message=e.user_message, processing_stage=None)
                 return
+        elif stype == "audio":
+            try:
+                pages, pc = await _audio_pages(conn, document_id, key, row["media"] or {})
+            except AppError as e:
+                await _set(conn, document_id, status="failed", error_message=e.user_message, processing_stage=None)
+                return
         elif stype != "pdf":
             # Word, Excel, sunum, web, metin...: yerel okuyucu, kota yok
             try:
@@ -126,6 +180,13 @@ async def _run_ingest(document_id: str):
             pdf_bytes = get_object(key)
             try:
                 pages = extract_pages(pdf_bytes)
+            except PdfNoText:
+                # taranmis PDF / fotograf: yapay zeka sayfalari okur (OCR); sonuc saklanir
+                try:
+                    pages = await _ocr_pages(conn, document_id, key, pdf_bytes)
+                except AppError as e:
+                    await _set(conn, document_id, status="failed", error_message=e.user_message, processing_stage=None)
+                    return
             except AppError as e:
                 await _set(conn, document_id, status="failed", error_message=e.user_message, processing_stage=None)
                 return
