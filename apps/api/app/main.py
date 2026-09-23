@@ -1,5 +1,5 @@
 from contextlib import asynccontextmanager
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, Request, Depends
 from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from app.config import settings
@@ -7,6 +7,7 @@ from app.core.errors import AppError
 from app.db.session import close_pool
 from app.storage.object_store import ensure_bucket
 from app.api import auth, documents, chat, notes, study, collections
+from app.deps import current_user
 
 
 @asynccontextmanager
@@ -70,8 +71,44 @@ async def lifespan(app: FastAPI):
                 " created_at timestamptz NOT NULL DEFAULT now())"
             )
             await conn.execute("CREATE INDEX IF NOT EXISTS tts_cache_used_idx ON tts_cache (used_at)")
+            # --- kota tasarrufu ---
+            # soru gommeleri (ayni soru bir daha gomulmez)
+            await conn.execute(
+                "CREATE TABLE IF NOT EXISTS embed_cache (h text PRIMARY KEY, vec vector,"
+                " used_at timestamptz NOT NULL DEFAULT now())")
+            # defter cevaplari (ayni/cok benzer soru -> kayitli cevap)
+            await conn.execute(
+                "CREATE TABLE IF NOT EXISTS answer_cache ("
+                " id bigserial PRIMARY KEY,"
+                " collection_id uuid NOT NULL REFERENCES collections(id) ON DELETE CASCADE,"
+                " docs_hash text NOT NULL, qnorm text NOT NULL, question text, qvec vector,"
+                " payload jsonb, hits int NOT NULL DEFAULT 0,"
+                " created_at timestamptz NOT NULL DEFAULT now(), used_at timestamptz NOT NULL DEFAULT now(),"
+                " UNIQUE (collection_id, docs_hash, qnorm))")
+            # ayni metin iki kez gomulmesin (yeniden yukleme / yeniden isleme)
+            try:
+                await conn.execute(
+                    "CREATE INDEX IF NOT EXISTS chunks_md5_idx ON document_chunks (md5(content))")
+            except Exception:  # noqa
+                pass
+            # gunluk kullanim sayaci (kota gostergesi)
+            await conn.execute(
+                "CREATE TABLE IF NOT EXISTS ai_usage (day date NOT NULL, model text NOT NULL, kind text NOT NULL,"
+                " requests int NOT NULL DEFAULT 0, tokens bigint NOT NULL DEFAULT 0,"
+                " PRIMARY KEY (day, model, kind))")
+            from app.ai import usage as _usage
+            _usage.load_rows(await conn.fetch(
+                "SELECT day::text AS day, model, kind, requests, tokens FROM ai_usage WHERE day >= current_date - 1"))
     except Exception:  # noqa
         pass
+    # Model havuzu: bu anahtarda olmayan modelleri bastan ele (bos istek harcamasin)
+    import asyncio as _asyncio
+    try:
+        from app.ai.gemini_provider import refresh_pool
+        await _asyncio.to_thread(refresh_pool)
+    except Exception:  # noqa
+        pass
+    flusher = _asyncio.create_task(_flush_usage_loop())
     # Yarim kalmis belgeleri kaldigi yerden isle (sunucu uyuyup uyandiginda sart)
     try:
         from app.workers.tasks import resume_unfinished
@@ -79,7 +116,39 @@ async def lifespan(app: FastAPI):
     except Exception:  # noqa
         pass
     yield
+    flusher.cancel()
+    try:
+        await _flush_usage()
+    except Exception:  # noqa
+        pass
     await close_pool()
+
+
+async def _flush_usage():
+    from app.ai import usage
+    from app.db.session import get_pool
+    rows = usage.pop_dirty()
+    if not rows:
+        return
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        for (day, model, kind), (req, tok) in rows:
+            await conn.execute(
+                """INSERT INTO ai_usage (day, model, kind, requests, tokens) VALUES ($1::text::date,$2,$3,$4,$5)
+                   ON CONFLICT (day, model, kind) DO UPDATE
+                   SET requests=GREATEST(ai_usage.requests, EXCLUDED.requests),
+                       tokens=GREATEST(ai_usage.tokens, EXCLUDED.tokens)""",
+                day, model, kind, req, tok)
+
+
+async def _flush_usage_loop():
+    import asyncio as _asyncio
+    while True:
+        await _asyncio.sleep(60)
+        try:
+            await _flush_usage()
+        except Exception:  # noqa
+            pass
 
 
 app = FastAPI(title="PDF Öğrenme Asistanı API", version="1.0.0", lifespan=lifespan)
@@ -113,6 +182,36 @@ async def keepalive():
         return {"status": "ok", "db": True}
     except Exception:  # noqa
         return {"status": "ok", "db": False}
+
+
+@app.get("/usage")
+async def usage_status(user=Depends(current_user)):
+    """Kota gostergesi: bugunku istekler (model/tur), model durumlari, sifirlanma saati."""
+    from app.ai import usage
+    from app.ai.gemini_provider import pool_models
+    from app.services.tts_service import _tts_models
+    snap = usage.snapshot()
+    def models(lst, kind):
+        out = []
+        for m in lst:
+            st = usage.status(m)
+            if st == "yok":
+                continue
+            req = sum(r["requests"] for r in snap["rows"] if r["model"] == m)
+            out.append({"model": m, "status": st, "requests": req, "kind": kind})
+        return out
+    kinds = {}
+    for r in snap["rows"]:
+        k = kinds.setdefault(r["kind"], {"requests": 0, "tokens": 0})
+        k["requests"] += r["requests"]; k["tokens"] += r["tokens"]
+    return {
+        "day": snap["day"],
+        "reset_at": usage.next_reset().isoformat(),
+        "kinds": kinds,
+        "text_models": models(pool_models(), "metin"),
+        "tts_models": models(_tts_models(), "ses"),
+        "embed": {"model": settings.gemini_embed_model, "status": usage.status(settings.gemini_embed_model)},
+    }
 
 
 app.include_router(auth.router)

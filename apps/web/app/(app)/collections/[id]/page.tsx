@@ -230,7 +230,7 @@ export default function CollectionPage({ params }: { params: { id: string } }) {
   // sohbet (kaynakli)
   const [q, setQ] = useState("");
   const [asking, setAsking] = useState(false);
-  const [thread, setThread] = useState<{ q: string; answer: string; sources: any[]; followups?: string[] }[]>([]);
+  const [thread, setThread] = useState<{ q: string; answer: string; sources: any[]; followups?: string[]; cached?: boolean; cachedQ?: string }[]>([]);
 
   // Yonlendirici soru onerileri: kaynak ozetlerinden, kaynaklar degismedikce onbellekten (kota harcamaz)
   type SGroup = { kind: string; label: string; questions: { q: string; why: string }[] };
@@ -371,19 +371,22 @@ export default function CollectionPage({ params }: { params: { id: string } }) {
 
   useEffect(() => { if (tab === "sor" && sugg === null) loadSuggestions(); /* eslint-disable-line */ }, [tab]);
 
-  async function ask(text?: string) {
+  async function ask(text?: string, fresh = false) {
     const question = (text ?? q).trim();
     if (question.length < 3 || asking) return;
     setAsking(true); setQ(""); setSuggOpen(false);
     try {
-      const r = await api(`/collections/${id}/ask`, { method: "POST", body: JSON.stringify({ question }) });
+      const r = await api(`/collections/${id}/ask`, { method: "POST", body: JSON.stringify({ question, fresh }) });
       let fu: string[] = (r.followups || []).map((s: string) => s.replace(/\s*\[K\s*\d+(?:\s*[,;]\s*K?\s*\d+)*\]/g, "").trim()).filter(Boolean);
       if (!fu.length && sugg?.groups?.length) {
         // Model devam sorusu vermediyse: henuz sorulmamis onerilerden 3 tane (ek kota yok)
         const asked = new Set([...thread.map((x) => x.q), question]);
         fu = sugg.groups.flatMap((g) => g.questions.map((x) => x.q)).filter((x) => !asked.has(x)).slice(0, 3);
       }
-      setThread((t) => [...t, { q: question, answer: r.answer, sources: r.sources || [], followups: fu }]);
+      const item = { q: question, answer: r.answer, sources: r.sources || [], followups: fu,
+                     cached: !!r.cached, cachedQ: r.cached_question };
+      // "Yeniden sor": ayni sorunun kayitli cevabini tazesiyle degistir
+      setThread((t) => fresh && t.length && t[t.length - 1].q === question ? [...t.slice(0, -1), item] : [...t, item]);
     } catch (e: any) {
       setThread((t) => [...t, { q: question, answer: e?.message || "Cevap alınamadı.", sources: [] }]);
     } finally { setAsking(false); }
@@ -925,6 +928,17 @@ export default function CollectionPage({ params }: { params: { id: string } }) {
               <div key={i} className="fade-in">
                 <p className="mb-1.5 text-sm font-medium">{t.q}</p>
                 <div className="rounded-2xl border bg-surface p-4">
+                  {t.cached && (
+                    <div className="mb-2 flex flex-wrap items-center gap-2 rounded-lg bg-green-500/10 px-2.5 py-1.5 text-[11px] text-green-800">
+                      <span>Kayıtlı cevap · kota harcanmadı{t.cachedQ && t.cachedQ !== t.q ? ` · benzer soru: “${t.cachedQ}”` : ""}</span>
+                      {i === thread.length - 1 && (
+                        <button onClick={() => ask(t.q, true)} disabled={asking}
+                                className="ml-auto rounded-md border border-green-700/30 px-2 py-0.5 hover:bg-green-500/10 disabled:opacity-60">
+                          Yeniden sor (1 istek)
+                        </button>
+                      )}
+                    </div>
+                  )}
                   <CitedText text={t.answer} sources={t.sources}
                              onCite={(n, s) => { if (s?.document_id) router.push("/documents/" + s.document_id + (s.page ? "?page=" + s.page : "")); }} />
                   <div className="mt-3 flex flex-wrap items-center gap-1.5 border-t pt-3">

@@ -149,6 +149,9 @@ async def delete_collection(cid: str, conn=Depends(db), user=Depends(current_use
 
 class AskIn(BaseModel):
     question: str
+    fresh: bool = False          # True: kayitli cevabi yok say, yeniden uret
+
+ANSWER_SIM = 0.95                # "ayni soru" sayilacak anlam benzerligi
 
 
 @router.post("/collections/{cid}/ask")
@@ -166,7 +169,27 @@ async def ask_collection(cid: str, body: AskIn, conn=Depends(db), user=Depends(c
     ids = [str(r["id"]) for r in rows]
     if not ids:
         raise AppError("Bu çalışma kitabında hazır belge yok.")
-    chunks = await rag_service.retrieve_many(conn, ids, q, get_embeddings())
+    # Cevap onbellegi: ayni kaynak kumesinde ayni/cok benzer soru -> kayitli cevap (0 kota)
+    import hashlib
+    docs_hash = hashlib.sha1(",".join(sorted(ids)).encode()).hexdigest()[:16]
+    qn = rag_service.norm_q(q)
+    if not body.fresh:
+        hit = await conn.fetchrow(
+            "SELECT id, payload, question FROM answer_cache WHERE collection_id=$1 AND docs_hash=$2 AND qnorm=$3",
+            cid, docs_hash, qn)
+        if hit:
+            await conn.execute("UPDATE answer_cache SET hits=hits+1, used_at=now() WHERE id=$1", hit["id"])
+            return {**(hit["payload"] or {}), "cached": True, "cached_question": hit["question"]}
+    q_emb = await rag_service.embed_query(conn, get_embeddings(), q)
+    if not body.fresh:
+        hit = await conn.fetchrow(
+            """SELECT id, payload, question, 1 - (qvec <=> $3) AS sim FROM answer_cache
+               WHERE collection_id=$1 AND docs_hash=$2 ORDER BY qvec <=> $3 LIMIT 1""",
+            cid, docs_hash, q_emb)
+        if hit and float(hit["sim"]) >= ANSWER_SIM:
+            await conn.execute("UPDATE answer_cache SET hits=hits+1, used_at=now() WHERE id=$1", hit["id"])
+            return {**(hit["payload"] or {}), "cached": True, "cached_question": hit["question"]}
+    chunks = await rag_service.retrieve_many(conn, ids, q, get_embeddings(), q_emb=q_emb)
     if not chunks:
         return {"answer": "Bu soruya bu çalışma kitabındaki belgelerde karşılık bulamadım.",
                 "sources": []}
@@ -187,7 +210,17 @@ async def ask_collection(cid: str, body: AskIn, conn=Depends(db), user=Depends(c
     sources = [{"document_id": str(c["document_id"]), "title": c.get("doc_title"),
                 "page": c["page_number"], "score": round(float(c["score"]), 3)} for c in chunks]
     await annotate_media(conn, sources)
-    return {"answer": answer, "sources": sources, "followups": followups}
+    payload = {"answer": answer, "sources": sources, "followups": followups}
+    try:
+        await conn.execute(
+            """INSERT INTO answer_cache (collection_id, docs_hash, qnorm, question, qvec, payload)
+               VALUES ($1,$2,$3,$4,$5,$6)
+               ON CONFLICT (collection_id, docs_hash, qnorm)
+               DO UPDATE SET payload=EXCLUDED.payload, question=EXCLUDED.question, used_at=now()""",
+            cid, docs_hash, qn, q, q_emb, payload)
+    except Exception:  # noqa - onbellek yazilamazsa cevap yine doner
+        pass
+    return payload
 
 
 async def annotate_media(conn, sources: list[dict]):
@@ -832,7 +865,7 @@ class SearchIn(BaseModel):
 @router.post("/search")
 async def search(body: SearchIn, conn=Depends(db), user=Depends(current_user)):
     """Kullanıcının belgeleri arasında semantik arama (çoklu belge)."""
-    emb = (await asyncio.to_thread(get_embeddings().embed, [body.query]))[0]
+    emb = await rag_service.embed_query(conn, get_embeddings(), body.query)
     if body.document_ids:
         rows = await conn.fetch(
             """SELECT dc.id, dc.document_id, dc.page_number, dc.section_title, dc.content,
@@ -914,7 +947,7 @@ async def search_collection(cid: str, q: str, mode: str = "hybrid",
 
     if mode in ("meaning", "hybrid"):
         try:
-            emb = (await asyncio.to_thread(get_embeddings().embed, [q]))[0]
+            emb = await rag_service.embed_query(conn, get_embeddings(), q)
             rows = await conn.fetch(
                 """SELECT dc.id, dc.document_id, dc.page_number, dc.section_title, dc.content,
                           1 - (dc.embedding <=> $1) AS sim

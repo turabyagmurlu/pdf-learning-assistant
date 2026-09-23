@@ -9,6 +9,7 @@ import ThemeToggle, { useTheme } from "@/components/ThemeToggle";
 import Shortcuts from "@/components/Shortcuts";
 import BackButton, { isSubPage, parentOf } from "@/components/BackButton";
 import Wake from "@/components/Wake";
+import QuotaMeter from "@/components/QuotaMeter";
 import { useRef } from "react";
 
 const NAV = [
@@ -65,6 +66,7 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
           </Link>
         ))}
         <div className="mt-auto flex flex-col gap-1">
+          <QuotaMeter />
           <button onClick={() => window.dispatchEvent(new KeyboardEvent("keydown", { key: "?" }))}
                   className="flex items-center gap-2 rounded-md px-3 py-2 text-text-secondary hover:bg-surface-muted">
             <span className="rounded border px-1.5 font-mono text-[11px]">?</span> Kısayollar
@@ -92,6 +94,7 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
               </Link>
             )}
             <div className="flex items-center gap-1">
+              <QuotaMeter compact />
               <button onClick={() => set(nextMode as any)} aria-label="Tema" className="rounded-md p-2 text-text-secondary hover:bg-surface-muted">
                 <ModeIcon size={18} />
               </button>

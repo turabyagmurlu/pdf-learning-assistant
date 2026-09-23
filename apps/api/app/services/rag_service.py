@@ -1,11 +1,38 @@
 import asyncio
+import hashlib
+import re
 from app.ai.provider import EmbeddingProvider
+from app.config import settings
 
 MIN_SCORE = 0.20
 
 
+def norm_q(text: str) -> str:
+    """Soruyu karsilastirma icin sadelestirir (buyuk/kucuk harf, noktalama, bosluk)."""
+    t = (text or "").replace("İ", "i").replace("I", "ı").lower()
+    t = re.sub(r"[^\w\s]", " ", t)
+    return re.sub(r"\s+", " ", t).strip()
+
+
+async def embed_query(conn, embedder: EmbeddingProvider, text: str) -> list[float]:
+    """Soru gommesi: ayni metin daha once gomulduyse depodan (kota yok)."""
+    key = hashlib.sha1(f"{settings.gemini_embed_model}|{settings.embedding_dim}|{norm_q(text)}".encode()).hexdigest()
+    try:
+        row = await conn.fetchrow("UPDATE embed_cache SET used_at=now() WHERE h=$1 RETURNING vec", key)
+        if row and row["vec"] is not None:
+            return list(row["vec"])
+    except Exception:  # noqa - tablo yoksa normal yoldan devam
+        row = None
+    vec = (await asyncio.to_thread(embedder.embed, [text]))[0]
+    try:
+        await conn.execute("INSERT INTO embed_cache (h, vec) VALUES ($1, $2) ON CONFLICT (h) DO NOTHING", key, vec)
+    except Exception:  # noqa
+        pass
+    return vec
+
+
 async def retrieve(conn, document_id: str, question: str, embedder: EmbeddingProvider, k: int = 8):
-    q_emb = (await asyncio.to_thread(embedder.embed, [question]))[0]
+    q_emb = await embed_query(conn, embedder, question)
     rows = await conn.fetch(
         """
         SELECT id, page_number, section_title, content,
@@ -26,11 +53,12 @@ async def retrieve(conn, document_id: str, question: str, embedder: EmbeddingPro
 
 
 async def retrieve_many(conn, document_ids: list[str], question: str,
-                        embedder: EmbeddingProvider, k: int = 10):
+                        embedder: EmbeddingProvider, k: int = 10, q_emb: list[float] | None = None):
     """Birden fazla belge icinde arama (calisma kitabi icin)."""
     if not document_ids:
         return []
-    q_emb = (await asyncio.to_thread(embedder.embed, [question]))[0]
+    if q_emb is None:
+        q_emb = await embed_query(conn, embedder, question)
     rows = await conn.fetch(
         """
         SELECT dc.id, dc.page_number, dc.section_title, dc.content,

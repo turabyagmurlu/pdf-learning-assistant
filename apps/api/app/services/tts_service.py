@@ -11,6 +11,7 @@ import struct
 import httpx
 from app.config import settings
 from app.core.errors import AiUnavailable
+from app.ai import usage
 
 BASE = "https://generativelanguage.googleapis.com/v1beta"
 
@@ -134,6 +135,12 @@ def split_for_tts(text: str, max_chars: int = 2600) -> list[str]:
     return chunks
 
 
+def _tts_models() -> list[str]:
+    first = (settings.gemini_tts_model or "gemini-2.5-flash-preview-tts").strip()
+    return list(dict.fromkeys([first, "gemini-2.5-flash-tts", "gemini-2.5-flash-preview-tts",
+                               "gemini-2.5-pro-preview-tts", "gemini-2.5-pro-tts"]))
+
+
 def synthesize_pcm(text: str, voice: str = DEFAULT_VOICE, style: str = "") -> bytes:
     """Metni ham PCM baytlarina cevirir (tek Gemini cagrisi)."""
     key = (settings.gemini_api_key or "").strip()
@@ -147,8 +154,6 @@ def synthesize_pcm(text: str, voice: str = DEFAULT_VOICE, style: str = "") -> by
     )
     prompt = f"{directive}:\n\n{text[:8000]}"
 
-    model = (settings.gemini_tts_model or "gemini-2.5-flash-preview-tts").strip()
-    url = f"{BASE}/models/{model}:generateContent?key={key}"
     payload = {
         "contents": [{"parts": [{"text": prompt}]}],
         "generationConfig": {
@@ -159,9 +164,26 @@ def synthesize_pcm(text: str, voice: str = DEFAULT_VOICE, style: str = "") -> by
         },
     }
     try:
-        r = httpx.post(url, json=payload, timeout=httpx.Timeout(connect=10, read=170, write=30, pool=10))
-        if r.status_code == 429:
-            raise _quota_from_response(r)
+        # Ses modeli havuzu: biri gunluk kotayi doldurursa digerine gec (her birinin ayri kotasi var)
+        r = None
+        quota_err = None
+        for model in _tts_models():
+            if not usage.available(model):
+                continue
+            url = f"{BASE}/models/{model}:generateContent?key={key}"
+            r = httpx.post(url, json=payload, timeout=httpx.Timeout(connect=10, read=170, write=30, pool=10))
+            if r.status_code == 404:
+                usage.mark_dead(model); r = None; continue
+            if r.status_code == 429:
+                quota_err = _quota_from_response(r)
+                usage.mark_limited(model, getattr(quota_err, "daily", False), getattr(quota_err, "retry_after", None))
+                r = None; continue
+            break
+        if r is None:
+            if quota_err is None and any(usage.status(m) == "gunluk_doldu" for m in _tts_models()):
+                quota_err = TtsQuota("Bugünkü seslendirme kotası doldu; yarın yenilenir. "
+                                     "Şimdilik tarayıcı sesiyle dinleyebilirsin.", daily=True)
+            raise quota_err or TtsQuota("Seslendirme kotası şu an dolu.")
         if r.status_code in (500, 502, 503, 504):
             raise TtsBusy("Ses motoru şu an yoğun; birkaç saniye içinde tekrar denenecek.")
         if r.status_code >= 400:
@@ -171,6 +193,7 @@ def synthesize_pcm(text: str, voice: str = DEFAULT_VOICE, style: str = "") -> by
             except Exception:
                 pass
             raise AiUnavailable(f"Seslendirme başarısız (kod {r.status_code}). {detail}".strip())
+        usage.record(model, "ses", len(text) // 4)
         data = r.json()
         parts = data["candidates"][0]["content"]["parts"]
         b64 = None

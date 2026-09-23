@@ -13,6 +13,10 @@ class Settings(BaseSettings):
     gemini_model_advanced: str = "gemini-flash-lite-latest"
     gemini_embed_model: str = "gemini-embedding-001"
     gemini_tts_model: str = "gemini-2.5-flash-preview-tts"
+    # Yedek model havuzu: her modelin kendi gunluk kotasi var. Biri dolunca
+    # (429) ya da bu anahtarda yoksa (404) otomatik siradakine gecilir.
+    gemini_model_pool: str = ("gemini-flash-lite-latest,gemini-3.5-flash-lite,gemini-3.1-flash-lite,"
+                              "gemini-2.5-flash-lite,gemini-flash-latest,gemini-2.5-flash")
 
     # OpenAI (opsiyonel alternatif)
     openai_api_key: str = "sk-REPLACE_ME"

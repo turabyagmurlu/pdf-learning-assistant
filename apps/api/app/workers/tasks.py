@@ -1,5 +1,7 @@
 import asyncio
+import hashlib
 import json
+import re
 import threading
 import time
 import asyncpg
@@ -123,6 +125,41 @@ async def _run_ingest(document_id: str):
                    progress_done=len(done_idx), progress_total=total)
         embedder = get_embeddings()
         done = len(done_idx)
+
+        # Kota tasarrufu 1: anlamsiz kisa parcalari (sayfa no, bos baslik) hic gomme
+        def _meaningful(t: str) -> bool:
+            return len(re.findall(r"[^\W\d_]", t or "")) >= 25
+        skipped = [c for c in todo if not _meaningful(c["content"])]
+        todo = [c for c in todo if _meaningful(c["content"])]
+        done += len(skipped)
+
+        # Kota tasarrufu 2: ayni metin daha once gomulduyse (ayni PDF tekrar yuklendi,
+        # yeniden isleniyor vb.) o vektoru kullan, API'ye gitme
+        hashes = {c["chunk_index"]: hashlib.md5(c["content"].encode("utf-8")).hexdigest() for c in todo}
+        reuse: dict[str, list] = {}
+        if hashes:
+            try:
+                for r in await conn.fetch(
+                        """SELECT DISTINCT ON (md5(content)) md5(content) AS h, embedding
+                           FROM document_chunks WHERE md5(content) = ANY($1::text[]) AND embedding IS NOT NULL""",
+                        list(set(hashes.values()))):
+                    reuse[r["h"]] = r["embedding"]
+            except Exception:  # noqa
+                reuse = {}
+        cached = [c for c in todo if hashes[c["chunk_index"]] in reuse]
+        for c in cached:
+            await conn.execute(
+                """INSERT INTO document_chunks
+                   (document_id, chunk_index, page_number, page_end, section_title, content, token_count, embedding)
+                   VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
+                   ON CONFLICT DO NOTHING""",
+                document_id, c["chunk_index"], c["page_number"], c["page_end"],
+                c["section_title"], c["content"], c["token_count"], reuse[hashes[c["chunk_index"]]])
+        done += len(cached)
+        todo = [c for c in todo if hashes[c["chunk_index"]] not in reuse]
+        if skipped or cached:
+            await _set(conn, document_id, progress_done=done, progress_total=total)
+
         for i in range(0, len(todo), EMBED_BATCH):
             part = todo[i:i + EMBED_BATCH]
             vectors = embedder.embed([c["content"] for c in part])     # kendi icinde retry yapar

@@ -128,7 +128,8 @@ def _gemini_clip(vid: str, start: int | None, end: int | None) -> str:
     """Model adlari zamanla emekliye ayriliyor: 404 alirsa siradakini dener."""
     last = None
     for model in dict.fromkeys(_MODELS):
-        if model in _dead:
+        from app.ai import usage
+        if model in _dead or not usage.available(model):
             continue
         try:
             return _gemini_clip_model(model, vid, start, end)
@@ -176,6 +177,8 @@ def _gemini_clip_model(model: str, vid: str, start: int | None, end: int | None)
             raise AppError("Video işlenirken bağlantı koptu; 'Yeniden işle' ile tekrar dene.")
         if r.status_code == 200:
             j = r.json()
+            from app.ai import usage
+            usage.record(model, "video", (j.get("usageMetadata") or {}).get("totalTokenCount", 0))
             try:
                 return "".join(p.get("text", "") for p in j["candidates"][0]["content"]["parts"])
             except Exception:  # noqa
