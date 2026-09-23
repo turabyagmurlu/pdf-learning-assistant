@@ -5,7 +5,8 @@ import { api, API, getToken } from "@/lib/api";
 import PodcastPlayer from "@/components/PodcastPlayer";
 import BrowserVoice, { browserVoiceSupported } from "@/components/BrowserVoice";
 import { stageInfo } from "@/lib/docstage";
-import CitedText from "@/components/CitedText";
+import CitedText, { citeLoc } from "@/components/CitedText";
+import YoutubeAdd, { YoutubeIcon } from "@/components/YoutubeAdd";
 import { useRefreshOn } from "@/components/Wake";
 import { useConfirm } from "@/components/Confirm";
 import NotebookSearch from "@/components/NotebookSearch";
@@ -787,9 +788,13 @@ export default function CollectionPage({ params }: { params: { id: string } }) {
                         <X size={14} />
                       </button>
                       <div className="flex items-start gap-2">
-                        <div className="mt-0.5 h-10 w-1.5 shrink-0 rounded-full bg-accent-purple/70" />
+                        <div className={cx("mt-0.5 h-10 w-1.5 shrink-0 rounded-full",
+                          (d as any).source_type === "youtube" ? "bg-red-500/80" : "bg-accent-purple/70")} />
                         <div className="min-w-0 flex-1">
-                          <h3 className="truncate pr-6 text-sm font-medium">{d.title}</h3>
+                          <h3 className="flex items-center gap-1.5 truncate pr-6 text-sm font-medium">
+                            {(d as any).source_type === "youtube" && <YoutubeIcon size={15} className="shrink-0 text-red-600" />}
+                            <span className="truncate">{d.title}</span>
+                          </h3>
                           {d.short_summary && (
                             <p className="mt-0.5 line-clamp-2 text-xs text-text-secondary">{d.short_summary}</p>
                           )}
@@ -925,9 +930,9 @@ export default function CollectionPage({ params }: { params: { id: string } }) {
                   <div className="mt-3 flex flex-wrap items-center gap-1.5 border-t pt-3">
                     {t.sources.map((s: any, j: number) => (
                       <button key={j} onClick={() => router.push("/documents/" + s.document_id + (s.page ? "?page=" + s.page : ""))}
-                              title={`${s.title} · s.${s.page} — PDF'te aç`}
+                              title={`${s.title} · ${citeLoc(s)} — ${s.kind === "youtube" ? "videoda o ana git" : "PDF'te aç"}`}
                               className="rounded-full border bg-surface px-2.5 py-1 text-xs text-text-secondary hover:border-accent-purple/50 hover:text-accent-purple">
-                        K{j + 1} · {s.title} · s.{s.page}
+                        K{j + 1} · {s.title} · {citeLoc(s)}
                       </button>
                     ))}
                     <button onClick={() => answerToDraft(t)}
@@ -1335,6 +1340,11 @@ export default function CollectionPage({ params }: { params: { id: string } }) {
                   </p>
                 </div>
               </div>
+            </div>
+
+            {/* 1b) YouTube videosu -> kaynak */}
+            <div className="border-b px-4 py-3">
+              <YoutubeAdd collectionId={id} onAdded={() => load()} />
             </div>
 
             {/* 2) Kutuphaneden sec */}

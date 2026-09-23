@@ -60,7 +60,8 @@ async def get_collection(cid: str, conn=Depends(db), user=Depends(current_user))
     docs = await conn.fetch(
         """SELECT id, title, status, page_count, short_summary, category, tags,
                   is_favorite, difficulty_level, created_at,
-                  processing_stage, progress_done, progress_total, error_message
+                  processing_stage, progress_done, progress_total, error_message,
+                  source_type, source_url, media
            FROM documents WHERE user_id=$1 AND collection_id=$2
            ORDER BY created_at DESC""",
         user["id"], cid)
@@ -185,7 +186,31 @@ async def ask_collection(cid: str, body: AskIn, conn=Depends(db), user=Depends(c
     answer, followups = _split_followups(raw)
     sources = [{"document_id": str(c["document_id"]), "title": c.get("doc_title"),
                 "page": c["page_number"], "score": round(float(c["score"]), 3)} for c in chunks]
+    await annotate_media(conn, sources)
     return {"answer": answer, "sources": sources, "followups": followups}
+
+
+async def annotate_media(conn, sources: list[dict]):
+    """Video kaynaklarinda 'sayfa' yerine videodaki zamani ekler (start sn + etiket)."""
+    ids = list({s["document_id"] for s in sources if s.get("document_id")})
+    if not ids:
+        return sources
+    rows = await conn.fetch(
+        "SELECT id, media FROM documents WHERE id = ANY($1::uuid[]) AND source_type='youtube'", ids)
+    if not rows:
+        return sources
+    from app.services.youtube_service import fmt
+    secs = {str(r["id"]): {int(x["page"]): x["start"] for x in ((r["media"] or {}).get("sections") or [])}
+            for r in rows}
+    for s in sources:
+        m = secs.get(s.get("document_id"))
+        if m is not None:
+            st = m.get(int(s.get("page") or 0))
+            s["kind"] = "youtube"
+            if st is not None:
+                s["start"] = st
+                s["time"] = fmt(st)
+    return sources
 
 
 def _split_followups(text: str) -> tuple[str, list[str]]:

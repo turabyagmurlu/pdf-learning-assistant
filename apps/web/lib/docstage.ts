@@ -2,6 +2,7 @@
 export type StageDoc = {
   status: string; processing_stage?: string | null;
   progress_done?: number | null; progress_total?: number | null;
+  source_type?: string | null;
 };
 
 export function stageInfo(d: StageDoc): { label: string; pct: number | null } {
@@ -9,6 +10,10 @@ export function stageInfo(d: StageDoc): { label: string; pct: number | null } {
   if (d.status === "failed") return { label: "Hata", pct: null };
   const s = d.processing_stage;
   if (d.status === "uploaded" || !s) return { label: "Sırada", pct: 0 };
+  if (s === "extracting" && d.source_type === "youtube") {
+    const t = d.progress_total || 0, n = d.progress_done || 0;
+    return { label: t > 1 ? `Video dinleniyor ${n}/${t}` : "Video dinleniyor", pct: t > 1 ? 2 + Math.round((n / t) * 8) : 5 };
+  }
   if (s === "extracting") return { label: "Metin çıkarılıyor", pct: 5 };
   if (s === "chunking") return { label: "Parçalanıyor", pct: 10 };
   if (s === "embedding") {

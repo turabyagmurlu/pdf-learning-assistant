@@ -6,7 +6,7 @@ import asyncpg
 from pgvector.asyncpg import register_vector
 from app.workers.celery_app import celery
 from app.config import settings
-from app.storage.object_store import get_object, ensure_bucket
+from app.storage.object_store import get_object, put_object, ensure_bucket
 from app.pdf.extractor import extract_pages, page_count
 from app.pdf.chunking import chunk_pages
 from app.ai.factory import get_embeddings
@@ -48,25 +48,61 @@ async def _set(conn, document_id: str, **fields):
     await conn.execute(f"UPDATE documents SET {sets} WHERE id=$1", document_id, *[fields[c] for c in cols])
 
 
+async def _youtube_pages(conn, document_id: str, key: str, media: dict):
+    """Video dokumunu getirir (daha once cikarildiysa depodan: kota yok),
+    2 dakikalik bolumlere boler ve bolum zamanlarini belgeye yazar."""
+    from app.services import youtube_service as yt
+    tr = None
+    try:
+        tr = json.loads(get_object(key).decode("utf-8"))
+    except Exception:  # noqa - ilk isleme: dokum henuz yok
+        tr = None
+    if not tr or not tr.get("segments"):
+        vid = media.get("video_id")
+        loop = asyncio.get_running_loop()
+
+        def prog(i, n):          # uzun videolarda dilim ilerlemesi
+            try:
+                asyncio.run_coroutine_threadsafe(
+                    _set(conn, document_id, progress_done=i, progress_total=n), loop).result(timeout=15)
+            except Exception:  # noqa
+                pass
+
+        tr = await asyncio.to_thread(yt.build_transcript, vid, media.get("duration"), prog)
+        put_object(key, yt.dumps(tr), content_type="application/json")
+    secs = yt.sections(tr)
+    media = {**media, "method": tr.get("method"),
+             "duration": media.get("duration") or tr.get("duration") or (secs[-1]["end"] if secs else None),
+             "sections": [{"page": s["page"], "start": s["start"], "end": s["end"]} for s in secs]}
+    await _set(conn, document_id, media=media)
+    return [{"page_number": s["page"], "text": s["text"]} for s in secs], len(secs)
+
+
 async def _run_ingest(document_id: str):
     conn = await _conn()
     try:
-        row = await conn.fetchrow("SELECT file_path FROM documents WHERE id=$1", document_id)
+        row = await conn.fetchrow("SELECT file_path, source_type, media FROM documents WHERE id=$1", document_id)
         if not row:
             return
         key = row["file_path"]
 
         await _set(conn, document_id, status="processing", processing_stage="extracting",
                    progress_done=0, progress_total=0, error_message=None)
-        pdf_bytes = get_object(key)
 
-        try:
-            pages = extract_pages(pdf_bytes)
-        except AppError as e:
-            await _set(conn, document_id, status="failed", error_message=e.user_message, processing_stage=None)
-            return
-
-        pc = page_count(pdf_bytes)
+        if (row["source_type"] or "pdf") == "youtube":
+            try:
+                pages, pc = await _youtube_pages(conn, document_id, key, row["media"] or {})
+            except AppError as e:
+                await _set(conn, document_id, status="failed", error_message=e.user_message, processing_stage=None)
+                return
+        else:
+            pdf_bytes = get_object(key)
+            try:
+                pages = extract_pages(pdf_bytes)
+            except AppError as e:
+                await _set(conn, document_id, status="failed", error_message=e.user_message, processing_stage=None)
+                return
+            pc = page_count(pdf_bytes)
         await _set(conn, document_id, processing_stage="chunking", page_count=pc)
         chunks = chunk_pages(pages)
         if not chunks:

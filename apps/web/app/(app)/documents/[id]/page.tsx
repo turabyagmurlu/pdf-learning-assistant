@@ -9,6 +9,7 @@ import NotesPanel from "@/components/reader/NotesPanel";
 import ExplainPanel from "@/components/reader/ExplainPanel";
 import ConnectionsPanel from "@/components/reader/ConnectionsPanel";
 import { ChatPanel } from "@/components/chat/ChatPanel";
+import VideoReader from "@/components/reader/VideoReader";
 import { X, Sparkles, StickyNote, Volume2, Link2 } from "lucide-react";
 
 // react-pdf must be client-only (no SSR)
@@ -228,6 +229,7 @@ export default function DocumentPage({ params }: { params: { id: string } }) {
   }
 
   if (!doc) return <div className="p-8 text-text-secondary">Yükleniyor…</div>;
+  if (doc.source_type === "youtube") return <VideoReader id={id} doc={doc} />;
 
   function startResize(side: "left" | "right", e: any) {
     e.preventDefault();

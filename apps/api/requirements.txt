@@ -14,3 +14,4 @@ celery[redis]==5.4.0
 redis==5.0.7
 boto3==1.34.140
 httpx==0.27.0
+youtube-transcript-api>=1.1,<2

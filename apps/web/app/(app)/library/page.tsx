@@ -5,6 +5,7 @@ import { api, API, getToken } from "@/lib/api";
 import { CardSkeleton } from "@/components/Skeleton";
 import PageHeader from "@/components/PageHeader";
 import { stageInfo } from "@/lib/docstage";
+import YoutubeAdd, { YoutubeIcon } from "@/components/YoutubeAdd";
 import { useRefreshOn } from "@/components/Wake";
 import { useConfirm } from "@/components/Confirm";
 import { UploadCloud, Search, Star, Trash2, Pencil, LayoutGrid, List, MoreVertical, X, FileText, FolderOpen, FolderPlus, Check, BookOpen, RefreshCw } from "lucide-react";
@@ -228,6 +229,9 @@ export default function LibraryPage() {
         <p className="mt-2 text-sm text-text-secondary">{uploading ? "Yükleniyor…" : "PDF yüklemek için tıkla veya sürükle"}</p>
         <input ref={fileRef} type="file" accept="application/pdf" multiple hidden onChange={(e) => onFiles(e.target.files)} />
       </div>
+      <div className="mt-3 rounded-2xl border bg-surface px-4 py-3">
+        <YoutubeAdd onAdded={() => reload()} />
+      </div>
 
       {loading ? (
         <div className="mt-6"><CardSkeleton n={3} /></div>
@@ -243,7 +247,9 @@ export default function LibraryPage() {
                  className={cx("lift group relative cursor-pointer rounded-2xl border bg-surface", pad, "hover:border-accent-purple/40")}>
               <div className="flex items-start justify-between gap-2">
                 <div className="flex min-w-0 items-center gap-2">
-                  <FileText size={16} className="shrink-0 text-accent-purple" />
+                  {(d as any).source_type === "youtube"
+                    ? <YoutubeIcon size={16} className="shrink-0 text-red-600" />
+                    : <FileText size={16} className="shrink-0 text-accent-purple" />}
                   <h3 className="truncate font-medium text-text-primary">{d.title}</h3>
                 </div>
                 <div className="flex shrink-0 items-center gap-0.5">
