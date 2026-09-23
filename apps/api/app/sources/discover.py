@@ -31,26 +31,30 @@ def _call(topic: str, context: str) -> dict:
             "tools": [{"google_search": {}}],
             "generationConfig": {"temperature": 0.3}}
     key = settings.gemini_api_key.strip()
-    last = ""
+    errs = []
     for m in pool_models():
         if not usage.available(m):
             continue
         try:
             r = httpx.post(f"{BASE}/models/{m}:generateContent?key={key}", json=body, timeout=90)
         except httpx.HTTPError as e:
-            last = str(e); continue
+            errs.append(f"{m}: bağlantı"); continue
         if r.status_code == 200:
             j = r.json()
             usage.record(m, "arama", (j.get("usageMetadata") or {}).get("totalTokenCount", 0))
             return j
-        last = r.text[:200]
+        try:
+            msg = ((r.json().get("error") or {}).get("message") or "")[:140]
+        except Exception:  # noqa
+            msg = r.text[:140]
+        errs.append(f"{m}: {r.status_code} {msg}")
         if r.status_code == 404:
             usage.mark_dead(m)
-        elif r.status_code == 429:
-            usage.mark_limited(m, "PerDay" in r.text)
-        elif r.status_code == 400:
-            continue                      # bu model arama aracini desteklemiyor olabilir
-    raise AiUnavailable("Web araması şu an yapılamıyor (kota dolu olabilir); biraz sonra tekrar dene.", detail=last)
+        # 429 burada isaretlenmez: arama kotasi dolmus olabilir ama model metin icin hala kullanilabilir
+    if any(" 429 " in e for e in errs):
+        raise AiUnavailable("Web araması kotası şu an dolu; birkaç dakika sonra tekrar dene.", detail="; ".join(errs))
+    raise AiUnavailable("Web araması şu an yapılamıyor. (" + (errs[0] if errs else "model yok") + ")",
+                        detail="; ".join(errs))
 
 
 def _resolve(uri: str) -> str | None:
@@ -111,33 +115,112 @@ def _preview(url: str) -> dict | None:
         return None
 
 
+def _en_query(topic: str) -> str:
+    """OpenAlex Ingilizce aramada daha iyi: Turkce konuyu kisa Ingilizce anahtar kelimelere cevirir (1 kucuk istek).
+    Kota yoksa konu oldugu gibi kullanilir."""
+    if not re.search(r"[çğıöşüÇĞİÖŞÜ]", topic):
+        return topic
+    try:
+        from app.ai.factory import get_llm
+        out = get_llm().complete([{"role": "user", "content":
+            "Translate this research topic into a concise English academic search query (max 8 words). "
+            f"Reply with the query only.\n\n{topic}"}])
+        out = (out or "").strip().strip('"').splitlines()[0]
+        return out[:120] or topic
+    except Exception:  # noqa
+        return topic
+
+
+def _openalex(query: str, n: int = 8) -> list[dict]:
+    """OpenAlex: 250M+ akademik yayin, ucretsiz, anahtarsiz. Yalniz acik erisimli olanlar (eklenebilsin diye)."""
+    try:
+        r = httpx.get("https://api.openalex.org/works", timeout=15, headers=UA, params={
+            "search": query, "per_page": n, "filter": "is_oa:true,type:article|review|book-chapter",
+            "sort": "relevance_score:desc", "mailto": "typdf@example.com",
+            "select": "id,display_name,doi,publication_year,open_access,primary_location,cited_by_count,"
+                      "abstract_inverted_index,authorships"})
+        if r.status_code != 200:
+            return []
+        out = []
+        for w in r.json().get("results", []):
+            url = ((w.get("open_access") or {}).get("oa_url")) or (w.get("doi") or "")
+            if not url:
+                continue
+            inv = w.get("abstract_inverted_index") or {}
+            words = sorted(((i, k) for k, idx in inv.items() for i in idx))
+            abstract = " ".join(k for _, k in words)[:300]
+            src = ((w.get("primary_location") or {}).get("source") or {}).get("display_name")
+            auth = ", ".join(a["author"]["display_name"] for a in (w.get("authorships") or [])[:2] if a.get("author"))
+            meta = " · ".join(filter(None, [auth, src, str(w.get("publication_year") or ""),
+                                            f"{w.get('cited_by_count', 0)} atıf" if w.get("cited_by_count") else ""]))
+            out.append({"url": url, "title": w.get("display_name") or url, "description": abstract,
+                        "site": meta or "OpenAlex", "kind": "pdf" if url.lower().endswith(".pdf") else "web",
+                        "academic": True, "words": 4000, "origin": "openalex"})
+        return out
+    except Exception:  # noqa
+        return []
+
+
+def _wikipedia(query: str, lang: str, n: int = 2) -> list[dict]:
+    try:
+        r = httpx.get(f"https://{lang}.wikipedia.org/w/api.php", timeout=10, headers=UA, params={
+            "action": "query", "list": "search", "srsearch": query, "srlimit": n, "format": "json"})
+        out = []
+        for h in r.json().get("query", {}).get("search", []):
+            title = h["title"]
+            snippet = re.sub(r"<[^>]+>", "", h.get("snippet") or "")
+            out.append({"url": f"https://{lang}.wikipedia.org/wiki/{title.replace(' ', '_')}", "title": title,
+                        "description": snippet, "site": f"Vikipedi ({lang})", "kind": "web", "academic": False,
+                        "words": int(h.get("wordcount") or 0), "origin": "wikipedia"})
+        return out
+    except Exception:  # noqa
+        return []
+
+
 def discover(topic: str, context: str = "", exclude: set[str] | None = None) -> dict:
     topic = (topic or "").strip()
     if len(topic) < 3:
         raise AppError("Aramak istediğin konuyu yaz.")
-    j = _call(topic, context)
-    cand = (j.get("candidates") or [{}])[0]
-    overview = "".join(p.get("text", "") for p in (cand.get("content") or {}).get("parts", []))
-    overview = re.sub(r"\[\d+(,\s*\d+)*\]", "", overview).strip()
-    gm = cand.get("groundingMetadata") or {}
-    chunks = [c.get("web") for c in gm.get("groundingChunks") or [] if c.get("web")]
-    queries = gm.get("webSearchQueries") or []
-    uris = []
-    for c in chunks:
-        if c.get("uri") and c["uri"] not in uris:
-            uris.append(c["uri"])
-    with ThreadPoolExecutor(max_workers=8) as ex:
-        resolved = list(ex.map(_resolve, uris[:14]))
-    seen, urls = set(exclude or ()), []
-    for u in resolved:
-        if not u:
-            continue
-        norm = u.split("#")[0]
-        if norm in seen:
-            continue
-        seen.add(norm); urls.append(norm)
-    with ThreadPoolExecutor(max_workers=8) as ex:
-        previews = [p for p in ex.map(_preview, urls) if p]
-    # akademik ve uzun icerikler once
-    previews.sort(key=lambda p: (not p.get("academic"), p.get("kind") != "pdf", -(p.get("words") or 0)))
-    return {"topic": topic, "overview": overview[:1500], "queries": queries, "results": previews[:10]}
+    seen = set(exclude or ())
+    # 1) Google aramasi destekli model (kota varsa)
+    overview, queries, web_results, web_err = "", [], [], None
+    try:
+        j = _call(topic, context)
+        cand = (j.get("candidates") or [{}])[0]
+        overview = "".join(p.get("text", "") for p in (cand.get("content") or {}).get("parts", []))
+        overview = re.sub(r"\[\d+(,\s*\d+)*\]", "", overview).strip()
+        gm = cand.get("groundingMetadata") or {}
+        chunks = [c.get("web") for c in gm.get("groundingChunks") or [] if c.get("web")]
+        queries = gm.get("webSearchQueries") or []
+        uris = []
+        for c in chunks:
+            if c.get("uri") and c["uri"] not in uris:
+                uris.append(c["uri"])
+        with ThreadPoolExecutor(max_workers=8) as ex:
+            resolved = list(ex.map(_resolve, uris[:14]))
+        urls = []
+        for u in resolved:
+            if u and u.split("#")[0] not in seen:
+                seen.add(u.split("#")[0]); urls.append(u.split("#")[0])
+        with ThreadPoolExecutor(max_workers=8) as ex:
+            web_results = [p for p in ex.map(_preview, urls) if p]
+        for p in web_results:
+            p["origin"] = "google"
+    except (AiUnavailable, AppError) as e:
+        web_err = getattr(e, "user_message", str(e))
+    # 2) acik kaynaklar: akademik (OpenAlex) + ansiklopedi (Vikipedi) - kota harcamaz
+    q_en = _en_query(topic)
+    with ThreadPoolExecutor(max_workers=3) as ex:
+        fa = ex.submit(_openalex, q_en)
+        fw = ex.submit(_wikipedia, topic, "tr")
+        fe = ex.submit(_wikipedia, q_en, "en")
+        open_results = fa.result() + fw.result() + fe.result()
+    open_results = [r for r in open_results if r["url"] not in seen and not seen.add(r["url"])]
+    web_results.sort(key=lambda p: (not p.get("academic"), p.get("kind") != "pdf", -(p.get("words") or 0)))
+    results = web_results[:8] + open_results[:10]
+    if not results:
+        raise AppError(web_err or "Uygun kaynak bulunamadı; konuyu biraz daha açık yazmayı dene.")
+    note = None
+    if web_err:
+        note = "Google araması şu an kullanılamadı; akademik yayın ve ansiklopedi kaynakları gösteriliyor."
+    return {"topic": topic, "overview": overview[:1500], "queries": queries, "results": results, "note": note}

@@ -7,12 +7,12 @@ import { useState } from "react";
 import { Globe, Loader2, Search, Check, GraduationCap, FileText } from "lucide-react";
 import { api } from "@/lib/api";
 
-type R = { url: string; title: string; description?: string; site?: string; kind: string; academic?: boolean; words?: number };
+type R = { url: string; title: string; description?: string; site?: string; kind: string; academic?: boolean; words?: number; origin?: string };
 
 export default function DiscoverPanel({ collectionId, onAdded }: { collectionId: string; onAdded?: () => void }) {
   const [topic, setTopic] = useState("");
   const [busy, setBusy] = useState(false);
-  const [res, setRes] = useState<{ overview: string; results: R[]; topic: string } | null>(null);
+  const [res, setRes] = useState<{ overview: string; results: R[]; topic: string; note?: string } | null>(null);
   const [sel, setSel] = useState<Set<string>>(new Set());
   const [adding, setAdding] = useState<{ done: number; total: number } | null>(null);
   const [added, setAdded] = useState<Record<string, "ok" | string>>({});
@@ -63,13 +63,14 @@ export default function DiscoverPanel({ collectionId, onAdded }: { collectionId:
         </button>
       </div>
       {!res && !busy && !err && (
-        <p className="mt-1.5 pl-11 text-xs text-text-secondary">Google aramasıyla gerçek kaynaklar bulunur (1 istek); seçtiklerin tek tıkla deftere eklenir.</p>
+        <p className="mt-1.5 pl-11 text-xs text-text-secondary">Google araması + açık erişimli akademik yayınlar (OpenAlex) + Vikipedi taranır; seçtiklerin tek tıkla deftere eklenir.</p>
       )}
       {busy && <p className="mt-1.5 pl-11 text-xs text-text-secondary">Web taranıyor, bulunan sayfalar kontrol ediliyor… (10–30 sn)</p>}
       {err && <p className="mt-1.5 pl-11 text-xs text-red-600">{err}</p>}
 
       {res && res.results.length > 0 && (
         <div className="mt-3 max-h-[45vh] space-y-2 overflow-y-auto pr-1">
+          {res.note && <p className="rounded-lg bg-amber-500/10 p-2 text-[11px] text-amber-800">{res.note}</p>}
           {res.overview && (
             <p className="rounded-lg bg-emerald-500/5 p-2.5 text-xs leading-relaxed text-text-secondary">{res.overview}</p>
           )}
@@ -87,7 +88,8 @@ export default function DiscoverPanel({ collectionId, onAdded }: { collectionId:
                   </span>
                   <span className="mt-0.5 flex flex-wrap items-center gap-1.5 text-[11px] text-text-secondary">
                     <span className="truncate">{r.site}</span>
-                    {r.academic && <span className="flex items-center gap-0.5 rounded-full bg-indigo-500/10 px-1.5 text-indigo-700"><GraduationCap size={11} /> akademik</span>}
+                    {r.origin === "openalex" && <span className="rounded-full bg-indigo-500/10 px-1.5 text-indigo-700">açık erişim yayın</span>}
+                    {r.academic && r.origin !== "openalex" && <span className="flex items-center gap-0.5 rounded-full bg-indigo-500/10 px-1.5 text-indigo-700"><GraduationCap size={11} /> akademik</span>}
                     {r.kind === "pdf" && <span className="rounded-full bg-accent-purple/10 px-1.5 text-accent-purple">PDF</span>}
                     {!!r.words && r.words > 1500 && <span className="rounded-full bg-surface-muted px-1.5">uzun içerik</span>}
                     <a href={r.url} target="_blank" rel="noreferrer" onClick={(e) => e.stopPropagation()} className="text-sky-600 hover:underline">aç ↗</a>
