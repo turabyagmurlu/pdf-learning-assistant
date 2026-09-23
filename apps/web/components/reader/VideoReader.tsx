@@ -45,6 +45,22 @@ function loadYT(): Promise<any> {
 export default function VideoReader({ id, doc }: { id: string; doc: any }) {
   const media = (typeof doc.media === "string" ? JSON.parse(doc.media) : doc.media) || {};
   const vid: string = media.video_id;
+  const isAudio = doc.source_type === "audio";
+  const audioRef = useRef<HTMLAudioElement>(null);
+  const [audioUrl, setAudioUrl] = useState("");
+  useEffect(() => {
+    if (!isAudio) return;
+    api(`/documents/${id}/file`).then((r) => setAudioUrl(r.url)).catch(() => {});
+  }, [id, isAudio]);
+  // ses oynatici: zamani takip et, acilista kaldigi yerden / ?page=N'den basla
+  useEffect(() => {
+    if (!isAudio) return;
+    const t = setInterval(() => {
+      const a = audioRef.current; if (!a) return;
+      setNow(a.currentTime); if (a.currentTime > 1) { try { localStorage.setItem(`video.pos.${id}`, String(a.currentTime)); } catch {} }
+    }, 500);
+    return () => clearInterval(t);
+  }, [isAudio, id]);
   const [secs, setSecs] = useState<Section[] | null>(null);
   const [now, setNow] = useState(0);
   const [q, setQ] = useState("");
@@ -110,6 +126,12 @@ export default function VideoReader({ id, doc }: { id: string; doc: any }) {
   }, [vid]);
 
   function seek(sec: number, play = true) {
+    if (isAudio) {
+      const a = audioRef.current;
+      if (a) { a.currentTime = sec; if (play) a.play().catch(() => {}); setNow(sec); setFollow(true); }
+      else pendingSeek.current = sec;
+      return;
+    }
     const p = playerRef.current;
     if (p?.seekTo) { p.seekTo(sec, true); if (play) p.playVideo?.(); setNow(sec); setFollow(true); }
     else pendingSeek.current = sec;
@@ -135,7 +157,7 @@ export default function VideoReader({ id, doc }: { id: string; doc: any }) {
   const needle = q.trim().toLowerCase();
   const view = (secs || []).map((s, i) => ({ s, i, lines: needle ? s.lines.filter((l) => l.x.toLowerCase().includes(needle)) : s.lines }))
     .filter((v) => !needle || v.lines.length);
-  const st = stageInfo({ ...doc, source_type: "youtube" });
+  const st = stageInfo({ ...doc, source_type: isAudio ? "audio" : "youtube" });
 
   return (
     <div className="flex h-screen flex-col lg:flex-row">
@@ -146,10 +168,12 @@ export default function VideoReader({ id, doc }: { id: string; doc: any }) {
           {media.channel ? media.channel + " · " : ""}{media.duration ? fmt(media.duration) : ""}
           {media.method ? " · " + (media.method === "altyazi" ? "altyazıdan" : "yapay zekâ dökümü") : ""}
         </p>
-        <a href={doc.source_url || `https://www.youtube.com/watch?v=${vid}`} target="_blank" rel="noreferrer"
-           className="mt-2 inline-flex items-center gap-1 text-xs text-accent-purple hover:underline">
-          YouTube'da aç <ExternalLink size={12} />
-        </a>
+        {!isAudio && (
+          <a href={doc.source_url || `https://www.youtube.com/watch?v=${vid}`} target="_blank" rel="noreferrer"
+             className="mt-2 inline-flex items-center gap-1 text-xs text-accent-purple hover:underline">
+            YouTube'da aç <ExternalLink size={12} />
+          </a>
+        )}
         {doc.status !== "ready" ? (
           <p className="mt-4 text-sm text-text-secondary">
             {doc.status === "failed" ? `⚠️ ${doc.error_message}` : `${st.label}…`}
@@ -175,11 +199,26 @@ export default function VideoReader({ id, doc }: { id: string; doc: any }) {
 
       {/* orta: video + dokum */}
       <main className="flex min-h-0 min-w-0 flex-1 flex-col">
-        <div className="shrink-0 bg-black">
-          <div className="mx-auto aspect-video max-h-[52vh] w-full max-w-[calc(52vh*16/9)]">
-            <div ref={holder} className="h-full w-full" />
+        {isAudio ? (
+          <div className="shrink-0 border-b bg-surface px-4 py-3">
+            <p className="mb-2 truncate text-sm font-medium xl:hidden">{doc.title}</p>
+            {audioUrl ? (
+              <audio ref={audioRef} src={audioUrl} controls preload="metadata" className="w-full"
+                     onLoadedMetadata={(e) => {
+                       const a = e.currentTarget;
+                       const want = pendingSeek.current ?? startFromUrl(secs);
+                       if (want > 0) a.currentTime = want;
+                       pendingSeek.current = null;
+                     }} />
+            ) : <p className="text-sm text-text-secondary">Ses yükleniyor…</p>}
           </div>
-        </div>
+        ) : (
+          <div className="shrink-0 bg-black">
+            <div className="mx-auto aspect-video max-h-[52vh] w-full max-w-[calc(52vh*16/9)]">
+              <div ref={holder} className="h-full w-full" />
+            </div>
+          </div>
+        )}
         <div className="flex shrink-0 items-center gap-2 border-b px-4 py-2">
           <h3 className="truncate text-sm font-medium xl:hidden">{doc.title}</h3>
           <div className="ml-auto flex items-center gap-1.5 rounded-lg border bg-surface px-2 py-1">
@@ -227,7 +266,7 @@ export default function VideoReader({ id, doc }: { id: string; doc: any }) {
       {/* sag: sohbet */}
       <aside className="flex h-[45vh] shrink-0 flex-col border-t bg-surface lg:h-auto lg:w-[400px] lg:border-l lg:border-t-0">
         <div className="min-h-0 flex-1">
-          <ChatPanel documentId={id} onGoPage={goPage} video />
+          <ChatPanel documentId={id} onGoPage={goPage} video={!isAudio} generic={isAudio} />
         </div>
       </aside>
     </div>
