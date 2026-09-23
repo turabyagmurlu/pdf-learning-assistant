@@ -376,7 +376,13 @@ export default function CollectionPage({ params }: { params: { id: string } }) {
     setAsking(true); setQ(""); setSuggOpen(false);
     try {
       const r = await api(`/collections/${id}/ask`, { method: "POST", body: JSON.stringify({ question }) });
-      setThread((t) => [...t, { q: question, answer: r.answer, sources: r.sources || [], followups: r.followups || [] }]);
+      let fu: string[] = (r.followups || []).map((s: string) => s.replace(/\s*\[K\s*\d+(?:\s*[,;]\s*K?\s*\d+)*\]/g, "").trim()).filter(Boolean);
+      if (!fu.length && sugg?.groups?.length) {
+        // Model devam sorusu vermediyse: henuz sorulmamis onerilerden 3 tane (ek kota yok)
+        const asked = new Set([...thread.map((x) => x.q), question]);
+        fu = sugg.groups.flatMap((g) => g.questions.map((x) => x.q)).filter((x) => !asked.has(x)).slice(0, 3);
+      }
+      setThread((t) => [...t, { q: question, answer: r.answer, sources: r.sources || [], followups: fu }]);
     } catch (e: any) {
       setThread((t) => [...t, { q: question, answer: e?.message || "Cevap alınamadı.", sources: [] }]);
     } finally { setAsking(false); }
