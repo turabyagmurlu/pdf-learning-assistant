@@ -107,6 +107,10 @@ def _parse_ts(text: str, offset: int, clip_end: int | None) -> list[dict]:
         elif line.strip():
             rows.append({"start": 0.0, "text": line.strip()})
     rows = [r for r in rows if r["text"]]
+    # "Aşağıda videonun dökümü..." gibi zaman damgasiz giris cumlelerini at
+    while len(rows) > 1 and rows[0]["start"] == 0 and rows[1]["start"] == 0 and \
+            re.search(r"(döküm|transkript|transcript|aşağıda|here is)", rows[0]["text"], re.I):
+        rows.pop(0)
     if offset and rows:
         # Model bazen videonun basindan itibaren (mutlak) zaman verir; ona gore kaydir.
         absolute = rows[0]["start"] >= offset - 10 and (clip_end is None or rows[-1]["start"] <= clip_end + 30)
@@ -214,7 +218,10 @@ def build_transcript(vid: str, duration: int | None, progress=None) -> dict:
 
 def sections(tr: dict) -> list[dict]:
     """Parcalari 2 dakikalik bolumlere toplar: [{page, start, end, text}]."""
-    segs = tr.get("segments") or []
+    segs = list(tr.get("segments") or [])
+    while len(segs) > 1 and segs[0]["start"] == segs[1]["start"] and \
+            re.search(r"(döküm|transkript|transcript|aşağıda|here is)", segs[0]["text"], re.I) and len(segs[0]["text"]) < 120:
+        segs.pop(0)
     out: list[dict] = []
     for s in segs:
         idx = int(s["start"] // SECTION_SEC)

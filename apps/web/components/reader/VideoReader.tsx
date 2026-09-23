@@ -227,7 +227,7 @@ export default function VideoReader({ id, doc }: { id: string; doc: any }) {
       {/* sag: sohbet */}
       <aside className="flex h-[45vh] shrink-0 flex-col border-t bg-surface lg:h-auto lg:w-[400px] lg:border-l lg:border-t-0">
         <div className="min-h-0 flex-1">
-          <ChatPanel documentId={id} onGoPage={goPage} />
+          <ChatPanel documentId={id} onGoPage={goPage} video />
         </div>
       </aside>
     </div>
