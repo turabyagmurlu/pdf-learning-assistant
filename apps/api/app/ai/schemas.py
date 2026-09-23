@@ -1,5 +1,37 @@
 # JSON schema tanımları (OpenAI structured outputs)
 
+# Defter sohbeti icin yonlendirici soru onerileri (kaynak ozetlerinden uretilir)
+SUGGESTIONS_SCHEMA = {
+    "name": "notebook_suggestions",
+    "strict": True,
+    "schema": {
+        "type": "object",
+        "additionalProperties": False,
+        "properties": {
+            "theme": {"type": "string"},
+            "groups": {
+                "type": "array",
+                "items": {
+                    "type": "object", "additionalProperties": False,
+                    "properties": {
+                        "kind": {"type": "string", "enum": ["genel", "karsilastir", "derinles", "elestir", "uygula"]},
+                        "questions": {
+                            "type": "array",
+                            "items": {
+                                "type": "object", "additionalProperties": False,
+                                "properties": {"q": {"type": "string"}, "why": {"type": "string"}},
+                                "required": ["q", "why"],
+                            },
+                        },
+                    },
+                    "required": ["kind", "questions"],
+                },
+            },
+        },
+        "required": ["theme", "groups"],
+    },
+}
+
 DOCUMENT_ANALYSIS_SCHEMA = {
     "name": "document_analysis",
     "strict": True,
