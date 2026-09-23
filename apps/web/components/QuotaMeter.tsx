@@ -5,7 +5,8 @@
  * calisir: biri dolunca uygulama otomatik digerine gecer.
  */
 import { useEffect, useState } from "react";
-import { Gauge, X } from "lucide-react";
+import { Gauge, X, Download, Loader2 } from "lucide-react";
+import { API, getToken } from "@/lib/api";
 import { api } from "@/lib/api";
 
 type M = { model: string; status: string; requests: number };
@@ -16,7 +17,7 @@ type U = {
   embed: { model: string; status: string };
 };
 
-const KIND: Record<string, string> = { metin: "Soru-cevap ve özetler", dizin: "Kaynak dizinleme", ses: "Seslendirme", video: "Video dökümü", arama: "Web araması" };
+const KIND: Record<string, string> = { metin: "Soru-cevap ve özetler", dizin: "Kaynak dizinleme", ses: "Seslendirme", video: "Video dökümü", "ses-dokum": "Ses kaydı dökümü", ocr: "Taranmış sayfa okuma", arama: "Web araması" };
 const ST: Record<string, { t: string; c: string }> = {
   aktif: { t: "aktif", c: "bg-green-500/15 text-green-700" },
   dakikalik_dolu: { t: "dakikalık dolu", c: "bg-amber-500/15 text-amber-700" },
@@ -34,6 +35,19 @@ function level(u: U | null): "ok" | "warn" | "full" {
 export default function QuotaMeter({ compact }: { compact?: boolean }) {
   const [u, setU] = useState<U | null>(null);
   const [open, setOpen] = useState(false);
+  const [lastBackup, setLastBackup] = useState<string | null | undefined>(undefined);
+  const [dl, setDl] = useState(false);
+  async function download() {
+    setDl(true);
+    try {
+      const r = await fetch(API + "/me/export", { headers: { Authorization: "Bearer " + getToken() } });
+      if (!r.ok) throw new Error();
+      const b = await r.blob(); const u = URL.createObjectURL(b); const a = document.createElement("a");
+      a.href = u; a.download = `typdf-yedek-${new Date().toISOString().slice(0, 10)}.json`; a.click();
+      setTimeout(() => URL.revokeObjectURL(u), 2000);
+    } catch { alert("Yedek indirilemedi; biraz sonra tekrar dene."); }
+    finally { setDl(false); }
+  }
 
   async function load() { try { setU(await api("/usage", {}, 1)); } catch {} }
   useEffect(() => {
@@ -43,7 +57,11 @@ export default function QuotaMeter({ compact }: { compact?: boolean }) {
     document.addEventListener("visibilitychange", onVis);
     return () => { clearInterval(t); document.removeEventListener("visibilitychange", onVis); };
   }, []);
-  useEffect(() => { if (open) load(); }, [open]);
+  useEffect(() => {
+    if (!open) return;
+    load();
+    api("/me/backup-status", {}, 1).then((r) => setLastBackup(r.last_backup)).catch(() => setLastBackup(null));
+  }, [open]);
 
   const lv = level(u);
   const dot = lv === "full" ? "bg-red-500" : lv === "warn" ? "bg-amber-500" : "bg-green-500";
@@ -122,6 +140,17 @@ export default function QuotaMeter({ compact }: { compact?: boolean }) {
                 <div className="mt-2 flex items-center gap-2 text-sm">
                   <span className="min-w-0 flex-1 truncate font-mono text-xs">{u.embed.model} (dizin)</span>
                   <span className={"rounded-full px-2 py-0.5 text-[11px] " + (ST[u.embed.status]?.c || "")}>{ST[u.embed.status]?.t || u.embed.status}</span>
+                </div>
+
+                <div className="mt-4 rounded-xl border p-3">
+                  <p className="text-xs font-semibold uppercase tracking-wide text-text-secondary">Yedek</p>
+                  <p className="mt-1 text-xs text-text-secondary">
+                    Veritabanı haftada bir otomatik yedeklenir{lastBackup ? ` · son yedek: ${new Date(lastBackup).toLocaleString("tr-TR", { day: "numeric", month: "long", hour: "2-digit", minute: "2-digit" })}` : lastBackup === null ? " · ilk yedek birkaç dakika içinde alınır" : ""}.
+                  </p>
+                  <button onClick={download} disabled={dl}
+                          className="mt-2 flex items-center gap-1.5 rounded-lg border px-2.5 py-1.5 text-xs hover:border-accent-purple/50 hover:text-accent-purple disabled:opacity-60">
+                    {dl ? <Loader2 size={12} className="animate-spin" /> : <Download size={12} />} Verilerimi indir (JSON)
+                  </button>
                 </div>
 
                 <p className="mt-4 text-xs leading-relaxed text-text-secondary">

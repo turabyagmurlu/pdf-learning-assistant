@@ -2,7 +2,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { api } from "@/lib/api";
-import { ArrowUp, ArrowDown, X, Plus, ExternalLink, Sparkles, Quote, RefreshCw, Heading2, Wand2, Loader2, Check } from "lucide-react";
+import { ArrowUp, ArrowDown, X, Plus, ExternalLink, Sparkles, Quote, RefreshCw, Heading2, Wand2, Loader2, Check, ShieldCheck } from "lucide-react";
 
 /* ---------- blok modeli ---------- */
 export type Block =
@@ -106,6 +106,39 @@ export default function DraftEditor({ notebookId, title, initial, material, onRe
       color: sg.color, source: sg.document_title, page: sg.page ?? null, document_id: sg.document_id });
   }
 
+  // Kaynaklarla dogrula: her iddia cumlesi defterin kaynaklarina karsi
+  type VRes = { block_id: string; sentence: string; verdict: "destek" | "kismi" | "yok" | "celiski"; note: string;
+    evidence: { document_id: string; title: string; page: number | null; text: string; unit?: string; time?: string } | null };
+  const [ver, setVer] = useState<{ busy: boolean; results?: VRes[]; counts?: Record<string, number>; error?: string; cached?: number; open: boolean } | null>(null);
+  const VMETA: Record<string, { t: string; c: string; dot: string }> = {
+    destek: { t: "Destekleniyor", c: "bg-green-500/10 text-green-800 border-green-600/30", dot: "bg-green-500" },
+    kismi: { t: "Kısmen", c: "bg-amber-500/10 text-amber-800 border-amber-600/30", dot: "bg-amber-500" },
+    yok: { t: "Kaynakta yok", c: "bg-slate-500/10 text-slate-700 border-slate-500/30", dot: "bg-slate-400" },
+    celiski: { t: "Çelişiyor", c: "bg-red-500/10 text-red-800 border-red-600/30", dot: "bg-red-500" },
+  };
+  const RANK: Record<string, number> = { celiski: 3, yok: 2, kismi: 1, destek: 0 };
+  async function runVerify() {
+    const items = blocks.filter((b) => b.type === "p" && b.text.trim().split(/\s+/).length >= 6).map((b: any) => ({ block_id: b.id, text: b.text }));
+    if (!items.length) { setVer({ busy: false, open: true, error: "Doğrulanacak paragraf yok (kendi yazdığın paragraflar kontrol edilir)." }); return; }
+    setVer({ busy: true, open: true });
+    try {
+      const r = await api(`/collections/${notebookId}/verify`, { method: "POST", body: JSON.stringify({ items }) }, 1);
+      setVer({ busy: false, open: true, results: r.results, counts: r.counts, cached: r.from_cache });
+    } catch (e: any) { setVer({ busy: false, open: true, error: e?.message || "Doğrulama yapılamadı." }); }
+  }
+  const worst = useMemo(() => {
+    const m: Record<string, string> = {};
+    for (const r of ver?.results || []) if (!m[r.block_id] || RANK[r.verdict] > RANK[m[r.block_id]]) m[r.block_id] = r.verdict;
+    return m;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [ver?.results]);
+  function addEvidence(r: VRes) {
+    if (!r.evidence) return;
+    const idx = blocks.findIndex((b) => b.id === r.block_id);
+    insertAfter(idx, { id: uid(), type: "quote", text: r.evidence.text.trim().replace(/\s+/g, " ").slice(0, 400), source: r.evidence.title,
+      page: r.evidence.page ?? null, document_id: r.evidence.document_id, note: undefined, color: "#16a34a" } as Block);
+  }
+
   // otomatik kayit
   useEffect(() => {
     if (!dirty.current) return;
@@ -166,10 +199,61 @@ export default function DraftEditor({ notebookId, title, initial, material, onRe
           </span>
           {flash && <span className="text-accent-purple">{flash}</span>}
           <span className="ml-auto flex gap-1.5">
+            <button onClick={runVerify} disabled={ver?.busy} title="Yazdığın her iddiayı defterin kaynaklarıyla karşılaştır"
+                    className="flex items-center gap-1 rounded-lg border border-green-600/40 bg-green-500/5 px-2.5 py-1 text-green-800 hover:bg-green-500/10 disabled:opacity-60">
+              {ver?.busy ? <Loader2 size={12} className="animate-spin" /> : <ShieldCheck size={12} />} Kaynaklarla doğrula
+            </button>
             <button onClick={() => download("md")} className="rounded-lg border bg-surface px-2.5 py-1 hover:border-accent-purple/50">Markdown</button>
             <button onClick={() => download("doc")} className="rounded-lg border bg-surface px-2.5 py-1 hover:border-accent-purple/50">Word</button>
           </span>
         </div>
+
+        {ver?.open && (
+          <div className="mb-3 rounded-2xl border bg-surface p-4">
+            <div className="flex flex-wrap items-center gap-2">
+              <p className="flex items-center gap-1.5 text-sm font-medium"><ShieldCheck size={15} className="text-green-700" /> İddia doğrulama</p>
+              {ver.counts && Object.entries(VMETA).map(([k, m]) => (
+                <span key={k} className={cx("rounded-full border px-2 py-0.5 text-[11px]", m.c)}>{m.t}: {ver.counts?.[k] || 0}</span>
+              ))}
+              <button onClick={() => setVer(null)} aria-label="Kapat" className="ml-auto rounded-md p-1 text-text-secondary hover:bg-surface-muted"><X size={14} /></button>
+            </div>
+            {ver.busy && <p className="mt-2 flex items-center gap-2 text-sm text-text-secondary"><Loader2 size={14} className="animate-spin" /> Her cümle için kanıt aranıyor…</p>}
+            {ver.error && <p className="mt-2 text-sm text-danger">{ver.error}</p>}
+            {!!ver.results?.length && (
+              <>
+                <p className="mt-1 text-[11px] text-text-secondary">
+                  Yalnız defterindeki kaynaklara göre değerlendirildi{ver.cached ? ` · ${ver.cached} cümle daha önce kontrol edilmişti (kota harcanmadı)` : ""}.
+                </p>
+                <ul className="mt-3 max-h-[50vh] space-y-2 overflow-y-auto pr-1">
+                  {[...ver.results].sort((a, b) => RANK[b.verdict] - RANK[a.verdict]).map((r, k) => (
+                    <li key={k} className={cx("rounded-xl border p-2.5 text-sm", VMETA[r.verdict].c)}>
+                      <div className="flex items-start gap-2">
+                        <span className={cx("mt-1.5 h-2 w-2 shrink-0 rounded-full", VMETA[r.verdict].dot)} />
+                        <div className="min-w-0 flex-1">
+                          <p className="text-text-primary">{r.sentence}</p>
+                          <p className="mt-0.5 text-[12px]"><b>{VMETA[r.verdict].t}</b>{r.note ? " — " + r.note : ""}</p>
+                          {r.evidence && (
+                            <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
+                              <button onClick={() => router.push("/documents/" + r.evidence!.document_id + (r.evidence!.page ? "?page=" + r.evidence!.page : ""))}
+                                      className="flex items-center gap-1 rounded-full border bg-surface px-2 py-0.5 text-[11px] text-text-secondary hover:text-accent-purple">
+                                <ExternalLink size={10} /> {r.evidence.title}{r.evidence.time ? " · ▶ " + r.evidence.time : r.evidence.page ? ` · ${r.evidence.unit || "s."} ${r.evidence.page}` : ""}
+                              </button>
+                              {(r.verdict === "destek" || r.verdict === "kismi") && (
+                                <button onClick={() => addEvidence(r)} className="rounded-full border border-green-600/40 bg-surface px-2 py-0.5 text-[11px] text-green-800 hover:bg-green-500/10">
+                                  + Kanıtı alıntı olarak ekle
+                                </button>
+                              )}
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                    </li>
+                  ))}
+                </ul>
+              </>
+            )}
+          </div>
+        )}
 
         <div className="rounded-2xl border bg-surface p-4 md:p-6">
           {blocks.map((b, i) => (
@@ -203,6 +287,10 @@ export default function DraftEditor({ notebookId, title, initial, material, onRe
                 <button onClick={() => removeAt(i)} aria-label="Kaldır" className="rounded p-0.5 text-text-secondary hover:bg-surface-muted hover:text-danger"><X size={12} /></button>
               </div>
 
+              {b.type === "p" && worst[b.id] && (
+                <span title={"Doğrulama: " + VMETA[worst[b.id]].t}
+                      className={cx("absolute -left-3 top-2.5 h-[calc(100%-1rem)] w-1 rounded-full", VMETA[worst[b.id]].dot)} />
+              )}
               {b.type === "p" && (
                 <AutoTextarea value={b.text} focus={focusIdx === i}
                               onChange={(v) => setText(i, v)}
