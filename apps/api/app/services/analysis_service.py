@@ -119,6 +119,90 @@ def extract_glossary(context: str, doc_title: str, max_items: int = 40) -> list[
     return out
 
 
+SUGGEST_KINDS = {
+    "genel": "Genel bakış",
+    "karsilastir": "Karşılaştır",
+    "derinles": "Derinleş",
+    "elestir": "Eleştir",
+    "uygula": "Uygula",
+}
+
+
+def notebook_suggestions(digest: str, notebook_title: str) -> dict:
+    """Defterdeki kaynaklarin OZETLERINDEN (PDF'lerin tamami degil) yonlendirici sorular uretir.
+    Tek istek. Amac: kullanici her seyi okumadan defterin buyuk resmini ve derin noktalarini
+    hizla kesfetsin."""
+    from app.ai.schemas import SUGGESTIONS_SCHEMA
+    llm = get_llm()
+    messages = [
+        {"role": "system", "content":
+            "Sen bir araştırma asistanısın. Kullanıcının bir araştırma defteri var; aşağıda içindeki "
+            "kaynakların özetleri ve anahtar kavramları duruyor. Kullanıcı kaynakların hepsini okumadan "
+            "defterin büyük resmini ve derin noktalarını hızla kavramak istiyor. Ona sorulması en değerli "
+            "soruları öner.\n\n"
+            "KURALLAR:\n"
+            "- Yalnızca Türkçe yaz.\n"
+            "- 5 grup üret: genel, karsilastir, derinles, elestir, uygula. Her grupta tam 3 soru.\n"
+            "  genel: defterin ana temaları, büyük resim, kaynakların ortak cevap verdiği soru.\n"
+            "  karsilastir: kaynakların nerede uyuştuğu / ayrıştığı; farklı yaklaşım, yöntem, sonuç.\n"
+            "  derinles: mekanizma, neden-sonuç, 'nasıl çalışır', en önemli kavramların ilişkisi.\n"
+            "  elestir: kanıtın gücü, çelişkiler, eksik kalan konular, sınırlılıklar.\n"
+            "  uygula: pratik sonuç, 'bu bilgiyle ne yapmalıyım', karar ve öneri.\n"
+            "- Sorular BU DEFTERE özgü olsun: özetlerdeki gerçek kavramları, kişileri, konuları an. "
+            "  'Bu belgenin ana fikri nedir' gibi genel ve boş sorular YASAK.\n"
+            "- Her soru tek cümle, en fazla 18 kelime, doğrudan sorulabilir olsun.\n"
+            "- Metadata sorusu sorma (yazar adı, yayın yılı, dergi, üniversite, sayfa sayısı).\n"
+            "- 'why' alanı: bu sorunun kullanıcıya ne kazandıracağını en fazla 8 kelimeyle söyle.\n"
+            "- 'theme' alanı: defterin konusunu tek cümleyle (en fazla 14 kelime) özetle."},
+        {"role": "user", "content": f"Defter: {notebook_title}\n\nKaynaklar:\n{digest}"},
+    ]
+    raw = llm.structured(messages, SUGGESTIONS_SCHEMA, model=settings.active_llm_model)
+    data = json.loads(raw)
+    groups = []
+    for g in data.get("groups", []):
+        k = g.get("kind")
+        if k not in SUGGEST_KINDS:
+            continue
+        qs = [{"q": (x.get("q") or "").strip(), "why": (x.get("why") or "").strip()}
+              for x in g.get("questions", []) if (x.get("q") or "").strip()]
+        if qs:
+            groups.append({"kind": k, "label": SUGGEST_KINDS[k], "questions": qs[:4]})
+    order = list(SUGGEST_KINDS)
+    groups.sort(key=lambda g: order.index(g["kind"]))
+    return {"theme": (data.get("theme") or "").strip(), "groups": groups}
+
+
+def template_suggestions(concepts: list[str], titles: list[str]) -> dict:
+    """Kota yoksa: yapay zekasiz, kavram listesinden sablon sorular. Bos ekran kalmasin."""
+    c = [x for x in concepts if x][:6] or ["ana konu"]
+    a, b = c[0], (c[1] if len(c) > 1 else c[0])
+    d = c[2] if len(c) > 2 else a
+    groups = [
+        {"kind": "genel", "label": SUGGEST_KINDS["genel"], "questions": [
+            {"q": "Bu defterdeki kaynaklar ortak olarak hangi soruya cevap arıyor?", "why": "Büyük resmi tek cümlede gör"},
+            {"q": f"{a} konusunda kaynakların vardığı ana sonuçlar neler?", "why": "Temel bulguları hızla topla"},
+            {"q": "Bu defteri okumaya hangi kaynaktan başlamalıyım, neden?", "why": "Okuma sırasını belirle"},
+        ]},
+        {"kind": "karsilastir", "label": SUGGEST_KINDS["karsilastir"], "questions": [
+            {"q": f"Kaynaklar {a} hakkında nerede uyuşuyor, nerede ayrışıyor?", "why": "Görüş farklarını yakala"},
+            {"q": "Kaynaklar hangi yöntemleri kullanmış ve sonuçları nasıl farklılaşıyor?", "why": "Yöntem etkisini gör"},
+        ]},
+        {"kind": "derinles", "label": SUGGEST_KINDS["derinles"], "questions": [
+            {"q": f"{a} ile {b} arasındaki ilişki nasıl açıklanıyor?", "why": "Kavramları birbirine bağla"},
+            {"q": f"{d} nasıl işliyor; mekanizmayı adım adım anlat.", "why": "Nedenini anla"},
+        ]},
+        {"kind": "elestir", "label": SUGGEST_KINDS["elestir"], "questions": [
+            {"q": "Kaynaklardaki en zayıf kanıt ya da en tartışmalı iddia hangisi?", "why": "Güvenilirliği tart"},
+            {"q": "Bu kaynakların cevapsız bıraktığı önemli sorular neler?", "why": "Araştırma boşluğunu bul"},
+        ]},
+        {"kind": "uygula", "label": SUGGEST_KINDS["uygula"], "questions": [
+            {"q": f"{a} konusunda kaynaklara göre pratikte ne yapılmalı?", "why": "Bilgiyi eyleme çevir"},
+            {"q": "Bu kaynaklardan çıkan en önemli 5 öneriyi sırala.", "why": "Özeti uygulanabilir yap"},
+        ]},
+    ]
+    return {"theme": "", "groups": groups}
+
+
 def analyze_document(full_text: str) -> dict:
     llm = get_llm()
     text = full_text[:24000]
