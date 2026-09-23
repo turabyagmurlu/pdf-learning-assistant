@@ -6,7 +6,7 @@ from app.config import settings
 from app.core.errors import AppError
 from app.db.session import close_pool
 from app.storage.object_store import ensure_bucket
-from app.api import auth, documents, chat, notes, study, collections
+from app.api import auth, documents, chat, notes, study, collections, research
 from app.deps import current_user
 
 
@@ -91,6 +91,21 @@ async def lifespan(app: FastAPI):
                     "CREATE INDEX IF NOT EXISTS chunks_md5_idx ON document_chunks (md5(content))")
             except Exception:  # noqa
                 pass
+            # defter sohbet gecmisi (sayfa yenilense de kaybolmaz)
+            await conn.execute(
+                "CREATE TABLE IF NOT EXISTS collection_chats ("
+                " id uuid PRIMARY KEY,"
+                " collection_id uuid NOT NULL REFERENCES collections(id) ON DELETE CASCADE,"
+                " user_id uuid NOT NULL, title text,"
+                " created_at timestamptz NOT NULL DEFAULT now(), updated_at timestamptz NOT NULL DEFAULT now())")
+            await conn.execute("CREATE INDEX IF NOT EXISTS collection_chats_col_idx ON collection_chats (collection_id, updated_at DESC)")
+            await conn.execute(
+                "CREATE TABLE IF NOT EXISTS collection_messages ("
+                " id bigserial PRIMARY KEY,"
+                " chat_id uuid NOT NULL REFERENCES collection_chats(id) ON DELETE CASCADE,"
+                " question text NOT NULL, payload jsonb,"
+                " created_at timestamptz NOT NULL DEFAULT now())")
+            await conn.execute("CREATE INDEX IF NOT EXISTS collection_messages_chat_idx ON collection_messages (chat_id, id)")
             # gunluk kullanim sayaci (kota gostergesi)
             await conn.execute(
                 "CREATE TABLE IF NOT EXISTS ai_usage (day date NOT NULL, model text NOT NULL, kind text NOT NULL,"
@@ -109,6 +124,7 @@ async def lifespan(app: FastAPI):
     except Exception:  # noqa
         pass
     flusher = _asyncio.create_task(_flush_usage_loop())
+    backuper = _asyncio.create_task(_backup_loop())
     # Yarim kalmis belgeleri kaldigi yerden isle (sunucu uyuyup uyandiginda sart)
     try:
         from app.workers.tasks import resume_unfinished
@@ -117,6 +133,7 @@ async def lifespan(app: FastAPI):
         pass
     yield
     flusher.cancel()
+    backuper.cancel()
     try:
         await _flush_usage()
     except Exception:  # noqa
@@ -139,6 +156,22 @@ async def _flush_usage():
                    SET requests=GREATEST(ai_usage.requests, EXCLUDED.requests),
                        tokens=GREATEST(ai_usage.tokens, EXCLUDED.tokens)""",
                 day, model, kind, req, tok)
+
+
+async def _backup_loop():
+    """Haftalik otomatik yedek: 6 saatte bir kontrol eder, son yedek 7 gunden eskiyse alir."""
+    import asyncio as _asyncio
+    await _asyncio.sleep(180)                  # acilis yukunu bekle
+    while True:
+        try:
+            from app.services.backup import backup_if_due
+            from app.db.session import get_pool
+            pool = await get_pool()
+            async with pool.acquire() as conn:
+                await backup_if_due(conn)
+        except Exception:  # noqa
+            pass
+        await _asyncio.sleep(6 * 3600)
 
 
 async def _flush_usage_loop():
@@ -184,6 +217,31 @@ async def keepalive():
         return {"status": "ok", "db": False}
 
 
+@app.get("/me/export")
+async def export_me(user=Depends(current_user)):
+    """Kullanicinin tum verisi (defterler, kaynak bilgileri, notlar, sohbetler, taslaklar) tek JSON dosyasi."""
+    from fastapi.responses import Response
+    from app.services.backup import export_user
+    from app.db.session import get_pool
+    from datetime import date
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        data = await export_user(conn, str(user["id"]))
+    return Response(data, media_type="application/json",
+                    headers={"Content-Disposition": f'attachment; filename="typdf-yedek-{date.today()}.json"'})
+
+
+@app.get("/me/backup-status")
+async def backup_status(user=Depends(current_user)):
+    import asyncio as _asyncio
+    from app.services.backup import last_backup_time
+    try:
+        t = await _asyncio.to_thread(last_backup_time)
+    except Exception:  # noqa
+        t = None
+    return {"last_backup": t.isoformat() if t else None}
+
+
 @app.get("/usage")
 async def usage_status(user=Depends(current_user)):
     """Kota gostergesi: bugunku istekler (model/tur), model durumlari, sifirlanma saati."""
@@ -220,3 +278,4 @@ app.include_router(chat.router)
 app.include_router(notes.router)
 app.include_router(study.router)
 app.include_router(collections.router)
+app.include_router(research.router)
