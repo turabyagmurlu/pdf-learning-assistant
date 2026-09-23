@@ -9,10 +9,10 @@ export function useChatStream(sessionId: string) {
   const [citations, setCitations] = useState<Citation[]>([]);
   const [loading, setLoading] = useState(false);
 
-  const ask = useCallback(async (question: string) => {
+  const ask = useCallback(async (question: string, sid?: string) => {
     setAnswer(""); setCitations([]); setLoading(true);
     const token = getToken();
-    const res = await fetch(`${API}/chat/sessions/${sessionId}/messages?token=${token}`, {
+    const res = await fetch(`${API}/chat/sessions/${sid || sessionId}/messages?token=${token}`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ content: question }),
