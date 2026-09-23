@@ -9,6 +9,9 @@ from app.workers.tasks import enqueue
 
 router = APIRouter(prefix="/documents", tags=["documents"])
 
+IMAGE_EXTS = {"jpg", "jpeg", "png", "webp", "bmp", "tif", "tiff", "gif"}
+AUDIO_MAX_MB = 100
+
 
 @router.post("")
 async def upload(file: UploadFile = File(...), collection_id: str | None = Form(None),
@@ -16,24 +19,39 @@ async def upload(file: UploadFile = File(...), collection_id: str | None = Form(
     """Kaynak yukle: PDF, Word, Excel/CSV, PowerPoint, Markdown/TXT/RTF, EPUB, HTML.
     collection_id verilirse belge dogrudan o deftere duser. Isleme kuyrukta."""
     from app.sources.extract import kind_of
+    from app.sources.audio import EXTS as AUDIO_EXTS
     fname = file.filename or "Adsız"
-    is_pdf = file.content_type in ("application/pdf", "application/x-pdf") or fname.lower().endswith(".pdf")
-    kind = "pdf" if is_pdf else kind_of(fname)
+    ext = fname.rsplit(".", 1)[-1].lower() if "." in fname else ""
+    is_pdf = file.content_type in ("application/pdf", "application/x-pdf") or ext == "pdf"
+    is_img = ext in IMAGE_EXTS or (file.content_type or "").startswith("image/")
+    is_audio = ext in AUDIO_EXTS or (file.content_type or "").startswith("audio/")
+    kind = "pdf" if is_pdf else "image" if is_img else "audio" if is_audio else kind_of(fname)
     if not kind:
-        raise AppError("Bu dosya türü desteklenmiyor. PDF, Word, Excel, CSV, PowerPoint, Markdown, TXT, RTF, EPUB veya HTML yükleyebilirsin.")
+        raise AppError("Bu dosya türü desteklenmiyor. PDF, Word, Excel, CSV, PowerPoint, Markdown, TXT, RTF, EPUB, HTML, "
+                       "fotoğraf (JPG/PNG) veya ses kaydı (MP3/M4A/WAV) yükleyebilirsin.")
     data = await file.read()
-    if len(data) > settings.max_upload_mb * 1024 * 1024:
-        raise FileTooLarge(f"Dosya sınırı {settings.max_upload_mb} MB.")
+    limit = (AUDIO_MAX_MB if kind == "audio" else settings.max_upload_mb) * 1024 * 1024
+    if len(data) > limit:
+        raise FileTooLarge(f"Dosya sınırı {limit // (1024 * 1024)} MB.")
     if kind == "pdf" and data[:5] != b"%PDF-":
         raise AppError("Bu dosya geçerli bir PDF değil.")
     cid = await _check_collection(conn, user, collection_id)
     title = fname.rsplit(".", 1)[0]
-    ext = fname.rsplit(".", 1)[-1].lower() if "." in fname else kind
+    if kind == "image":
+        # fotograf -> tek sayfalik PDF; metin yoksa isleme hatti OCR ile okur
+        import asyncio
+        from app.sources.ocr import image_to_pdf
+        data = await asyncio.to_thread(image_to_pdf, data, ext if ext in IMAGE_EXTS else "png")
+        kind, ext = "pdf", "pdf"
+    if kind == "audio" and not ext:
+        ext = "mp3"
+    ext = ext or kind
     doc_id = await _create_doc(conn, user, cid, kind, title, fname, data, ext)
     return {"id": doc_id, "title": title, "status": "uploaded", "collection_id": cid, "source_type": kind}
 
 
-_CTYPES = {"pdf": "application/pdf", "json": "application/json", "html": "text/html; charset=utf-8",
+_CTYPES = {"mp3": "audio/mpeg", "m4a": "audio/mp4", "wav": "audio/wav", "ogg": "audio/ogg", "webm": "audio/webm",
+           "pdf": "application/pdf", "json": "application/json", "html": "text/html; charset=utf-8",
            "txt": "text/plain; charset=utf-8", "md": "text/markdown; charset=utf-8", "csv": "text/csv"}
 
 
@@ -201,10 +219,11 @@ async def transcript(doc_id: str, conn=Depends(db), user=Depends(current_user)):
                               doc_id, user["id"])
     if not row:
         raise NotFound("Belge bulunamadı.")
-    if row["source_type"] != "youtube":
-        raise AppError("Bu kaynak bir video değil.")
+    if row["source_type"] not in ("youtube", "audio"):
+        raise AppError("Bu kaynak bir video ya da ses kaydı değil.")
+    tkey = row["file_path"] if row["source_type"] == "youtube" else row["file_path"] + ".transcript.json"
     try:
-        tr = _json.loads((await asyncio.to_thread(get_object, row["file_path"])).decode("utf-8"))
+        tr = _json.loads((await asyncio.to_thread(get_object, tkey)).decode("utf-8"))
     except Exception:  # noqa
         return {"ready": False, "sections": [], "media": row["media"]}
     secs = [{k: s[k] for k in ("page", "start", "end", "lines")} for s in yt.sections(tr)]
@@ -288,7 +307,8 @@ async def delete_doc(doc_id: str, conn=Depends(db), user=Depends(current_user)):
     row = await conn.fetchrow("SELECT file_path FROM documents WHERE id=$1 AND user_id=$2", doc_id, user["id"])
     if not row:
         raise NotFound("Belge bulunamadı.")
-    for k in (row["file_path"], row["file_path"] + ".pages.json"):
+    for k in (row["file_path"], row["file_path"] + ".pages.json", row["file_path"] + ".ocr.json",
+              row["file_path"] + ".transcript.json"):
         try:
             delete_object(k)
         except Exception:  # noqa

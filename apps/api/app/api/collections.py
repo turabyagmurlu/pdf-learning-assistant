@@ -150,12 +150,77 @@ async def delete_collection(cid: str, conn=Depends(db), user=Depends(current_use
 class AskIn(BaseModel):
     question: str
     fresh: bool = False          # True: kayitli cevabi yok say, yeniden uret
+    chat_id: str | None = None   # sohbet gecmisi: bu sohbete yaz (yoksa yeni sohbet acilir)
 
 ANSWER_SIM = 0.95                # "ayni soru" sayilacak anlam benzerligi
 
 
 @router.post("/collections/{cid}/ask")
 async def ask_collection(cid: str, body: AskIn, conn=Depends(db), user=Depends(current_user)):
+    """Defterdeki TUM kaynaklara soru sorar ve soru-cevabi sohbet gecmisine yazar."""
+    out = await _ask_core(cid, body, conn, user)
+    try:
+        chat_id = body.chat_id
+        if chat_id:
+            ok = await conn.fetchval("SELECT 1 FROM collection_chats WHERE id=$1 AND user_id=$2 AND collection_id=$3",
+                                     chat_id, user["id"], cid)
+            if not ok:
+                chat_id = None
+        if not chat_id:
+            chat_id = str(uuid.uuid4())
+            title = (body.question or "").strip()[:80]
+            await conn.execute("INSERT INTO collection_chats (id, collection_id, user_id, title) VALUES ($1,$2,$3,$4)",
+                               chat_id, cid, user["id"], title)
+        await conn.execute("INSERT INTO collection_messages (chat_id, question, payload) VALUES ($1,$2,$3)",
+                           chat_id, body.question.strip(), out)
+        await conn.execute("UPDATE collection_chats SET updated_at=now() WHERE id=$1", chat_id)
+        out = {**out, "chat_id": chat_id}
+    except Exception:  # noqa - gecmis yazilamasa da cevap doner
+        pass
+    return out
+
+
+@router.get("/collections/{cid}/chats")
+async def list_chats(cid: str, conn=Depends(db), user=Depends(current_user)):
+    rows = await conn.fetch(
+        """SELECT c.id, c.title, c.created_at, c.updated_at,
+                  (SELECT count(*) FROM collection_messages m WHERE m.chat_id=c.id) AS n
+           FROM collection_chats c WHERE c.collection_id=$1 AND c.user_id=$2
+           ORDER BY c.updated_at DESC LIMIT 100""", cid, user["id"])
+    return [dict(r) for r in rows]
+
+
+@router.get("/collections/{cid}/chats/{chat_id}")
+async def get_chat(cid: str, chat_id: str, conn=Depends(db), user=Depends(current_user)):
+    ok = await conn.fetchrow("SELECT id, title FROM collection_chats WHERE id=$1 AND user_id=$2 AND collection_id=$3",
+                             chat_id, user["id"], cid)
+    if not ok:
+        raise NotFound("Sohbet bulunamadı.")
+    rows = await conn.fetch("SELECT question, payload, created_at FROM collection_messages WHERE chat_id=$1 ORDER BY id",
+                            chat_id)
+    return {"id": chat_id, "title": ok["title"],
+            "messages": [{"q": r["question"], **(r["payload"] or {}), "at": r["created_at"]} for r in rows]}
+
+
+class ChatPatch(BaseModel):
+    title: str
+
+
+@router.patch("/collections/{cid}/chats/{chat_id}")
+async def rename_chat(cid: str, chat_id: str, body: ChatPatch, conn=Depends(db), user=Depends(current_user)):
+    await conn.execute("UPDATE collection_chats SET title=$1 WHERE id=$2 AND user_id=$3 AND collection_id=$4",
+                       body.title.strip()[:120], chat_id, user["id"], cid)
+    return {"ok": True}
+
+
+@router.delete("/collections/{cid}/chats/{chat_id}")
+async def delete_chat(cid: str, chat_id: str, conn=Depends(db), user=Depends(current_user)):
+    await conn.execute("DELETE FROM collection_chats WHERE id=$1 AND user_id=$2 AND collection_id=$3",
+                       chat_id, user["id"], cid)
+    return {"ok": True}
+
+
+async def _ask_core(cid: str, body: AskIn, conn, user):
     """Calisma kitabindaki TUM belgelere birden soru sorar."""
     col = await conn.fetchrow("SELECT id, title FROM collections WHERE id=$1 AND user_id=$2", cid, user["id"])
     if not col:
@@ -241,7 +306,7 @@ async def annotate_media(conn, sources: list[dict]):
         if not r:
             continue
         s["kind"] = r["source_type"]
-        if r["source_type"] == "youtube":
+        if r["source_type"] in ("youtube", "audio"):
             secs = {int(x["page"]): x["start"] for x in ((r["media"] or {}).get("sections") or [])}
             st = secs.get(int(s.get("page") or 0))
             if st is not None:
