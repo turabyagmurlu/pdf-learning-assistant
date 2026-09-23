@@ -64,6 +64,7 @@ async def _create_doc(conn, user, cid, kind, title, fname, data: bytes, ext: str
 class WebIn(BaseModel):
     url: str
     collection_id: str | None = None
+    title: str | None = None          # kesif panelinden gelen bilinen baslik (PDF linklerinde dosya adi yerine)
 
 
 @router.post("/web")
@@ -87,7 +88,7 @@ async def add_web(body: WebIn, conn=Depends(db), user=Depends(current_user)):
     host = urlparse(final).hostname or ""
     if got["kind"] == "pdf":
         name = final.rstrip("/").rsplit("/", 1)[-1].split("?")[0] or host
-        title = name.rsplit(".", 1)[0] if name.lower().endswith(".pdf") else name
+        title = (body.title or "").strip() or (name.rsplit(".", 1)[0] if name.lower().endswith(".pdf") else name)
         doc_id = await _create_doc(conn, user, cid, "pdf", title, name, got["data"], "pdf", source_url=final,
                                    media={"site": host})
         return {"id": doc_id, "title": title, "status": "uploaded", "collection_id": cid, "source_type": "pdf"}
@@ -98,7 +99,7 @@ async def add_web(body: WebIn, conn=Depends(db), user=Depends(current_user)):
         if words < 60:
             raise AppError("Bu sayfada okunabilir bir yazı bulunamadı (sayfa içeriğini tarayıcıda "
                            "yüklüyor ya da giriş istiyor olabilir). Metni kopyalayıp 'Metin yapıştır' ile ekleyebilirsin.")
-    title = (title or host).strip()
+    title = ((body.title or "").strip() or title or host).strip()
     ext = "html" if got["kind"] == "html" else "txt"
     doc_id = await _create_doc(conn, user, cid, "web", title, final, got["data"], ext, source_url=final,
                                media={"site": meta.get("site") or host, "author": meta.get("author"),

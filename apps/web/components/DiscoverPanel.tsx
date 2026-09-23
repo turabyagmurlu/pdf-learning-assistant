@@ -36,7 +36,7 @@ export default function DiscoverPanel({ collectionId, onAdded }: { collectionId:
     setAdding({ done: 0, total: list.length });
     for (let i = 0; i < list.length; i++) {
       try {
-        await api("/documents/web", { method: "POST", body: JSON.stringify({ url: list[i].url, collection_id: collectionId }) }, 1);
+        await api("/documents/web", { method: "POST", body: JSON.stringify({ url: list[i].url, collection_id: collectionId, title: list[i].title }) }, 1);
         setAdded((a) => ({ ...a, [list[i].url]: "ok" }));
       } catch (e: any) {
         setAdded((a) => ({ ...a, [list[i].url]: e?.message || "eklenemedi" }));
