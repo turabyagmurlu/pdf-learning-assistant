@@ -25,8 +25,15 @@ def _prompt(topic: str, context: str) -> str:
     )
 
 
+_SEARCH_OFF_UNTIL = 0.0      # Google aramasi ucretli katman istiyorsa bir sure hic deneme
+
+
 def _call(topic: str, context: str) -> dict:
+    global _SEARCH_OFF_UNTIL
+    import time as _t
     from app.ai.gemini_provider import pool_models
+    if _t.time() < _SEARCH_OFF_UNTIL:
+        raise AiUnavailable("Google araması bu hesapta kapalı (ücretli katman gerektiriyor).")
     body = {"contents": [{"role": "user", "parts": [{"text": _prompt(topic, context)}]}],
             "tools": [{"google_search": {}}],
             "generationConfig": {"temperature": 0.3}}
@@ -51,6 +58,8 @@ def _call(topic: str, context: str) -> dict:
         if r.status_code == 404:
             usage.mark_dead(m)
         # 429 burada isaretlenmez: arama kotasi dolmus olabilir ama model metin icin hala kullanilabilir
+    if errs and all("billing" in e.lower() or "plan" in e.lower() for e in errs):
+        _SEARCH_OFF_UNTIL = _t.time() + 6 * 3600          # 6 saat sonra yeniden dene (faturalandirma acilmis olabilir)
     if any(" 429 " in e for e in errs):
         raise AiUnavailable("Web araması kotası şu an dolu; birkaç dakika sonra tekrar dene.", detail="; ".join(errs))
     raise AiUnavailable("Web araması şu an yapılamıyor. (" + (errs[0] if errs else "model yok") + ")",
@@ -181,9 +190,10 @@ def _openalex(query: str, n: int = 10) -> list[dict]:
             cands.append(ids["pmcid"] if ids["pmcid"].startswith("http")
                          else f"https://www.ncbi.nlm.nih.gov/pmc/articles/{ids['pmcid']}/")
         best = w.get("best_oa_location") or {}
-        for loc in [best] + (w.get("locations") or []):
-            if (loc or {}).get("is_oa"):
-                cands += [loc.get("landing_page_url"), loc.get("pdf_url")]
+        locs = [l for l in [best] + (w.get("locations") or []) if (l or {}).get("is_oa")]
+        # tam metin once: PMC > acik PDF > yayinci/depo sayfasi (depo sayfalari cogu zaman yalniz ozet icerir)
+        cands += [l.get("pdf_url") for l in locs]
+        cands += [l.get("landing_page_url") for l in locs if "handle" not in (l.get("landing_page_url") or "")]
         cands += [(w.get("open_access") or {}).get("oa_url"), w.get("doi")]
         cands = [c for c in dict.fromkeys(cands) if c and not c.lower().endswith((".epub", ".zip"))][:5]
         url = _pick_url(cands)
