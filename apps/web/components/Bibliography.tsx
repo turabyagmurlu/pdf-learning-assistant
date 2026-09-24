@@ -49,10 +49,10 @@ export function formatCite(it: Item, style: Style): Seg[] {
     if (who) push(end(who) + " " + yr); else push(yr);
     if (isPart) {
       push(end(m.title) + " ");
-      if (m.container) { push(m.container, true); push(m.volume ? ", " : ""); }
+      if (m.container) { push(m.container, true); push(m.volume || m.issue || m.pages ? ", " : ""); }
       if (m.volume) push(m.volume, true);
       if (m.issue) push(`(${m.issue})`);
-      if (m.pages) push(`, ${m.pages}`);
+      if (m.pages) push(`${m.volume || m.issue ? ", " : ""}${m.pages}`);
       if (m.container || m.volume) push(". ");
     } else {
       push(m.title.replace(/\.$/, ""), true);
