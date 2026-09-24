@@ -42,6 +42,9 @@ async def _dump(conn, where_user: str | None = None) -> dict:
         else:
             if t == "users":
                 q = f'SELECT {sel} FROM users WHERE id=$1'
+            elif t == "chat_sessions":
+                q = (f'SELECT {sel} FROM chat_sessions WHERE user_id=$1 AND EXISTS '
+                     f'(SELECT 1 FROM chat_messages m WHERE m.session_id=chat_sessions.id)')
             elif "user_id" in cols:
                 q = f'SELECT {sel} FROM "{t}" WHERE user_id=$1'
             elif t == "chat_messages":
