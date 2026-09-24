@@ -40,6 +40,7 @@ async def lifespan(app: FastAPI):
             await conn.execute("ALTER TABLE collections ADD COLUMN IF NOT EXISTS lecture_at timestamptz")
             # Sohbet soru onerileri (kaynak kumesi degismedikce onbellekten)
             await conn.execute("ALTER TABLE collections ADD COLUMN IF NOT EXISTS suggestions jsonb")
+            await conn.execute("ALTER TABLE collections ADD COLUMN IF NOT EXISTS topics jsonb")
             await conn.execute("ALTER TABLE collections ADD COLUMN IF NOT EXISTS suggestions_hash text")
             await conn.execute("ALTER TABLE collections ADD COLUMN IF NOT EXISTS suggestions_at timestamptz")
             # Belge bazli cikarim onbellegi: sozluk/iliski/olay sonucu belgeye yazilir,
