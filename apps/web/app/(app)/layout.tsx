@@ -64,7 +64,7 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
         )}
         <button onClick={openPalette}
                 className="mb-2 flex items-center gap-2 rounded-lg border bg-surface-muted/50 px-3 py-2 text-left text-sm text-text-secondary hover:border-accent-purple/40">
-          <Search size={15} /> <span className="flex-1">Ara ya da git…</span>
+          <Search size={15} /> <span className="flex-1 truncate">Ara…</span>
           <kbd className="rounded border bg-surface px-1 font-mono text-[10px]">Ctrl K</kbd>
         </button>
         {NAV.map(({ href, label, Icon }) => (

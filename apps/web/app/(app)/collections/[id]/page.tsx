@@ -56,6 +56,8 @@ const KIND_STYLE: Record<string, string> = {
 };
 
 const TOPIC_BAR = ["bg-violet-500", "bg-emerald-500", "bg-orange-500", "bg-sky-500", "bg-pink-500", "bg-amber-500", "bg-stone-400"];
+const TOPIC_TINT = ["bg-violet-100 dark:bg-violet-500/15", "bg-emerald-100 dark:bg-emerald-500/15", "bg-orange-100 dark:bg-orange-500/15",
+  "bg-sky-100 dark:bg-sky-500/15", "bg-pink-100 dark:bg-pink-500/15", "bg-amber-100 dark:bg-amber-500/15", "bg-stone-200 dark:bg-stone-500/20"];
 const TYPE_BAR: Record<string, string> = {
   pdf: "bg-violet-500", youtube: "bg-red-500", audio: "bg-purple-400", docx: "bg-blue-500", xlsx: "bg-emerald-500", csv: "bg-emerald-500",
   pptx: "bg-orange-500", web: "bg-sky-500", html: "bg-sky-500", text: "bg-amber-500", md: "bg-amber-500", txt: "bg-amber-500", rtf: "bg-amber-500", epub: "bg-fuchsia-500",
@@ -759,7 +761,7 @@ export default function CollectionPage({ params }: { params: { id: string } }) {
         type Next = { text: string; label?: string; go?: () => void };
         const next: Next = failed ? { text: `${failed} kaynak işlenemedi; kartındaki "Yeniden işle" ile tekrar dene.`, label: "Göster", go: () => setTab("raf") }
           : processing ? { text: `${processing} kaynak işleniyor. Hazır olunca sohbette ve aramada kullanılır.` }
-          : reading ? { text: `"${reading.title}" okumaya devam et (%${prog[reading.id]?.pct || 0}).`, label: "Aç", go: () => router.push("/documents/" + reading.id) }
+          : reading ? { text: `"${reading.title.length > 60 ? reading.title.slice(0, 57) + "…" : reading.title}" okumaya devam et (%${prog[reading.id]?.pct || 0}).`, label: "Aç", go: () => router.push("/documents/" + reading.id) }
           : readyN >= 3 && !studio.glossary ? { text: "Kaynaklardaki kavramları tek yerde topla: sözlüğü oluştur.", label: "Sözlük", go: () => setTab("sozluk") }
           : !st.draft_words ? { text: "Öğrendiklerini yazmaya başla; sohbet cevaplarını taslağa tek tıkla ekleyebilirsin.", label: "Taslak", go: () => setTab("taslak") }
           : readyN >= 2 ? { text: "Kaynakların aynı konuda ne dediğini yan yana gör.", label: "Karşılaştır", go: () => setTab("karsilastir") }
@@ -901,7 +903,7 @@ export default function CollectionPage({ params }: { params: { id: string } }) {
                          onClick={() => router.push("/documents/" + d.id)}
                          onKeyDown={(e) => { if (e.key === "Enter") router.push("/documents/" + d.id); }}
                          className="lift group relative flex cursor-pointer flex-col overflow-hidden rounded-xl border bg-surface hover:border-accent-purple/40">
-                      <div className={cx("relative flex h-16 items-end justify-between px-3 pb-2", sourceTint(kind))}>
+                      <div className={cx("relative flex h-16 items-end justify-between px-3 pb-2", tp && kind === "pdf" ? TOPIC_TINT[tp.i % TOPIC_TINT.length] : sourceTint(kind))}>
                         <SourceIcon kind={kind} size={30} className="absolute right-3 top-2.5 opacity-25" />
                         <span className="flex items-center gap-1 rounded-full bg-surface/90 px-2 py-0.5 text-[11px] font-medium text-text-primary">
                           <SourceIcon kind={kind} size={12} /> {sourceLabel(kind, d.page_count)}

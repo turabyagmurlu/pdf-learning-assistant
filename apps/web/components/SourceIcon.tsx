@@ -28,7 +28,7 @@ export function sourceTint(kind?: string | null) {
     case "web": case "html": return "bg-sky-100 dark:bg-sky-500/15";
     case "text": case "md": case "txt": case "rtf": return "bg-amber-100 dark:bg-amber-500/15";
     case "epub": return "bg-fuchsia-100 dark:bg-fuchsia-500/15";
-    default: return "bg-accent-purple/10";
+    default: return "bg-violet-100 dark:bg-violet-500/15";
   }
 }
 
