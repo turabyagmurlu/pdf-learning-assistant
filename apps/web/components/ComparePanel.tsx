@@ -21,9 +21,9 @@ const STANCE: Record<string, { t: string; c: string }> = {
   notr: { t: "Nötr / betimleyici", c: "bg-slate-500/10 text-slate-700" },
 };
 
-export default function ComparePanel({ notebookId, hints }: { notebookId: string; hints: string[] }) {
+export default function ComparePanel({ notebookId, hints, initialTopic }: { notebookId: string; hints: string[]; initialTopic?: string }) {
   const router = useRouter();
-  const [topic, setTopic] = useState("");
+  const [topic, setTopic] = useState(initialTopic || "");
   const [busy, setBusy] = useState(false);
   const [res, setRes] = useState<Res | null>(null);
   const [err, setErr] = useState("");

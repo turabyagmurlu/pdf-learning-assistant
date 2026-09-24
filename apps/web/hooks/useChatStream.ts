@@ -8,9 +8,10 @@ export function useChatStream(sessionId: string) {
   const [answer, setAnswer] = useState("");
   const [citations, setCitations] = useState<Citation[]>([]);
   const [loading, setLoading] = useState(false);
+  const [cached, setCached] = useState(false);
 
   const ask = useCallback(async (question: string, sid?: string) => {
-    setAnswer(""); setCitations([]); setLoading(true);
+    setAnswer(""); setCitations([]); setCached(false); setLoading(true);
     const token = getToken();
     const res = await fetch(`${API}/chat/sessions/${sid || sessionId}/messages?token=${token}`, {
       method: "POST",
@@ -35,11 +36,12 @@ export function useChatStream(sessionId: string) {
         const data = JSON.parse(dataLine);
         if (type === "token") setAnswer((a) => a + data.text);
         else if (type === "citation") setCitations((c) => [...c, data]);
+        else if (type === "done" && data.cached) setCached(true);
         else if (type === "error") setAnswer((a) => a + `\n⚠️ ${data.message}`);
       }
     }
     setLoading(false);
   }, [sessionId]);
 
-  return { answer, citations, loading, ask };
+  return { answer, citations, loading, cached, ask };
 }

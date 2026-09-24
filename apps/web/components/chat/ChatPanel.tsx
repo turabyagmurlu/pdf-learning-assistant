@@ -14,16 +14,19 @@ const MODES = [
   ["exam", "Sınav"], ["academic", "Akademik"], ["critical", "Eleştirel"],
 ];
 
-type Turn = { q: string; a: string; citations: Citation[] };
+type Turn = { q: string; a: string; citations: Citation[]; cached?: boolean };
 type Sess = { id: string; mode: string; title?: string; created_at: string; first_q?: string };
 
-function Answer({ text, citations, onGoPage }: { text: string; citations: Citation[]; onGoPage?: (p: number) => void }) {
+function Answer({ text, citations, onGoPage, cached }: { text: string; citations: Citation[]; onGoPage?: (p: number) => void; cached?: boolean }) {
   return (
-    <div className="rounded-lg border bg-surface px-3 py-3 text-sm">
+    <div className="rounded-xl border bg-surface px-3.5 py-3 text-sm">
+      {cached && (
+        <span className="mb-2 inline-block rounded-full bg-green-500/10 px-2 py-0.5 text-[11px] text-green-700 dark:text-green-400">kayıtlı cevap · 0 kota</span>
+      )}
       <CitedText text={text}
                  sources={(() => { const arr: any[] = []; citations.forEach((c) => { arr[c.n - 1] = { page: c.page, title: c.section || "Bu belge" }; }); return arr; })()}
                  onCite={(n, s) => { const c = citations.find((x) => x.n === n); const pg = c?.page ?? s?.page; if (pg && onGoPage) onGoPage(pg); }}
-                 className="whitespace-pre-wrap text-sm leading-relaxed" />
+                 className="whitespace-pre-wrap font-heading text-[15px] leading-7" />
       {citations.length > 0 && (
         <details className="mt-3">
           <summary className="cursor-pointer text-xs text-text-secondary">Kaynaklar ({citations.length}) · tıkla, o yere git</summary>
@@ -50,7 +53,7 @@ export function ChatPanel({ documentId, onGoPage, video, generic }: { documentId
   const [pending, setPending] = useState<string | null>(null);
   const [sessions, setSessions] = useState<Sess[]>([]);
   const [showHist, setShowHist] = useState(false);
-  const { answer, citations, loading, ask } = useChatStream(sessionId || "");
+  const { answer, citations, loading, cached, ask } = useChatStream(sessionId || "");
   const bottom = useRef<HTMLDivElement>(null);
 
   async function createSession(m: string) {
@@ -83,7 +86,7 @@ export function ChatPanel({ documentId, onGoPage, video, generic }: { documentId
   // akan cevap bitince sohbete ekle
   useEffect(() => {
     if (!loading && pending !== null) {
-      setTurns((t) => [...t, { q: pending, a: answer, citations }]);
+      setTurns((t) => [...t, { q: pending, a: answer, citations, cached }]);
       setPending(null);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -161,13 +164,13 @@ export function ChatPanel({ documentId, onGoPage, video, generic }: { documentId
         )}
         {turns.map((t, i) => (
           <div key={i} className="space-y-2">
-            <div className="rounded-lg bg-accent-purple/10 px-3 py-2 text-sm">{t.q}</div>
-            {t.a && <Answer text={t.a} citations={t.citations} onGoPage={onGoPage} />}
+            <div className="ml-auto w-fit max-w-[90%] rounded-2xl rounded-br-md bg-accent-purple/10 px-3 py-2 text-sm">{t.q}</div>
+            {t.a && <Answer text={t.a} citations={t.citations} onGoPage={onGoPage} cached={t.cached} />}
           </div>
         ))}
         {pending !== null && (
           <div className="space-y-2">
-            <div className="rounded-lg bg-accent-purple/10 px-3 py-2 text-sm">{pending}</div>
+            <div className="ml-auto w-fit max-w-[90%] rounded-2xl rounded-br-md bg-accent-purple/10 px-3 py-2 text-sm">{pending}</div>
             {answer && <Answer text={answer} citations={citations} onGoPage={onGoPage} />}
           </div>
         )}

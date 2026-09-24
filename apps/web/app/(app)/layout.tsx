@@ -10,6 +10,7 @@ import Shortcuts from "@/components/Shortcuts";
 import BackButton, { isSubPage, parentOf } from "@/components/BackButton";
 import Wake from "@/components/Wake";
 import QuotaMeter from "@/components/QuotaMeter";
+import CommandPalette, { openPalette } from "@/components/CommandPalette";
 import { useRef } from "react";
 
 const NAV = [
@@ -61,6 +62,11 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
           <BackButton fallback={parent.href} label={"Geri · " + parent.label}
                       className="mb-1 flex items-center gap-2 rounded-md border border-dashed px-3 py-2 text-sm text-text-secondary hover:border-accent-purple/50 hover:bg-surface-muted hover:text-text" />
         )}
+        <button onClick={openPalette}
+                className="mb-2 flex items-center gap-2 rounded-lg border bg-surface-muted/50 px-3 py-2 text-left text-sm text-text-secondary hover:border-accent-purple/40">
+          <Search size={15} /> <span className="flex-1">Ara ya da git…</span>
+          <kbd className="rounded border bg-surface px-1 font-mono text-[10px]">Ctrl K</kbd>
+        </button>
         {NAV.map(({ href, label, Icon }) => (
           <Link key={href} href={href}
                 className={cx("flex items-center gap-2 rounded-md px-3 py-2 hover:bg-surface-muted",
@@ -97,6 +103,9 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
               </Link>
             )}
             <div className="flex items-center gap-1">
+              <button onClick={openPalette} aria-label="Ara ya da git" className="rounded-md p-2 text-text-secondary hover:bg-surface-muted">
+                <Search size={18} />
+              </button>
               <QuotaMeter compact />
               <button onClick={() => set(nextMode as any)} aria-label="Tema" className="rounded-md p-2 text-text-secondary hover:bg-surface-muted">
                 <ModeIcon size={18} />
@@ -110,6 +119,7 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
 
         <main className={cx("flex-1 overflow-auto", !isReader && "pb-20 md:pb-0")}>{children}</main>
         <Shortcuts />
+        <CommandPalette />
 
         {/* Mobil: alt sekme cubugu */}
         {!isReader && (

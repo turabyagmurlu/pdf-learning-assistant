@@ -17,6 +17,38 @@ export function sourceColor(kind?: string | null) {
   }
 }
 
+/** Kart kapagi icin acik ton (karanlik modda saydam) */
+export function sourceTint(kind?: string | null) {
+  switch (kind) {
+    case "youtube": return "bg-red-100 dark:bg-red-500/15";
+    case "audio": return "bg-violet-100 dark:bg-violet-500/15";
+    case "docx": return "bg-blue-100 dark:bg-blue-500/15";
+    case "xlsx": case "csv": return "bg-emerald-100 dark:bg-emerald-500/15";
+    case "pptx": return "bg-orange-100 dark:bg-orange-500/15";
+    case "web": case "html": return "bg-sky-100 dark:bg-sky-500/15";
+    case "text": case "md": case "txt": case "rtf": return "bg-amber-100 dark:bg-amber-500/15";
+    case "epub": return "bg-fuchsia-100 dark:bg-fuchsia-500/15";
+    default: return "bg-accent-purple/10";
+  }
+}
+
+export function sourceLabel(kind?: string | null, pages?: number | null) {
+  switch (kind) {
+    case "youtube": return "Video";
+    case "audio": return "Ses kaydı";
+    case "docx": return "Word";
+    case "xlsx": return "Excel";
+    case "csv": return "CSV";
+    case "pptx": return "Sunum";
+    case "web": case "html": return "Web";
+    case "text": return "Not";
+    case "md": return "Markdown";
+    case "txt": case "rtf": return "Metin";
+    case "epub": return "E-kitap";
+    default: return pages ? `PDF · ${pages} s.` : "PDF";
+  }
+}
+
 export default function SourceIcon({ kind, size = 16, className = "" }: { kind?: string | null; size?: number; className?: string }) {
   const c = "shrink-0 " + sourceColor(kind) + " " + className;
   switch (kind) {

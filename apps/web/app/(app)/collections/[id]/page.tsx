@@ -6,10 +6,10 @@ import PodcastPlayer from "@/components/PodcastPlayer";
 import BrowserVoice, { browserVoiceSupported } from "@/components/BrowserVoice";
 import { stageInfo } from "@/lib/docstage";
 import CitedText, { citeLoc } from "@/components/CitedText";
-import YoutubeAdd from "@/components/YoutubeAdd";
+import YoutubeAdd, { YoutubeIcon } from "@/components/YoutubeAdd";
 import TextAdd from "@/components/TextAdd";
 import DiscoverPanel from "@/components/DiscoverPanel";
-import SourceIcon, { sourceColor } from "@/components/SourceIcon";
+import SourceIcon, { sourceColor, sourceTint, sourceLabel } from "@/components/SourceIcon";
 import { ACCEPT, TYPES_HINT, rejectReason } from "@/lib/sources";
 import { useRefreshOn } from "@/components/Wake";
 import { useConfirm } from "@/components/Confirm";
@@ -20,7 +20,7 @@ import DraftEditor, { Block } from "@/components/DraftEditor";
 import {
   BookOpen, Sparkles, FileText, ArrowLeft, PenLine,
   Loader2, Send, Pencil, Check, Headphones, Plus, X, Square, CheckSquare, Trash2,
-  BookMarked, Search, RefreshCw, Clock, Tags, Share2, Volume2, MessageSquare, Scale,
+  BookMarked, Search, RefreshCw, Clock, Tags, Copy, Link2, Globe, Share2, Volume2, MessageSquare, Scale,
 } from "lucide-react";
 import ComparePanel from "@/components/ComparePanel";
 
@@ -53,6 +53,12 @@ const KIND_STYLE: Record<string, string> = {
   antlasma: "bg-amber-100 text-amber-700",
   kurum: "bg-sky-100 text-sky-700",
   kavram: "bg-surface-muted text-text-secondary",
+};
+
+const TOPIC_BAR = ["bg-violet-500", "bg-emerald-500", "bg-orange-500", "bg-sky-500", "bg-pink-500", "bg-amber-500", "bg-stone-400"];
+const TYPE_BAR: Record<string, string> = {
+  pdf: "bg-violet-500", youtube: "bg-red-500", audio: "bg-purple-400", docx: "bg-blue-500", xlsx: "bg-emerald-500", csv: "bg-emerald-500",
+  pptx: "bg-orange-500", web: "bg-sky-500", html: "bg-sky-500", text: "bg-amber-500", md: "bg-amber-500", txt: "bg-amber-500", rtf: "bg-amber-500", epub: "bg-fuchsia-500",
 };
 
 function cx(...a: (string | false | null | undefined)[]) {
@@ -375,6 +381,9 @@ export default function CollectionPage({ params }: { params: { id: string } }) {
     } catch {}
   }
 
+  const [compareTopic, setCompareTopic] = useState("");
+  const emptyUpRef = useRef<HTMLInputElement>(null);
+  const [copiedIdx, setCopiedIdx] = useState<number | null>(null);
   type TopicGroup = { label: string; description: string; docs: string[] };
   const [topics, setTopics] = useState<{ groups: TopicGroup[] } | null>(null);
   const [grouped, setGrouped] = useState(false);
@@ -712,7 +721,7 @@ export default function CollectionPage({ params }: { params: { id: string } }) {
             )}
           </div>
           <p className="mt-1 text-sm text-text-secondary">
-            {st.documents} kaynak · {st.pages || 0} sayfa · {st.notes || 0} not
+            {st.documents} kaynak{topics?.groups?.length ? ` · ${topics.groups.length} konu` : ""} · {st.pages || 0} sayfa
           </p>
         </div>
         <button
@@ -740,59 +749,66 @@ export default function CollectionPage({ params }: { params: { id: string } }) {
         </button>
       </div>
 
-      {/* DASHBOARD */}
-      {docs.length > 0 && (
-        <div className="mt-5 grid grid-cols-1 gap-3 lg:grid-cols-3">
-          {/* okuma halkası */}
-          <div className="rounded-2xl border bg-surface p-4">
-            <p className="mb-3 text-xs font-semibold uppercase tracking-wide text-text-secondary">Okuma</p>
-            <div className="flex items-center gap-4">
-              <Ring pct={overall} />
-              <div className="min-w-0">
-                <p className="text-2xl font-semibold leading-none">%{overall}</p>
-                <p className="mt-1 text-xs text-text-secondary">{read}/{docs.length} belge bitti</p>
-                {remainingPages > 0 && (
-                  <p className="mt-1.5 text-xs text-text-secondary">
-                    ~{remainingPages} sayfa kaldı · yaklaşık {etaText}
-                  </p>
-                )}
+      {/* SERIT: konu dagilimi + durum + siradaki adim */}
+      {docs.length > 0 && (() => {
+        const processing = docs.filter((d) => d.status !== "ready" && d.status !== "failed").length;
+        const failed = docs.filter((d) => d.status === "failed").length;
+        const reading = docs
+          .filter((d) => { const q = prog[d.id]?.pct || 0; return q > 0 && q < 95; })
+          .sort((x, y) => (prog[y.id]?.pct || 0) - (prog[x.id]?.pct || 0))[0];
+        type Next = { text: string; label?: string; go?: () => void };
+        const next: Next = failed ? { text: `${failed} kaynak işlenemedi; kartındaki "Yeniden işle" ile tekrar dene.`, label: "Göster", go: () => setTab("raf") }
+          : processing ? { text: `${processing} kaynak işleniyor. Hazır olunca sohbette ve aramada kullanılır.` }
+          : reading ? { text: `"${reading.title}" okumaya devam et (%${prog[reading.id]?.pct || 0}).`, label: "Aç", go: () => router.push("/documents/" + reading.id) }
+          : readyN >= 3 && !studio.glossary ? { text: "Kaynaklardaki kavramları tek yerde topla: sözlüğü oluştur.", label: "Sözlük", go: () => setTab("sozluk") }
+          : !st.draft_words ? { text: "Öğrendiklerini yazmaya başla; sohbet cevaplarını taslağa tek tıkla ekleyebilirsin.", label: "Taslak", go: () => setTab("taslak") }
+          : readyN >= 2 ? { text: "Kaynakların aynı konuda ne dediğini yan yana gör.", label: "Karşılaştır", go: () => setTab("karsilastir") }
+          : { text: "Kaynağına ilk sorunu sor.", label: "Sohbet", go: () => setTab("sor") };
+        const segs = topics?.groups?.length
+          ? topics.groups.map((g, i) => ({ key: g.label, n: g.docs.length, cls: TOPIC_BAR[i % TOPIC_BAR.length], title: `${g.label} · ${g.docs.length} kaynak` }))
+          : Object.entries(docs.reduce((m: Record<string, number>, d: any) => { const k = d.source_type || "pdf"; m[k] = (m[k] || 0) + 1; return m; }, {}))
+              .map(([k, n]) => ({ key: k, n, cls: TYPE_BAR[k] || "bg-accent-purple", title: `${sourceLabel(k)} · ${n}` }));
+        return (
+          <div className="mt-4 rounded-2xl border bg-surface p-4 md:p-5">
+            <div className="flex h-1.5 w-full gap-1">
+              {segs.map((g) => <div key={g.key} title={g.title} className={cx("h-full rounded-full", g.cls)} style={{ flexGrow: g.n }} />)}
+            </div>
+            {topics?.groups?.length ? (
+              <div className="mt-2 flex flex-wrap gap-x-3 gap-y-1 text-[11px] text-text-secondary">
+                {topics.groups.map((g, i) => (
+                  <span key={g.label} className="flex items-center gap-1"><span className={cx("h-2 w-2 rounded-full", TOPIC_BAR[i % TOPIC_BAR.length])} />{g.label}</span>
+                ))}
               </div>
-            </div>
-          </div>
-
-          {/* notlar & taslak */}
-          <div className="rounded-2xl border bg-surface p-4">
-            <p className="mb-3 text-xs font-semibold uppercase tracking-wide text-text-secondary">Notlar & taslak</p>
-            <div className="flex items-baseline gap-2">
-              <span className="text-3xl font-semibold">{st.notes || 0}</span>
-              <span className="text-sm text-text-secondary">not / vurgu</span>
-            </div>
-            <p className="mt-1 text-xs text-text-secondary">
-              {st.draft_words > 0 ? `Taslak: ${st.draft_words} kelime` : "Taslak henüz boş"}
-            </p>
-            <button onClick={() => setTab("taslak")}
-                    className="mt-3 w-full rounded-xl bg-accent-purple px-3 py-2 text-sm text-white">
-              {st.draft_words > 0 ? "Taslağa devam et" : "Yazmaya başla"}
-            </button>
-          </div>
-
-          {/* studyo durumu */}
-          <div className="rounded-2xl border bg-surface p-4">
-            <p className="mb-3 text-xs font-semibold uppercase tracking-wide text-text-secondary">Stüdyo</p>
-            <div className="space-y-1.5 text-sm">
-              {([["sozluk", "Sözlük", studio.glossary], ["harita", "Harita", studio.concept_map], ["zaman", "Zaman çizelgesi", studio.timeline]] as const).map(([k, label, ok]) => (
-                <button key={k} onClick={() => setTab(k)} className="flex w-full items-center justify-between rounded-lg px-2 py-1.5 text-left hover:bg-surface-muted">
-                  <span>{label}</span>
-                  <span className={cx("text-xs", ok ? "text-success" : "text-text-secondary")}>{ok ? "hazır" : "oluşturulmadı"}</span>
-                </button>
-              ))}
-              <button onClick={() => setTab("ders")} className="flex w-full items-center justify-between rounded-lg px-2 py-1.5 text-left hover:bg-surface-muted">
-                <span>Sesli özet</span><span className="text-xs text-text-secondary">{lecture ? "hazır" : "—"}</span>
+            ) : null}
+            <div className="mt-3 flex flex-wrap items-center gap-x-5 gap-y-1.5 text-sm text-text-secondary">
+              <span className="flex items-center gap-1.5"><BookOpen size={15} /> %{overall} okundu{remainingPages > 0 ? ` · ~${etaText} kaldı` : ""}</span>
+              <button onClick={() => setTab("taslak")} className="flex items-center gap-1.5 hover:text-accent-purple">
+                <PenLine size={15} /> {st.draft_words > 0 ? `Taslak ${st.draft_words} kelime` : "Taslak boş"}
               </button>
+              <span className="flex items-center gap-1.5"><MessageSquare size={15} /> {st.notes || 0} not</span>
+              <span className="flex flex-wrap items-center gap-1.5">
+                {([["sozluk", "Sözlük", studio.glossary], ["harita", "Harita", studio.concept_map], ["zaman", "Zaman", studio.timeline], ["ders", "Sesli özet", !!lecture]] as const).map(([k, label, ok]) => (
+                  <button key={k} onClick={() => setTab(k as any)}
+                          className={cx("rounded-full px-2 py-0.5 text-xs", ok ? "bg-green-500/10 text-green-700 dark:text-green-400" : "bg-surface-muted text-text-secondary hover:text-accent-purple")}>
+                    {ok ? "✓ " : ""}{label}
+                  </button>
+                ))}
+              </span>
+            </div>
+            <div className="mt-3.5 flex items-center gap-3 rounded-xl bg-accent-purple/10 px-3 py-2.5">
+              <Sparkles size={17} className="shrink-0 text-accent-purple" />
+              <p className="min-w-0 flex-1 text-sm text-accent-purple">
+                <span className="font-medium">Sıradaki adım: </span>{next.text}
+              </p>
+              {next.go && (
+                <button onClick={next.go} className="shrink-0 rounded-lg border border-accent-purple/40 bg-surface px-3 py-1 text-sm text-accent-purple hover:bg-accent-purple hover:text-white">
+                  {next.label}
+                </button>
+              )}
             </div>
           </div>
-        </div>
-      )}
+        );
+      })()}
 
       {/* sekmeler */}
       <div className="mt-6 flex gap-1 overflow-x-auto border-b [-ms-overflow-style:none] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
@@ -815,13 +831,36 @@ export default function CollectionPage({ params }: { params: { id: string } }) {
             <NotebookSearch collectionId={id} readyCount={docs.filter((d) => d.status === "ready").length} />
           )}
           {docs.length === 0 ? (
-            <div className="rounded-2xl border border-dashed p-10 text-center">
-              <p className="text-text-secondary">
-                Bu defter boş. Kütüphanendeki kaynakları buraya ekle.
+            <div onDragOver={(e) => { e.preventDefault(); setUpDrag(true); }}
+                 onDragLeave={() => setUpDrag(false)}
+                 onDrop={(e) => { e.preventDefault(); setUpDrag(false); uploadHere(e.dataTransfer.files); }}
+                 className={cx("rounded-2xl border-2 border-dashed px-5 py-10 text-center transition", upDrag ? "border-accent-purple bg-accent-purple/5" : "border-border")}>
+              <div className="mx-auto flex h-12 w-12 items-center justify-center rounded-2xl bg-accent-purple/10 text-accent-purple">
+                {upBusy ? <Loader2 size={22} className="animate-spin" /> : <BookOpen size={22} />}
+              </div>
+              <h3 className="mt-3 font-heading text-xl">{upBusy ? `Yükleniyor… ${upBusy.done}/${upBusy.total}` : "İlk kaynağını ekle"}</h3>
+              <p className="mx-auto mt-1 max-w-sm text-sm text-text-secondary">
+                Dosyayı buraya bırak, bir link yapıştır ya da konuyu yaz, senin için kaynak bulalım.
               </p>
-              <button onClick={openPicker}
-                      className="mt-3 inline-flex items-center gap-1.5 rounded-xl bg-accent-purple px-4 py-2 text-sm text-white">
-                <Plus size={15} /> Kaynak ekle
+              <input ref={emptyUpRef} type="file" accept={ACCEPT} multiple hidden
+                     onChange={(e) => { uploadHere(e.target.files); if (emptyUpRef.current) emptyUpRef.current.value = ""; }} />
+              <div className="mx-auto mt-5 grid max-w-lg grid-cols-2 gap-2.5 sm:grid-cols-4">
+                {([
+                  ["Dosya", "PDF, Word, Excel…", Plus, () => emptyUpRef.current?.click()],
+                  ["Link", "Web sayfası, PDF linki", Link2, openPicker],
+                  ["YouTube", "Video dökümü", YoutubeIcon, openPicker],
+                  ["Web'de bul", "Konuyu yaz", Globe, openPicker],
+                ] as const).map(([t, d, Icon, fn]) => (
+                  <button key={t} onClick={fn as any}
+                          className="lift flex flex-col items-center gap-1 rounded-xl border bg-surface px-2 py-3.5 hover:border-accent-purple/50">
+                    <Icon size={19} className="text-accent-purple" />
+                    <span className="text-sm font-medium">{t}</span>
+                    <span className="text-[11px] text-text-secondary">{d}</span>
+                  </button>
+                ))}
+              </div>
+              <button onClick={openPicker} className="mt-4 text-xs text-text-secondary underline-offset-2 hover:text-accent-purple hover:underline">
+                ya da kütüphanenden seç
               </button>
             </div>
           ) : (
@@ -850,71 +889,64 @@ export default function CollectionPage({ params }: { params: { id: string } }) {
                 </div>
               )}
               {(() => {
+                const topicOf: Record<string, { label: string; i: number }> = {};
+                (topics?.groups || []).forEach((g, i) => g.docs.forEach((x) => { topicOf[x] = { label: g.label, i }; }));
                 const renderCard = (d: any) => {
                   const p = prog[d.id];
+                  const kind = d.source_type || "pdf";
+                  const tp = topicOf[d.id];
+                  const st2 = d.status !== "ready" && d.status !== "failed" ? stageInfo(d) : null;
                   return (
                     <div key={d.id} role="button" tabIndex={0}
                          onClick={() => router.push("/documents/" + d.id)}
                          onKeyDown={(e) => { if (e.key === "Enter") router.push("/documents/" + d.id); }}
-                         className="lift group relative cursor-pointer rounded-xl border bg-surface p-4 hover:border-accent-purple/40">
+                         className="lift group relative flex cursor-pointer flex-col overflow-hidden rounded-xl border bg-surface hover:border-accent-purple/40">
+                      <div className={cx("relative flex h-16 items-end justify-between px-3 pb-2", sourceTint(kind))}>
+                        <SourceIcon kind={kind} size={30} className="absolute right-3 top-2.5 opacity-25" />
+                        <span className="flex items-center gap-1 rounded-full bg-surface/90 px-2 py-0.5 text-[11px] font-medium text-text-primary">
+                          <SourceIcon kind={kind} size={12} /> {sourceLabel(kind, d.page_count)}
+                        </span>
+                        {d.status === "failed" ? (
+                          <span className="rounded-full bg-red-100 px-2 py-0.5 text-[11px] text-red-700">işlenemedi</span>
+                        ) : st2 ? (
+                          <span className="rounded-full bg-surface/90 px-2 py-0.5 text-[11px] text-accent-purple">{st2.pct !== null ? `%${st2.pct}` : "işleniyor"}</span>
+                        ) : p && p.pct >= 95 ? (
+                          <span className="rounded-full bg-green-500/15 px-2 py-0.5 text-[11px] text-green-700 dark:text-green-400">okundu</span>
+                        ) : null}
+                      </div>
                       <button onClick={(e) => { e.stopPropagation(); removeFromCollection(d.id); }}
                               aria-label="Bu defterden çıkar" title="Bu defterden çıkar"
-                              className="absolute right-2 top-2 rounded-md p-1 text-text-secondary hover:bg-surface-muted hover:text-danger">
+                              className="absolute right-1.5 top-1.5 rounded-md bg-surface/80 p-1 text-text-secondary opacity-0 transition hover:text-danger group-hover:opacity-100 focus:opacity-100">
                         <X size={14} />
                       </button>
-                      <div className="flex items-start gap-2">
-                        <div className={cx("mt-0.5 h-10 w-1.5 shrink-0 rounded-full bg-current opacity-70",
-                          sourceColor((d as any).source_type))} />
-                        <div className="min-w-0 flex-1">
-                          <h3 className="flex items-center gap-1.5 truncate pr-6 text-sm font-medium">
-                            {(d as any).source_type && (d as any).source_type !== "pdf" && <SourceIcon kind={(d as any).source_type} size={15} />}
-                            <span className="truncate">{d.title}</span>
-                          </h3>
-                          {d.short_summary && (
-                            <p className="mt-0.5 line-clamp-2 text-xs text-text-secondary">{d.short_summary}</p>
-                          )}
-                          <div className="mt-1.5 flex flex-wrap items-center gap-1.5 text-[11px]">
-                            <span className={cx("rounded-full px-2 py-0.5",
-                              d.status === "ready" ? "bg-green-100 text-green-700"
-                                : d.status === "failed" ? "bg-red-100 text-red-700"
-                                : "bg-accent-purple/10 text-accent-purple")}>
-                              {stageInfo(d).label}
-                            </span>
-                            {d.page_count ? (
-                              <span className="rounded-full bg-surface-muted px-2 py-0.5 text-text-secondary">
-                                {d.page_count} sayfa
-                              </span>
-                            ) : null}
+                      <div className="flex flex-1 flex-col px-3 pb-3 pt-2.5">
+                        <h3 className="line-clamp-2 text-sm font-medium leading-snug">{d.title}</h3>
+                        {tp ? (
+                          <p className="mt-1 flex items-center gap-1.5 text-[11px] text-text-secondary">
+                            <span className={cx("h-1.5 w-1.5 rounded-full", TOPIC_BAR[tp.i % TOPIC_BAR.length])} />{tp.label}
+                          </p>
+                        ) : d.short_summary ? (
+                          <p className="mt-1 line-clamp-2 text-xs text-text-secondary">{d.short_summary}</p>
+                        ) : null}
+                        {st2 && (
+                          <p className="mt-1.5 text-[11px] text-text-secondary">{st2.label}</p>
+                        )}
+                        {d.status === "failed" && (
+                          <div className="mt-1.5 text-[11px] text-red-700">
+                            <p className="line-clamp-2">{d.error_message || "İşleme başarısız."}</p>
+                            <button onClick={(e) => { e.stopPropagation(); reprocessDoc(d.id); }}
+                                    className="mt-1 flex items-center gap-1 rounded-md border border-red-300 px-2 py-0.5 hover:bg-red-50">
+                              <RefreshCw size={11} /> Yeniden işle
+                            </button>
                           </div>
-                          {d.status !== "ready" && d.status !== "failed" && (() => {
-                            const st = stageInfo(d);
-                            return (
-                              <div className="mt-2">
-                                <div className="h-1.5 w-full overflow-hidden rounded-full bg-surface-muted">
-                                  <div className="h-full rounded-full bg-accent-purple transition-all" style={{ width: (st.pct ?? 15) + "%" }} />
-                                </div>
-                                <p className="mt-1 text-[11px] text-text-secondary">{st.pct !== null ? `%${st.pct} · ` : ""}{st.label}</p>
-                              </div>
-                            );
-                          })()}
-                          {d.status === "failed" && (
-                            <div className="mt-2 text-[11px] text-red-700">
-                              <p className="line-clamp-2">{(d as any).error_message || "İşleme başarısız."}</p>
-                              <button onClick={(e) => { e.stopPropagation(); reprocessDoc(d.id); }}
-                                      className="mt-1 flex items-center gap-1 rounded-md border border-red-300 px-2 py-0.5 hover:bg-red-50">
-                                <RefreshCw size={11} /> Yeniden işle
-                              </button>
-                            </div>
-                          )}
-                          {d.status === "ready" && p && p.pct > 0 && (
-                            <div className="mt-2">
-                              <div className="h-1.5 w-full overflow-hidden rounded-full bg-surface-muted">
-                                <div className="h-full rounded-full bg-accent-purple" style={{ width: p.pct + "%" }} />
-                              </div>
-                              <p className="mt-1 text-[11px] text-text-secondary">
-                                %{p.pct} · s.{p.page}/{p.numPages}
-                              </p>
-                            </div>
+                        )}
+                        <div className="mt-auto pt-2.5">
+                          <div className="h-1 w-full overflow-hidden rounded-full bg-surface-muted">
+                            <div className={cx("h-full rounded-full transition-all", st2 ? "bg-accent-purple/60" : tp ? TOPIC_BAR[tp.i % TOPIC_BAR.length] : "bg-accent-purple")}
+                                 style={{ width: (st2 ? (st2.pct ?? 15) : (p?.pct || 0)) + "%" }} />
+                          </div>
+                          {!st2 && p && p.pct > 0 && p.pct < 95 && (
+                            <p className="mt-1 text-[11px] text-text-secondary">%{p.pct} · s.{p.page}/{p.numPages}</p>
                           )}
                         </div>
                       </div>
@@ -1061,10 +1093,12 @@ export default function CollectionPage({ params }: { params: { id: string } }) {
           <div className="space-y-4">
             {thread.map((t, i) => (
               <div key={i} className="fade-in">
-                <p className="mb-1.5 text-sm font-medium">{t.q}</p>
-                <div className="rounded-2xl border bg-surface p-4">
+                <div className="mb-2 flex justify-end">
+                  <p className="max-w-[85%] rounded-2xl rounded-br-md border bg-surface px-3.5 py-2 text-sm">{t.q}</p>
+                </div>
+                <div className="rounded-2xl border bg-surface p-4 md:p-5">
                   {t.cached && (
-                    <div className="mb-2 flex flex-wrap items-center gap-2 rounded-lg bg-green-500/10 px-2.5 py-1.5 text-[11px] text-green-800">
+                    <div className="mb-2.5 flex flex-wrap items-center gap-2 rounded-full bg-green-500/10 px-3 py-1 text-[11px] text-green-800 dark:text-green-400">
                       <span>Kayıtlı cevap · kota harcanmadı{t.cachedQ && t.cachedQ !== t.q ? ` · benzer soru: “${t.cachedQ}”` : ""}</span>
                       {i === thread.length - 1 && (
                         <button onClick={() => ask(t.q, true)} disabled={asking}
@@ -1075,6 +1109,7 @@ export default function CollectionPage({ params }: { params: { id: string } }) {
                     </div>
                   )}
                   <CitedText text={t.answer} sources={t.sources}
+                             className="whitespace-pre-wrap font-heading text-[15.5px] leading-7"
                              onCite={(n, s) => { if (s?.document_id) router.push("/documents/" + s.document_id + (s.page ? "?page=" + s.page : "")); }} />
                   <div className="mt-3 flex flex-wrap items-center gap-1.5 border-t pt-3">
                     {t.sources.map((s: any, j: number) => (
@@ -1084,10 +1119,22 @@ export default function CollectionPage({ params }: { params: { id: string } }) {
                         K{j + 1} · {s.title} · {citeLoc(s)}
                       </button>
                     ))}
-                    <button onClick={() => answerToDraft(t)}
-                            className="ml-auto flex items-center gap-1 rounded-full border border-accent-purple/40 bg-accent-purple/5 px-2.5 py-1 text-xs text-accent-purple">
-                      <PenLine size={12} /> Taslağa ekle
-                    </button>
+                    <span className="ml-auto flex flex-wrap gap-1.5">
+                      <button onClick={() => answerToDraft(t)}
+                              className="flex items-center gap-1 rounded-full border border-accent-purple/40 bg-accent-purple/5 px-2.5 py-1 text-xs text-accent-purple hover:bg-accent-purple/10">
+                        <PenLine size={12} /> Taslağa ekle
+                      </button>
+                      {readyN >= 2 && (
+                        <button onClick={() => { setCompareTopic(t.q); setTab("karsilastir"); window.scrollTo({ top: 0, behavior: "smooth" }); }}
+                                className="flex items-center gap-1 rounded-full border px-2.5 py-1 text-xs text-text-secondary hover:border-accent-purple/40 hover:text-accent-purple">
+                          <Scale size={12} /> Karşılaştır
+                        </button>
+                      )}
+                      <button onClick={async () => { try { await navigator.clipboard.writeText(t.answer.replace(/\[K[\d,;\s K]+\]/g, "").trim()); setCopiedIdx(i); setTimeout(() => setCopiedIdx(null), 1500); } catch {} }}
+                              className="flex items-center gap-1 rounded-full border px-2.5 py-1 text-xs text-text-secondary hover:border-accent-purple/40 hover:text-accent-purple">
+                        {copiedIdx === i ? <Check size={12} /> : <Copy size={12} />} {copiedIdx === i ? "Kopyalandı" : "Kopyala"}
+                      </button>
+                    </span>
                   </div>
                 </div>
                 {/* Devam sorulari: ayni cevapla gelir, ek kota yok */}
@@ -1272,7 +1319,7 @@ export default function CollectionPage({ params }: { params: { id: string } }) {
       {/* ZAMAN CIZELGESI */}
       {tab === "karsilastir" && (
         <div className="mt-5">
-          <ComparePanel notebookId={id}
+          <ComparePanel notebookId={id} key={compareTopic} initialTopic={compareTopic}
                         hints={(sugg?.groups || []).filter((g) => g.kind === "karsilastir" || g.kind === "elestir")
                           .flatMap((g) => g.questions.map((x) => x.q)).slice(0, 6)} />
         </div>
@@ -1459,6 +1506,16 @@ export default function CollectionPage({ params }: { params: { id: string } }) {
             </details>
           )}
         </div>
+      )}
+
+      {/* Mobil: yuzen "Sor" dugmesi */}
+      {tab !== "sor" && readyN > 0 && (
+        <button onClick={() => { setTab("sor"); window.scrollTo({ top: 0, behavior: "smooth" }); }}
+                aria-label="Kaynaklara sor"
+                className="fixed right-4 z-30 flex h-14 w-14 items-center justify-center rounded-full bg-accent-purple text-white shadow-medium active:scale-95 md:hidden"
+                style={{ bottom: "calc(env(safe-area-inset-bottom) + 72px)" }}>
+          <MessageSquare size={22} />
+        </button>
       )}
 
       {/* BELGE SECICI */}

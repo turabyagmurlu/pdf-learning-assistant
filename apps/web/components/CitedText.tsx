@@ -5,6 +5,7 @@
  * iddia -> kanit tek tikla.
  */
 import { Fragment } from "react";
+import { sourceColor, sourceTint } from "@/components/SourceIcon";
 
 export type CiteTarget = { document_id?: string; title?: string | null; page?: number | null;
   kind?: string; time?: string; start?: number; unit?: string };
@@ -44,7 +45,7 @@ export default function CitedText({ text, sources, onCite, className }: {
           return (
             <button key={i} type="button" onClick={(e) => { e.stopPropagation(); onCite(n, src); }}
                     title={tip} aria-label={tip}
-                    className="rounded-md border border-accent-purple/40 bg-accent-purple/10 px-1.5 py-[1px] text-[11px] font-medium leading-tight text-accent-purple hover:bg-accent-purple hover:text-white">
+                    className={"rounded-full px-1.5 py-[1px] font-body text-[11px] font-medium leading-tight transition hover:ring-1 hover:ring-current " + sourceTint(src?.kind) + " " + sourceColor(src?.kind)}>
               K{n}{loc ? <span className="opacity-70"> {loc}</span> : null}
             </button>
           );
