@@ -24,7 +24,7 @@ function Answer({ text, citations, onGoPage, cached }: { text: string; citations
         <span className="mb-2 inline-block rounded-full bg-green-500/10 px-2 py-0.5 text-[11px] text-green-700 dark:text-green-400">kayıtlı cevap · 0 kota</span>
       )}
       <CitedText text={text}
-                 sources={(() => { const arr: any[] = []; citations.forEach((c) => { arr[c.n - 1] = { page: c.page, title: c.section || "Bu belge" }; }); return arr; })()}
+                 sources={(() => { const arr: any[] = []; citations.forEach((c) => { arr[c.n - 1] = { page: c.page, title: c.section || "Bu belge", snippet: c.snippet }; }); return arr; })()}
                  onCite={(n, s) => { const c = citations.find((x) => x.n === n); const pg = c?.page ?? s?.page; if (pg && onGoPage) onGoPage(pg); }}
                  className="whitespace-pre-wrap font-heading text-[15px] leading-7" />
       {citations.length > 0 && (

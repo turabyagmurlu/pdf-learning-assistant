@@ -7,6 +7,7 @@
 import { useEffect, useState } from "react";
 import { Gauge, X, Download, Loader2 } from "lucide-react";
 import { API, getToken } from "@/lib/api";
+import { toast } from "@/components/Toast";
 import { api } from "@/lib/api";
 
 type M = { model: string; status: string; requests: number };
@@ -46,7 +47,7 @@ export default function QuotaMeter({ compact }: { compact?: boolean }) {
       const b = await r.blob(); const u = URL.createObjectURL(b); const a = document.createElement("a");
       a.href = u; a.download = `typdf-yedek-${new Date().toISOString().slice(0, 10)}.json`; a.click();
       setTimeout(() => URL.revokeObjectURL(u), 2000);
-    } catch { alert("Yedek indirilemedi; biraz sonra tekrar dene."); }
+    } catch { toast.error("Yedek indirilemedi; biraz sonra tekrar dene."); }
     finally { setDl(false); }
   }
 

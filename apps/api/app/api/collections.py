@@ -43,12 +43,30 @@ async def list_collections(conn=Depends(db), user=Depends(current_user)):
                   (c.glossary IS NOT NULL) AS has_glossary,
                   (c.timeline IS NOT NULL) AS has_timeline,
                   (c.concept_map IS NOT NULL) AS has_concept_map,
-                  GREATEST(c.created_at, COALESCE(c.draft_at, c.created_at), COALESCE(c.glossary_at, c.created_at),
+                  c.topics AS topics_raw,
+                  (SELECT json_agg(json_build_array(t.k, t.n)) FROM (
+                     SELECT COALESCE(d.source_type,'pdf') AS k, COUNT(*) AS n FROM documents d
+                     WHERE d.collection_id=c.id AND d.user_id=c.user_id GROUP BY 1 ORDER BY 2 DESC) t) AS types,
+                  (SELECT ch.title FROM collection_chats ch WHERE ch.collection_id=c.id ORDER BY ch.updated_at DESC LIMIT 1) AS last_chat,
+                  (SELECT MAX(ch.updated_at) FROM collection_chats ch WHERE ch.collection_id=c.id) AS last_chat_at,
+                  GREATEST(COALESCE((SELECT MAX(ch.updated_at) FROM collection_chats ch WHERE ch.collection_id=c.id), c.created_at),c.created_at, COALESCE(c.draft_at, c.created_at), COALESCE(c.glossary_at, c.created_at),
                            COALESCE(c.timeline_at, c.created_at), COALESCE(c.concept_map_at, c.created_at),
                            COALESCE((SELECT MAX(d.created_at) FROM documents d WHERE d.collection_id=c.id), c.created_at)) AS last_activity
            FROM collections c WHERE c.user_id=$1 ORDER BY last_activity DESC""",
         user["id"])
-    return [dict(r) for r in rows]
+    out = []
+    for r in rows:
+        d = dict(r)
+        t = d.pop("topics_raw", None)
+        try:
+            t = json.loads(t) if isinstance(t, str) else t
+            d["topics"] = [{"label": g["label"], "n": len(g.get("docs") or [])} for g in (t or {}).get("groups", [])]
+        except Exception:  # noqa
+            d["topics"] = []
+        ty = d.get("types")
+        d["types"] = json.loads(ty) if isinstance(ty, str) else (ty or [])
+        out.append(d)
+    return out
 
 
 @router.get("/collections/{cid}")
@@ -286,7 +304,8 @@ async def _ask_core(cid: str, body: AskIn, conn, user):
     raw = await asyncio.to_thread(llm.complete, messages, model=settings.active_llm_model)
     answer, followups = _split_followups(raw)
     sources = [{"document_id": str(c["document_id"]), "title": c.get("doc_title"),
-                "page": c["page_number"], "score": round(float(c["score"]), 3)} for c in chunks]
+                "page": c["page_number"], "score": round(float(c["score"]), 3),
+                "snippet": re.sub(r"\s+", " ", (c.get("content") or ""))[:320]} for c in chunks]
     await annotate_media(conn, sources)
     payload = {"answer": answer, "sources": sources, "followups": followups}
     try:

@@ -1,4 +1,5 @@
 "use client";
+import { toast } from "@/components/Toast";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { api, API, getToken } from "@/lib/api";
@@ -21,6 +22,11 @@ type Doc = {
 };
 
 const cx = (...a: any[]) => a.filter(Boolean).join(" ");
+const KIND_GROUP: Record<string, string> = {
+  pdf: "PDF", youtube: "Video", audio: "Ses", docx: "Belge", pptx: "Belge", epub: "Belge", rtf: "Belge",
+  xlsx: "Tablo", csv: "Tablo", web: "Web", html: "Web", text: "Metin", md: "Metin", txt: "Metin",
+};
+const KIND_ORDER = ["PDF", "Video", "Ses", "Web", "Belge", "Tablo", "Metin"];
 
 function toArr(v: any): any[] {
   if (Array.isArray(v)) return v;
@@ -38,6 +44,7 @@ export default function LibraryPage() {
   const [cat, setCat] = useState("");
   const [tag, setTag] = useState("");
   const [favOnly, setFavOnly] = useState(false);
+  const [kind, setKind] = useState("");
   const [view, setView] = useState<"grid" | "list">("grid");
   const [density, setDensity] = useState<"comfortable" | "compact">("comfortable");
   const [sort, setSort] = useState<"recent" | "title" | "fav">("recent");
@@ -121,6 +128,7 @@ export default function LibraryPage() {
   const filtered = useMemo(() => {
     let list = [...docs];
     if (favOnly) list = list.filter((d) => d.is_favorite);
+    if (kind) list = list.filter((d) => KIND_GROUP[(d as any).source_type || "pdf"] === kind);
     if (cat) list = list.filter((d) => d.category === cat);
     if (tag) list = list.filter((d) => toArr(d.tags).map(String).includes(tag));
     if (folder === "__none__") list = list.filter((d) => !d.collection_id);
@@ -132,13 +140,18 @@ export default function LibraryPage() {
     if (sort === "title") list.sort((a, b) => (a.title || "").localeCompare(b.title || ""));
     else if (sort === "fav") list.sort((a, b) => Number(!!b.is_favorite) - Number(!!a.is_favorite));
     return list;
-  }, [docs, favOnly, cat, tag, q, sort, folder]);
+  }, [docs, favOnly, cat, tag, q, sort, folder, kind]);
+  const kindCounts = useMemo(() => {
+    const m: Record<string, number> = {};
+    docs.forEach((d) => { const g = KIND_GROUP[(d as any).source_type || "pdf"] || "Metin"; m[g] = (m[g] || 0) + 1; });
+    return m;
+  }, [docs]);
 
   async function onFiles(files: FileList | null) {
     if (!files || !files.length) return;
     setUploading(true);
     for (const f of Array.from(files)) {
-      if (rejectReason(f)) { alert(rejectReason(f)); continue; }
+      if (rejectReason(f)) { toast.error(rejectReason(f) as string); continue; }
       const fd = new FormData(); fd.append("file", f);
       try { await fetch(API + "/documents", { method: "POST", headers: { Authorization: "Bearer " + getToken() }, body: fd }); } catch {}
     }
@@ -204,6 +217,25 @@ export default function LibraryPage() {
           {density === "comfortable" ? "Sık" : "Ferah"}
         </button>
       </div>
+
+      {Object.keys(kindCounts).length > 1 && (
+        <div className="mt-3 flex gap-1.5 overflow-x-auto pb-0.5 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+          <button onClick={() => setKind("")}
+                  className={cx("shrink-0 rounded-full px-3 py-1 text-xs", !kind ? "bg-accent-purple text-white" : "border bg-surface text-text-secondary hover:border-accent-purple/50")}>
+            Tümü <span className="opacity-70">{docs.length}</span>
+          </button>
+          {KIND_ORDER.filter((k) => kindCounts[k]).map((k) => (
+            <button key={k} onClick={() => setKind(kind === k ? "" : k)}
+                    className={cx("shrink-0 rounded-full px-3 py-1 text-xs", kind === k ? "bg-accent-purple text-white" : "border bg-surface text-text-secondary hover:border-accent-purple/50")}>
+              {k} <span className="opacity-70">{kindCounts[k]}</span>
+            </button>
+          ))}
+          <button onClick={() => setFolder(folder === "__none__" ? "" : "__none__")}
+                  className={cx("shrink-0 rounded-full px-3 py-1 text-xs", folder === "__none__" ? "bg-accent-purple text-white" : "border bg-surface text-text-secondary hover:border-accent-purple/50")}>
+            Deftersiz <span className="opacity-70">{docs.filter((d) => !d.collection_id).length}</span>
+          </button>
+        </div>
+      )}
 
       {(categories.length > 0 || allTags.length > 0) && (
         <div className="mt-3 flex flex-wrap items-center gap-1.5">

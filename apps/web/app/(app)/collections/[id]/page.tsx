@@ -13,6 +13,7 @@ import SourceIcon, { sourceColor, sourceTint, sourceLabel } from "@/components/S
 import { ACCEPT, TYPES_HINT, rejectReason } from "@/lib/sources";
 import { useRefreshOn } from "@/components/Wake";
 import { useConfirm } from "@/components/Confirm";
+import { toast } from "@/components/Toast";
 import NotebookSearch from "@/components/NotebookSearch";
 import { Skeleton, CardSkeleton } from "@/components/Skeleton";
 import ConceptMap, { CMNode, CMEdge } from "@/components/ConceptMap";
@@ -322,8 +323,9 @@ export default function CollectionPage({ params }: { params: { id: string } }) {
       ));
       setPicker(false);
       await load();
+      toast(`${ids.length} kaynak deftere eklendi`);
     } catch (e: any) {
-      setErr(e?.message || "Belgeler eklenemedi.");
+      toast.error(e?.message || "Belgeler eklenemedi.");
     } finally { setAddBusy(false); }
   }
   const { confirm, dialog: confirmDialog, wasChecked } = useConfirm();
@@ -370,20 +372,31 @@ export default function CollectionPage({ params }: { params: { id: string } }) {
   }, [data]);
 
   async function removeFromCollection(docId: string) {
+    // Kaynak silinmez (Kutuphane'de kalir); onay yerine "Geri al" sunulur.
     const d = (data?.documents || []).find((x: Doc) => x.id === docId);
-    const ok = await confirm({
-      title: `"${d?.title || "Bu kaynak"}" defterden çıkarılsın mı?`,
-      keeps: ["Kaynak silinmez; Kütüphane'de kalır ve istediğinde geri eklenebilir"],
-      confirmLabel: "Defterden çıkar",
-    });
-    if (!ok) return;
     try {
       await api("/documents/" + docId, { method: "PATCH", body: JSON.stringify({ collection_id: "" }) });
       await load();
-    } catch {}
+      toast(`"${(d?.title || "Kaynak").slice(0, 40)}" defterden çıkarıldı`, {
+        action: { label: "Geri al", run: async () => {
+          try { await api("/documents/" + docId, { method: "PATCH", body: JSON.stringify({ collection_id: id }) }); await load(); toast("Geri alındı"); }
+          catch { toast.error("Geri alınamadı"); }
+        } },
+      });
+    } catch (e: any) { toast.error(e?.message || "Çıkarılamadı"); }
   }
 
   const [compareTopic, setCompareTopic] = useState("");
+  const tabBarRef = useRef<HTMLDivElement>(null);
+  const [stuck, setStuck] = useState(false);
+  useEffect(() => {
+    const el = tabBarRef.current;
+    if (!el || typeof IntersectionObserver === "undefined") return;
+    const io = new IntersectionObserver(([e]) => setStuck(!e.isIntersecting && e.boundingClientRect.top < 0), { threshold: 0 });
+    io.observe(el);
+    return () => io.disconnect();
+  }, [!!data]);
+  const [openSrc, setOpenSrc] = useState<Record<number, boolean>>({});
   const emptyUpRef = useRef<HTMLInputElement>(null);
   const [copiedIdx, setCopiedIdx] = useState<number | null>(null);
   type TopicGroup = { label: string; description: string; docs: string[] };
@@ -664,6 +677,39 @@ export default function CollectionPage({ params }: { params: { id: string } }) {
     } catch { setRenaming(false); }
   }
 
+  function tabBar(compact: boolean) {
+    const groups = [
+      { k: "oku", label: "Oku", tabs: [["raf", "Kaynaklar", FileText], ["sor", "Sohbet", Sparkles]] },
+      { k: "yaz", label: "Yaz", tabs: [["taslak", "Taslak", PenLine], ["karsilastir", "Karşılaştır", Scale]] },
+      { k: "kesfet", label: "Keşfet", tabs: [["sozluk", "Sözlük", BookMarked], ["harita", "Harita", Share2], ["zaman", "Zaman", Clock], ["ders", "Sesli özet", Headphones]] },
+    ] as const;
+    const cur = groups.find((g) => g.tabs.some((t) => t[0] === tab)) || groups[0];
+    return (
+      <div className={cx("flex items-center gap-2 sm:gap-3", compact ? "py-2" : "flex-wrap border-b pb-0")}>
+        <div className={cx("flex shrink-0 gap-0.5 rounded-full bg-surface-muted p-0.5", !compact && "mb-2")}>
+          {groups.map((g) => (
+            <button key={g.k} onClick={() => { if (g.k !== cur.k) setTab(g.tabs[0][0] as any); }}
+                    className={cx("rounded-full px-3 py-1 text-sm transition sm:px-3.5",
+                      g.k === cur.k ? "bg-surface font-medium text-text-primary shadow-soft" : "text-text-secondary hover:text-text-primary")}>
+              {g.label}
+            </button>
+          ))}
+        </div>
+        <div className="flex min-w-0 flex-1 gap-0.5 overflow-x-auto [-ms-overflow-style:none] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+          {cur.tabs.map(([k, label, Icon]) => (
+            <button key={k} onClick={() => setTab(k as any)}
+                    className={cx("flex shrink-0 items-center gap-1.5 whitespace-nowrap px-2.5 text-sm sm:px-3",
+                      compact ? "rounded-lg py-1" : "py-2.5",
+                      tab === k ? (compact ? "bg-accent-purple/10 text-accent-purple" : "border-b-2 border-accent-purple text-accent-purple")
+                               : "text-text-secondary hover:text-text-primary")}>
+              <Icon size={15} /> {label}
+            </button>
+          ))}
+        </div>
+      </div>
+    );
+  }
+
   if (err) return <div className="p-8 text-danger">{err}</div>;
   if (!data) return (
     <div className="mx-auto w-full max-w-6xl px-4 py-5 md:px-6 md:py-8">
@@ -812,19 +858,17 @@ export default function CollectionPage({ params }: { params: { id: string } }) {
         );
       })()}
 
-      {/* sekmeler */}
-      <div className="mt-6 flex gap-1 overflow-x-auto border-b [-ms-overflow-style:none] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
-        {([["raf", "Kaynaklar", FileText], ["sor", "Sohbet", Sparkles], ["taslak", "Taslak", PenLine],
-           ["karsilastir", "Karşılaştır", Scale], ["sozluk", "Sözlük", BookMarked], ["harita", "Harita", Share2], ["zaman", "Zaman", Clock],
-           ["ders", "Sesli özet", Headphones]] as const).map(
-          ([k, label, Icon]) => (
-            <button key={k} onClick={() => setTab(k as any)}
-                    className={cx("flex shrink-0 items-center gap-1.5 whitespace-nowrap px-3 py-2.5 text-sm md:px-4",
-                      tab === k ? "border-b-2 border-accent-purple text-accent-purple" : "text-text-secondary")}>
-              <Icon size={15} /> {label}
-            </button>
-          ))}
-      </div>
+      {/* sekmeler: 3 grup (Oku / Yaz / Kesfet); kaydirinca ustte sabit kucuk serit */}
+      <div ref={tabBarRef} className="mt-6">{tabBar(false)}</div>
+      {stuck && (
+        <div className="fixed inset-x-0 top-[calc(max(env(safe-area-inset-top),8px)+53px)] z-20 border-b bg-surface/95 backdrop-blur md:left-56 md:top-0">
+          <div className="mx-auto flex w-full max-w-6xl items-center gap-3 px-4 md:px-6">
+            <button onClick={() => window.scrollTo({ top: 0, behavior: "smooth" })}
+                    className="hidden shrink-0 truncate font-heading text-lg md:block md:max-w-[220px]" title="Başa dön">{col.title}</button>
+            <div className="min-w-0 flex-1">{tabBar(true)}</div>
+          </div>
+        </div>
+      )}
 
       {/* RAF */}
       {tab === "raf" && (
@@ -1114,13 +1158,40 @@ export default function CollectionPage({ params }: { params: { id: string } }) {
                              className="whitespace-pre-wrap font-heading text-[15.5px] leading-7"
                              onCite={(n, s) => { if (s?.document_id) router.push("/documents/" + s.document_id + (s.page ? "?page=" + s.page : "")); }} />
                   <div className="mt-3 flex flex-wrap items-center gap-1.5 border-t pt-3">
-                    {t.sources.map((s: any, j: number) => (
-                      <button key={j} onClick={() => router.push("/documents/" + s.document_id + (s.page ? "?page=" + s.page : ""))}
-                              title={`${s.title} · ${citeLoc(s)} — ${s.kind === "youtube" ? "videoda o ana git" : s.kind ? "kaynakta aç" : "PDF'te aç"}`}
-                              className="rounded-full border bg-surface px-2.5 py-1 text-xs text-text-secondary hover:border-accent-purple/50 hover:text-accent-purple">
-                        K{j + 1} · {s.title} · {citeLoc(s)}
-                      </button>
-                    ))}
+                    {(() => {
+                      const uniq = Array.from(new Map(t.sources.map((s: any) => [s.document_id, s])).values()) as any[];
+                      const open = !!openSrc[i];
+                      return (
+                        <div className="w-full">
+                          <button onClick={() => setOpenSrc((o) => ({ ...o, [i]: !open }))}
+                                  className="flex w-full items-center gap-2.5 rounded-lg py-1 text-left text-xs text-text-secondary hover:text-text-primary">
+                            <span className="flex">
+                              {uniq.slice(0, 4).map((s: any, j: number) => (
+                                <span key={j} className={cx("flex h-6 w-6 items-center justify-center rounded-full border-2 border-surface", sourceTint(s.kind), j > 0 && "-ml-1.5")}>
+                                  <SourceIcon kind={s.kind || "pdf"} size={12} />
+                                </span>
+                              ))}
+                            </span>
+                            <span className="min-w-0 flex-1 truncate">
+                              <b className="font-medium text-text-primary">{t.sources.length} alıntı · {uniq.length} kaynak</b>
+                              <span className="hidden sm:inline"> · {uniq.slice(0, 2).map((s: any) => (s.title || "").slice(0, 28)).join(" · ")}{uniq.length > 2 ? ` · +${uniq.length - 2}` : ""}</span>
+                            </span>
+                            <span className="shrink-0 text-accent-purple">{open ? "Gizle" : "Göster"}</span>
+                          </button>
+                          {open && (
+                            <div className="mt-2 flex flex-wrap gap-1.5">
+                              {t.sources.map((s: any, j: number) => (
+                                <button key={j} onClick={() => router.push("/documents/" + s.document_id + (s.page ? "?page=" + s.page : ""))}
+                                        title={s.snippet || s.title}
+                                        className="rounded-full border bg-surface px-2.5 py-1 text-xs text-text-secondary hover:border-accent-purple/50 hover:text-accent-purple">
+                                  K{j + 1} · {(s.title || "").slice(0, 40)} · {citeLoc(s)}
+                                </button>
+                              ))}
+                            </div>
+                          )}
+                        </div>
+                      );
+                    })()}
                     <span className="ml-auto flex flex-wrap gap-1.5">
                       <button onClick={() => answerToDraft(t)}
                               className="flex items-center gap-1 rounded-full border border-accent-purple/40 bg-accent-purple/5 px-2.5 py-1 text-xs text-accent-purple hover:bg-accent-purple/10">

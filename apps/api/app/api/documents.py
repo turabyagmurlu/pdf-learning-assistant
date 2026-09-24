@@ -242,6 +242,26 @@ async def list_docs(conn=Depends(db), user=Depends(current_user)):
     return [dict(r) for r in rows]
 
 
+@router.get("/{doc_id}/locate")
+async def locate(doc_id: str, q: str, conn=Depends(db), user=Depends(current_user)):
+    """Icindekiler maddesinin gectigi sayfayi bulur (tam metin arama; yapay zeka yok, 0 kota)."""
+    import re as _re
+    own = await conn.fetchval("SELECT 1 FROM documents WHERE id=$1 AND user_id=$2", doc_id, user["id"])
+    if not own:
+        raise NotFound("Belge bulunamadı.")
+    words = [w for w in _re.findall(r"[\wçğıöşüÇĞİÖŞÜ]+", q or "") if len(w) > 3][:8]
+    if not words:
+        return {"page": None}
+    tsq = " or ".join(words)
+    row = await conn.fetchrow(
+        """SELECT page_number, ts_rank(to_tsvector('simple', coalesce(section_title,'') || ' ' || content),
+                                      websearch_to_tsquery('simple', $2)) AS r
+           FROM document_chunks WHERE document_id=$1
+             AND to_tsvector('simple', coalesce(section_title,'') || ' ' || content) @@ websearch_to_tsquery('simple', $2)
+           ORDER BY r DESC, chunk_index ASC LIMIT 1""", doc_id, tsq)
+    return {"page": row["page_number"] if row else None}
+
+
 @router.get("/{doc_id}")
 async def get_doc(doc_id: str, conn=Depends(db), user=Depends(current_user)):
     row = await conn.fetchrow("SELECT * FROM documents WHERE id=$1 AND user_id=$2", doc_id, user["id"])

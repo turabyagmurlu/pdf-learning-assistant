@@ -11,6 +11,7 @@ import BackButton, { isSubPage, parentOf } from "@/components/BackButton";
 import Wake from "@/components/Wake";
 import QuotaMeter from "@/components/QuotaMeter";
 import CommandPalette, { openPalette } from "@/components/CommandPalette";
+import ToastHost from "@/components/Toast";
 import { useRef } from "react";
 
 const NAV = [
@@ -120,6 +121,7 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
         <main className={cx("flex-1 overflow-auto", !isReader && "pb-20 md:pb-0")}>{children}</main>
         <Shortcuts />
         <CommandPalette />
+        <ToastHost />
 
         {/* Mobil: alt sekme cubugu */}
         {!isReader && (

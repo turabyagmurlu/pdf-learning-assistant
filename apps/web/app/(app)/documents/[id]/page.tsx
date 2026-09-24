@@ -46,6 +46,19 @@ export default function DocumentPage({ params }: { params: { id: string } }) {
   const [leftW, setLeftW] = useState(288);
 
   const { annotations, add, patch, remove } = useAnnotations(id);
+  // icindekiler: tiklaninca maddenin gectigi sayfayi bul (0 kota), sonucu hatirla
+  const [tocPages, setTocPages] = useState<Record<number, number>>({});
+  useEffect(() => { try { setTocPages(JSON.parse(localStorage.getItem("reader.toc." + id) || "{}")); } catch {} }, [id]);
+  async function jumpToc(i: number, text: string) {
+    let pg = tocPages[i];
+    if (pg === undefined) {
+      try { const r = await api(`/documents/${id}/locate?q=${encodeURIComponent(text)}`); pg = r?.page || 0; } catch { pg = 0; }
+      const next = { ...tocPages, [i]: pg };
+      setTocPages(next);
+      try { localStorage.setItem("reader.toc." + id, JSON.stringify(next)); } catch {}
+    }
+    if (pg) setPage(pg); else say("Bu başlığın sayfası bulunamadı");
+  }
 
   // geri al / yinele (vurgu ve not ekleme-silme; ustune vurgulamada degistirme tek adim)
   type HistOp = { kind: "add"; ann: Annotation } | { kind: "remove"; ann: Annotation } | { kind: "group"; ops: HistOp[] };
@@ -286,8 +299,24 @@ export default function DocumentPage({ params }: { params: { id: string } }) {
                 {toArr(doc.outline).length > 0 && (
                   <div className="mt-5">
                     <p className="mb-1.5 text-xs font-semibold uppercase tracking-wide text-text-secondary">İçindekiler</p>
-                    <ul className="space-y-1 text-sm">
-                      {toArr(doc.outline).map((o, i) => <li key={i} className="text-text-secondary">{typeof o === "string" ? o : (o?.title || "")}</li>)}
+                    <ul className="space-y-0.5 text-sm">
+                      {(() => {
+                        const items = toArr(doc.outline).map((o) => (typeof o === "string" ? o : (o?.title || "")));
+                        // su an okunan bolum: bulunmus sayfalar icinde page'e en yakin olan (<= page)
+                        let cur = -1, best = 0;
+                        items.forEach((_, i) => { const pg = tocPages[i]; if (pg && pg <= page && pg >= best) { best = pg; cur = i; } });
+                        return items.map((t, i) => (
+                          <li key={i}>
+                            <button onClick={() => jumpToc(i, t)}
+                                    className={`flex w-full items-start gap-2 rounded-lg px-2 py-1.5 text-left transition hover:bg-surface-muted ${i === cur ? "bg-accent-purple/10 text-accent-purple" : "text-text-secondary"}`}>
+                              <span className={`mt-[7px] h-1.5 w-1.5 shrink-0 rounded-full ${i === cur ? "bg-accent-purple" : "bg-border"}`} />
+                              <span className="min-w-0 flex-1">{t}</span>
+                              {tocPages[i] ? <span className="shrink-0 text-[11px] opacity-70">s.{tocPages[i]}</span>
+                                : tocPages[i] === 0 ? <span className="shrink-0 text-[11px] opacity-50">—</span> : null}
+                            </button>
+                          </li>
+                        ));
+                      })()}
                     </ul>
                   </div>
                 )}
@@ -349,19 +378,19 @@ export default function DocumentPage({ params }: { params: { id: string } }) {
             <div className="flex border-b">
               <button onClick={() => setRightTab("ai")} title="AI Asistan"
                       className={`flex flex-1 items-center justify-center gap-1.5 py-2.5 text-sm ${rightTab === "ai" ? "border-b-2 border-accent-purple text-accent-purple" : "text-text-secondary"}`}>
-                <Sparkles size={15} /> AI
+                <Sparkles size={15} /> Sohbet
               </button>
               <button onClick={() => setRightTab("explain")} title="Bu sayfayı anlat ve sesli oku"
                       className={`flex flex-1 items-center justify-center gap-1.5 py-2.5 text-sm ${rightTab === "explain" ? "border-b-2 border-accent-purple text-accent-purple" : "text-text-secondary"}`}>
-                <Volume2 size={15} /> Sesli
+                <Volume2 size={15} /> Anlat
               </button>
               <button onClick={() => setRightTab("links")} title="Bu sayfayla bağlantılı diğer belgeler"
                       className={`flex flex-1 items-center justify-center gap-1.5 py-2.5 text-sm ${rightTab === "links" ? "border-b-2 border-accent-purple text-accent-purple" : "text-text-secondary"}`}>
-                <Link2 size={15} /> Bağ
+                <Link2 size={15} /> Bağlantı
               </button>
               <button onClick={() => setRightTab("notes")} title="Notlar"
                       className={`flex flex-1 items-center justify-center gap-1.5 py-2.5 text-sm ${rightTab === "notes" ? "border-b-2 border-accent-purple text-accent-purple" : "text-text-secondary"}`}>
-                <StickyNote size={15} /> Not {annotations.length > 0 && <span className="rounded-full bg-accent-purple/15 px-1.5 text-xs text-accent-purple">{annotations.length}</span>}
+                <StickyNote size={15} /> Notlar {annotations.length > 0 && <span className="rounded-full bg-accent-purple/15 px-1.5 text-xs text-accent-purple">{annotations.length}</span>}
               </button>
             </div>
             <div className="min-h-0 flex-1">

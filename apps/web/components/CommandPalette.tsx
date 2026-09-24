@@ -57,7 +57,7 @@ export default function CommandPalette() {
     const hit = (s: string) => !nq || norm(s).includes(nq);
     const out: Item[] = [];
     (cols || []).filter((c) => hit(c.title || c.name || "")).slice(0, nq ? 6 : 4).forEach((c) =>
-      out.push({ id: "c" + c.id, group: "Defterler", label: c.title || c.name, hint: c.document_count != null ? `${c.document_count} kaynak` : undefined,
+      out.push({ id: "c" + c.id, group: "Defterler", label: c.title || c.name, hint: c.doc_count != null ? `${c.doc_count} kaynak` : undefined,
                  icon: <Notebook size={16} className="text-accent-purple" />, run: () => go("/collections/" + c.id) }));
     (docs || []).filter((d) => hit(d.title || "")).slice(0, nq ? 8 : 4).forEach((d) =>
       out.push({ id: "d" + d.id, group: "Kaynaklar", label: d.title, hint: d.status !== "ready" ? "işleniyor" : undefined,

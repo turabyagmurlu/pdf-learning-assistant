@@ -11,6 +11,13 @@ type NB = {
   id: string; title: string; description?: string | null; created_at: string; draft_at?: string | null;
   has_draft: boolean; doc_count: number; page_count: number; note_count: number;
   has_glossary: boolean; has_timeline: boolean; has_concept_map: boolean; last_activity: string;
+  topics?: { label: string; n: number }[]; types?: [string, number][];
+  last_chat?: string | null; last_chat_at?: string | null;
+};
+const TOPIC_BAR = ["bg-violet-500", "bg-emerald-500", "bg-orange-500", "bg-sky-500", "bg-pink-500", "bg-amber-500", "bg-stone-400"];
+const TYPE_BAR: Record<string, string> = {
+  pdf: "bg-violet-500", youtube: "bg-red-500", audio: "bg-purple-400", docx: "bg-blue-500", xlsx: "bg-emerald-500", csv: "bg-emerald-500",
+  pptx: "bg-orange-500", web: "bg-sky-500", html: "bg-sky-500", text: "bg-amber-500", md: "bg-amber-500", txt: "bg-amber-500", rtf: "bg-amber-500", epub: "bg-fuchsia-500",
 };
 const cx = (...a: any[]) => a.filter(Boolean).join(" ");
 
@@ -49,7 +56,7 @@ export default function NotebooksPage() {
 
   return (
     <div className="mx-auto w-full max-w-6xl px-4 py-5 md:px-6 md:py-8">
-      <PageHeader hero eyebrow="TY PDF" title="Defterler"
+      <PageHeader title="Defterler"
                   subtitle="Her defter bir araştırma: kaynaklar, kaynaklı sohbet, notlar ve taslağın bir arada."
                   right={
                     creating ? (
@@ -89,28 +96,49 @@ export default function NotebooksPage() {
         <div className="grid grid-cols-1 gap-5 sm:grid-cols-2 lg:grid-cols-3">
           {list.map((nb) => (
             <button key={nb.id} onClick={() => router.push("/collections/" + nb.id)}
-                    className="lift group rounded-2xl border bg-surface p-5 text-left hover:border-accent-purple/40">
-              <div className="flex items-start justify-between gap-2">
-                <h3 className="font-heading text-xl leading-tight">{nb.title}</h3>
-                <span className="shrink-0 text-[11px] text-text-secondary">{ago(nb.last_activity)}</span>
-              </div>
-              {nb.description && <p className="mt-1 line-clamp-2 text-sm text-text-secondary">{nb.description}</p>}
-              <div className="mt-4 flex flex-wrap items-center gap-x-4 gap-y-1.5 text-xs text-text-secondary">
+                    className="lift group flex flex-col rounded-2xl border bg-surface p-5 text-left hover:border-accent-purple/40">
+              <h3 className="line-clamp-2 font-heading text-[22px] leading-tight">{nb.title}</h3>
+              {(() => {
+                const segs = nb.topics?.length
+                  ? nb.topics.map((t, i) => ({ k: t.label, n: t.n, c: TOPIC_BAR[i % TOPIC_BAR.length] }))
+                  : (nb.types || []).map(([k, n]) => ({ k, n, c: TYPE_BAR[k] || "bg-violet-500" }));
+                return segs.length ? (
+                  <div className="mt-3 flex h-1.5 w-full gap-0.5" title={nb.topics?.length ? nb.topics.map((t) => `${t.label} (${t.n})`).join(" · ") : ""}>
+                    {segs.map((g) => <div key={g.k} className={cx("h-full rounded-full", g.c)} style={{ flexGrow: g.n }} />)}
+                  </div>
+                ) : <div className="mt-3 h-1.5 w-full rounded-full bg-surface-muted" />;
+              })()}
+              {nb.topics?.length ? (
+                <p className="mt-1.5 line-clamp-1 text-[11px] text-text-secondary">{nb.topics.map((t) => t.label).join(" · ")}</p>
+              ) : nb.description ? (
+                <p className="mt-1.5 line-clamp-1 text-[11px] text-text-secondary">{nb.description}</p>
+              ) : null}
+              <div className="mt-3 flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-text-secondary">
                 <span className="flex items-center gap-1"><FileText size={13} /> {nb.doc_count} kaynak · {nb.page_count} s.</span>
-                <span className="flex items-center gap-1"><Highlighter size={13} /> {nb.note_count} not</span>
-                <span className={cx("flex items-center gap-1", nb.has_draft && "text-accent-purple")}><PenLine size={13} /> {nb.has_draft ? "taslak var" : "taslak yok"}</span>
+                {nb.note_count > 0 && <span className="flex items-center gap-1"><Highlighter size={13} /> {nb.note_count} not</span>}
+                {nb.has_draft && <span className="flex items-center gap-1 text-accent-purple"><PenLine size={13} /> taslak</span>}
               </div>
-              <div className="mt-3 flex gap-1.5">
-                {[["Sözlük", nb.has_glossary, BookMarked], ["Harita", nb.has_concept_map, Share2], ["Zaman", nb.has_timeline, Clock]].map(([label, ok, Icon]: any) => (
-                  <span key={label} title={label + (ok ? " hazır" : " oluşturulmadı")}
-                        className={cx("flex items-center gap-1 rounded-full border px-2 py-0.5 text-[10px]",
-                          ok ? "border-success/40 text-success" : "text-text-secondary/60")}>
-                    <Icon size={10} /> {label}
-                  </span>
-                ))}
+              <div className="mt-auto flex items-center gap-1.5 border-t pt-2.5 text-[11px] text-text-secondary" style={{ marginTop: "0.9rem" }}>
+                <Clock size={12} className="shrink-0" />
+                <span className="min-w-0 truncate">
+                  {ago(nb.last_activity)}
+                  {nb.last_chat ? <> · <span className="text-text-primary">“{nb.last_chat.length > 48 ? nb.last_chat.slice(0, 46) + "…" : nb.last_chat}”</span></> : null}
+                </span>
+                <span className="ml-auto flex shrink-0 gap-1">
+                  {[["Sözlük", nb.has_glossary, BookMarked], ["Harita", nb.has_concept_map, Share2], ["Zaman", nb.has_timeline, Clock]].map(([label, ok, Icon]: any) => (
+                    <span key={label} title={label + (ok ? " hazır" : " oluşturulmadı")}
+                          className={cx("rounded-full p-1", ok ? "bg-green-500/10 text-green-700 dark:text-green-400" : "text-text-secondary/40")}>
+                      <Icon size={11} />
+                    </span>
+                  ))}
+                </span>
               </div>
             </button>
           ))}
+          <button onClick={() => { setCreating(true); window.scrollTo({ top: 0, behavior: "smooth" }); }}
+                  className="flex min-h-[150px] items-center justify-center gap-2 rounded-2xl border-2 border-dashed text-sm text-text-secondary hover:border-accent-purple/50 hover:text-accent-purple">
+            <Plus size={17} /> Yeni defter
+          </button>
         </div>
       )}
     </div>
