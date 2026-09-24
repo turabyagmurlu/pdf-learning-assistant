@@ -20,7 +20,7 @@ import DraftEditor, { Block } from "@/components/DraftEditor";
 import {
   BookOpen, Sparkles, FileText, ArrowLeft, PenLine,
   Loader2, Send, Pencil, Check, Headphones, Plus, X, Square, CheckSquare, Trash2,
-  BookMarked, Search, RefreshCw, Clock, Share2, Volume2, MessageSquare, Scale,
+  BookMarked, Search, RefreshCw, Clock, Tags, Share2, Volume2, MessageSquare, Scale,
 } from "lucide-react";
 import ComparePanel from "@/components/ComparePanel";
 
@@ -375,6 +375,22 @@ export default function CollectionPage({ params }: { params: { id: string } }) {
     } catch {}
   }
 
+  type TopicGroup = { label: string; description: string; docs: string[] };
+  const [topics, setTopics] = useState<{ groups: TopicGroup[] } | null>(null);
+  const [grouped, setGrouped] = useState(false);
+  const [topicsBusy, setTopicsBusy] = useState(false);
+  const [topicsErr, setTopicsErr] = useState("");
+  useEffect(() => { try { setGrouped(localStorage.getItem("typdf-group") === "1"); } catch {} }, []);
+  async function loadTopics(refresh = false) {
+    setTopicsBusy(true); setTopicsErr("");
+    try { setTopics(await api(`/collections/${id}/topics${refresh ? "?refresh=1" : ""}`)); }
+    catch (e: any) { setTopicsErr(e?.message || "Gruplanamadı."); }
+    finally { setTopicsBusy(false); }
+  }
+  const readyKey = ((data as any)?.documents || []).filter((d: any) => d.status === "ready").map((d: any) => d.id).sort().join(",");
+  useEffect(() => {
+    if (tab === "raf" && grouped && readyKey.split(",").filter(Boolean).length >= 3 && !topicsBusy) loadTopics();
+    /* eslint-disable-line */ }, [tab, grouped, readyKey]);
   async function load() {
     try {
       const d = await api(`/collections/${id}`);
@@ -649,6 +665,7 @@ export default function CollectionPage({ params }: { params: { id: string } }) {
 
   const col = data.collection;
   const docs: Doc[] = data.documents || [];
+  const readyN = docs.filter((d) => d.status === "ready").length;
   const st = data.stats || {};
   const studio = data.studio || {};
   const glist: GItem[] = gItems || [];
@@ -816,8 +833,24 @@ export default function CollectionPage({ params }: { params: { id: string } }) {
                   <Plus size={15} /> Kaynak ekle
                 </button>
               </div>
-              <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
-                {docs.map((d) => {
+              {readyN >= 3 && (
+                <div className="mb-3 flex flex-wrap items-center gap-2">
+                  <button onClick={() => { const v = !grouped; setGrouped(v); try { localStorage.setItem("typdf-group", v ? "1" : "0"); } catch {} if (v && !topics) loadTopics(); }}
+                          className={cx("inline-flex items-center gap-1.5 rounded-lg border px-2.5 py-1 text-xs",
+                            grouped ? "border-accent-purple/50 bg-accent-purple/10 text-accent-purple" : "bg-surface text-text-secondary hover:border-accent-purple/40")}>
+                    <Tags size={13} /> Konuya göre grupla
+                  </button>
+                  {grouped && (
+                    <button onClick={() => loadTopics(true)} disabled={topicsBusy} title="Grupları yeniden oluştur"
+                            className="inline-flex items-center gap-1 rounded-lg border bg-surface px-2 py-1 text-xs text-text-secondary hover:border-accent-purple/40 disabled:opacity-50">
+                      <RefreshCw size={12} className={topicsBusy ? "animate-spin" : ""} /> {topicsBusy ? "Gruplanıyor…" : "Yenile"}
+                    </button>
+                  )}
+                  {grouped && topicsErr && <span className="text-xs text-danger">{topicsErr}</span>}
+                </div>
+              )}
+              {(() => {
+                const renderCard = (d: any) => {
                   const p = prog[d.id];
                   return (
                     <div key={d.id} role="button" tabIndex={0}
@@ -887,8 +920,36 @@ export default function CollectionPage({ params }: { params: { id: string } }) {
                       </div>
                     </div>
                   );
-                })}
-              </div>
+                };
+                const grid = (list: any[]) => (
+                  <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">{list.map(renderCard)}</div>
+                );
+                if (!grouped || !topics?.groups?.length) {
+                  return <>{grouped && topicsBusy && <p className="mb-2 text-xs text-text-secondary">Kaynaklar konulara ayrılıyor…</p>}{grid(docs)}</>;
+                }
+                const byId: Record<string, any> = Object.fromEntries(docs.map((d) => [d.id, d]));
+                const used = new Set<string>();
+                const sections = topics.groups.map((g) => {
+                  const list = g.docs.map((x) => byId[x]).filter(Boolean);
+                  list.forEach((d) => used.add(d.id));
+                  return { ...g, list };
+                }).filter((g) => g.list.length);
+                const rest = docs.filter((d) => !used.has(d.id));
+                if (rest.length) sections.push({ label: "Yeni / gruplanmamış", description: "Son gruplamadan sonra eklenenler ya da hazır olmayanlar", docs: [], list: rest });
+                return (
+                  <div className="space-y-5">
+                    {sections.map((g, gi) => (
+                      <section key={gi}>
+                        <div className="mb-2 flex items-baseline gap-2">
+                          <h4 className="text-sm font-semibold text-text-primary">{g.label}</h4>
+                          <span className="text-[11px] text-text-secondary">{g.list.length} kaynak{g.description ? " · " + g.description : ""}</span>
+                        </div>
+                        {grid(g.list)}
+                      </section>
+                    ))}
+                  </div>
+                );
+              })()}
             </div>
           )}
         </div>
