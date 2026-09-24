@@ -21,9 +21,10 @@ import DraftEditor, { Block } from "@/components/DraftEditor";
 import {
   BookOpen, Sparkles, FileText, ArrowLeft, PenLine,
   Loader2, Send, Pencil, Check, Headphones, Plus, X, Square, CheckSquare, Trash2,
-  BookMarked, Search, RefreshCw, Clock, Tags, Copy, Link2, Globe, Share2, Volume2, MessageSquare, Scale,
+  BookMarked, Search, RefreshCw, Clock, Tags, Copy, Link2, Globe, Quote, Share2, Volume2, MessageSquare, Scale,
 } from "lucide-react";
 import ComparePanel from "@/components/ComparePanel";
+import Bibliography from "@/components/Bibliography";
 
 type Doc = {
   id: string; title: string; status: string; page_count?: number | null;
@@ -99,7 +100,7 @@ export default function CollectionPage({ params }: { params: { id: string } }) {
   const router = useRouter();
   const [data, setData] = useState<any>(null);
   const [err, setErr] = useState("");
-  const [tab, setTab] = useState<"raf" | "sor" | "taslak" | "karsilastir" | "sozluk" | "harita" | "zaman" | "ders">("raf");
+  const [tab, setTab] = useState<"raf" | "sor" | "taslak" | "karsilastir" | "kaynakca" | "sozluk" | "harita" | "zaman" | "ders">("raf");
 
   // Kavram haritasi
   const [cm, setCm] = useState<{ nodes: CMNode[]; edges: CMEdge[] } | null>(null);
@@ -680,7 +681,7 @@ export default function CollectionPage({ params }: { params: { id: string } }) {
   function tabBar(compact: boolean) {
     const groups = [
       { k: "oku", label: "Oku", tabs: [["raf", "Kaynaklar", FileText], ["sor", "Sohbet", Sparkles]] },
-      { k: "yaz", label: "Yaz", tabs: [["taslak", "Taslak", PenLine], ["karsilastir", "Karşılaştır", Scale]] },
+      { k: "yaz", label: "Yaz", tabs: [["taslak", "Taslak", PenLine], ["karsilastir", "Karşılaştır", Scale], ["kaynakca", "Kaynakça", Quote]] },
       { k: "kesfet", label: "Keşfet", tabs: [["sozluk", "Sözlük", BookMarked], ["harita", "Harita", Share2], ["zaman", "Zaman", Clock], ["ders", "Sesli özet", Headphones]] },
     ] as const;
     const cur = groups.find((g) => g.tabs.some((t) => t[0] === tab)) || groups[0];
@@ -1390,6 +1391,10 @@ export default function CollectionPage({ params }: { params: { id: string } }) {
       )}
 
       {/* ZAMAN CIZELGESI */}
+      {tab === "kaynakca" && (
+        <div className="mt-5"><Bibliography notebookId={id} /></div>
+      )}
+
       {tab === "karsilastir" && (
         <div className="mt-5">
           <ComparePanel notebookId={id} key={compareTopic} initialTopic={compareTopic}

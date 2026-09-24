@@ -341,3 +341,141 @@ async def topics(cid: str, refresh: bool = False, conn=Depends(db), user=Depends
     out = {"hash": h, "groups": groups}
     await conn.execute("UPDATE collections SET topics=$1 WHERE id=$2", out, cid)
     return out
+
+
+# ------------------------------------------------------------------ otomatik kaynakca
+# Her kaynagin kunyesi (yazar, yil, baslik, dergi/yayinci, DOI...) bir kez cikarilir ve saklanir.
+# Video/web icin yapay zeka gerekmez; PDF/Word icin ilk sayfadan 8'li gruplar halinde tek istek.
+CITE_SCHEMA = {"name": "cite", "schema": {"type": "object", "properties": {"items": {"type": "array", "items": {
+    "type": "object", "properties": {
+        "i": {"type": "integer"}, "type": {"type": "string"},
+        "authors": {"type": "array", "items": {"type": "string"}}, "year": {"type": "string"},
+        "title": {"type": "string"}, "container": {"type": "string"}, "publisher": {"type": "string"},
+        "volume": {"type": "string"}, "issue": {"type": "string"}, "pages": {"type": "string"},
+        "doi": {"type": "string"}},
+    "required": ["i", "type", "authors", "year", "title"]}}}, "required": ["items"]}}
+
+CITE_FIELDS = ("type", "authors", "year", "title", "container", "publisher", "volume", "issue", "pages", "doi")
+
+
+def _clean_meta(m: dict) -> dict:
+    out = {}
+    for k in CITE_FIELDS:
+        v = (m or {}).get(k)
+        if k == "authors":
+            v = [str(a).strip() for a in (v or []) if str(a).strip()][:12]
+        else:
+            v = str(v).strip() if v not in (None, "") else ""
+        out[k] = v
+    out["doi"] = re.sub(r"^https?://(dx\.)?doi\.org/", "", out.get("doi") or "", flags=re.I)
+    return out
+
+
+def _jd(v):
+    if isinstance(v, str):
+        try:
+            return json.loads(v)
+        except Exception:  # noqa
+            return None
+    return v
+
+
+@router.get("/collections/{cid}/bibliography")
+async def bibliography(cid: str, refresh: bool = False, conn=Depends(db), user=Depends(current_user)):
+    col = await conn.fetchrow("SELECT id FROM collections WHERE id=$1 AND user_id=$2", cid, user["id"])
+    if not col:
+        raise NotFound("Defter bulunamadı.")
+    rows = await conn.fetch(
+        """SELECT id, title, source_type, source_url, media, created_at FROM documents
+           WHERE user_id=$1 AND collection_id=$2 AND status='ready' ORDER BY title""", user["id"], cid)
+    metas: dict[str, dict] = {}
+    edited: set[str] = set()
+    for r in await conn.fetch("SELECT document_id, payload FROM doc_extracts WHERE kind='cite' AND document_id = ANY($1::uuid[])",
+                              [r["id"] for r in rows]):
+        p = _jd(r["payload"]) or {}
+        metas[str(r["document_id"])] = p
+        if p.get("edited"):
+            edited.add(str(r["document_id"]))
+
+    todo = []
+    for r in rows:
+        did = str(r["id"])
+        if did in edited or (did in metas and not refresh):
+            continue
+        kind = r["source_type"] or "pdf"
+        media = _jd(r["media"]) or {}
+        if kind in ("youtube", "web", "html"):
+            m = _clean_meta({
+                "type": "video" if kind == "youtube" else "web",
+                "authors": [media.get("channel") or media.get("author")] if (media.get("channel") or media.get("author")) else [],
+                "year": "", "title": r["title"], "container": "YouTube" if kind == "youtube" else (media.get("site") or ""),
+            })
+            metas[did] = m
+            await _save_cite(conn, did, m)
+        else:
+            todo.append(r)
+
+    for i in range(0, len(todo), 8):
+        part = todo[i:i + 8]
+        blocks = []
+        for n, r in enumerate(part, 1):
+            txt = await conn.fetchval(
+                """SELECT string_agg(content, ' ') FROM (SELECT content FROM document_chunks WHERE document_id=$1
+                   ORDER BY chunk_index LIMIT 2) t""", r["id"]) or ""
+            flat = re.sub(r"\s+", " ", txt)[:1600]
+            blocks.append(f"KAYNAK {n} (dosya adı: {r['title']}):\n{flat}")
+        messages = [
+            {"role": "system", "content":
+                "Aşağıdaki her kaynağın ilk sayfa metninden kaynakça künyesini çıkar. Yalnız metinde GÖRDÜĞÜN bilgiyi yaz; "
+                "emin olmadığın alanı boş bırak, uydurma. type: article | book | thesis | report | chapter | other. "
+                "authors: 'Soyad, A. B.' biçiminde (Türkçe karakterleri koru). year: 4 haneli yıl. title: eserin gerçek başlığı "
+                "(dosya adı değil; yoksa dosya adını düzgün yaz). container: dergi / kitap / kurum adı. publisher: yayınevi ya da "
+                "üniversite. doi: yalnız 10. ile başlayan kısım."},
+            {"role": "user", "content": "\n\n".join(blocks)},
+        ]
+        try:
+            raw = await asyncio.to_thread(get_llm().structured, messages, CITE_SCHEMA, settings.active_llm_model)
+            items = (json.loads(raw) or {}).get("items") or []
+        except Exception:  # noqa - kota vb.: bu grup dosya adiyla kalir
+            items = []
+        got = {int(x.get("i", 0)): x for x in items if isinstance(x, dict)}
+        for n, r in enumerate(part, 1):
+            m = _clean_meta(got.get(n) or {"type": "other", "authors": [], "year": "", "title": r["title"]})
+            if not m["title"]:
+                m["title"] = r["title"]
+            did = str(r["id"])
+            metas[did] = m
+            if got.get(n):
+                await _save_cite(conn, did, m)
+
+    out = []
+    for r in rows:
+        did = str(r["id"])
+        m = _clean_meta(metas.get(did) or {"type": "other", "title": r["title"]})
+        out.append({"document_id": did, "file_title": r["title"], "kind": r["source_type"] or "pdf",
+                    "url": r["source_url"], "accessed": r["created_at"].date().isoformat() if r["created_at"] else None,
+                    "edited": did in edited, "meta": m})
+    return {"items": out}
+
+
+async def _save_cite(conn, did: str, m: dict, edited: bool = False):
+    p = {**m, **({"edited": True} if edited else {})}
+    await conn.execute(
+        """INSERT INTO doc_extracts (document_id, kind, input_hash, payload, created_at)
+           VALUES ($1,'cite','v1',$2,now())
+           ON CONFLICT (document_id, kind) DO UPDATE SET payload=EXCLUDED.payload, created_at=now()""",
+        did, p)
+
+
+class CiteIn(BaseModel):
+    meta: dict
+
+
+@router.put("/documents/{doc_id}/cite")
+async def save_cite(doc_id: str, body: CiteIn, conn=Depends(db), user=Depends(current_user)):
+    ok = await conn.fetchval("SELECT 1 FROM documents WHERE id=$1 AND user_id=$2", doc_id, user["id"])
+    if not ok:
+        raise NotFound("Belge bulunamadı.")
+    m = _clean_meta(body.meta)
+    await _save_cite(conn, doc_id, m, edited=True)
+    return {"meta": m, "edited": True}
