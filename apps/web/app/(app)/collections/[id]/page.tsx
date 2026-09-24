@@ -391,11 +391,12 @@ export default function CollectionPage({ params }: { params: { id: string } }) {
   const tabBarRef = useRef<HTMLDivElement>(null);
   const [stuck, setStuck] = useState(false);
   useEffect(() => {
-    const el = tabBarRef.current;
-    if (!el || typeof IntersectionObserver === "undefined") return;
-    const io = new IntersectionObserver(([e]) => setStuck(!e.isIntersecting && e.boundingClientRect.top < 0), { threshold: 0 });
-    io.observe(el);
-    return () => io.disconnect();
+    // kaydirma dinleyicisi: sekme seridi ekrandan cikinca ustte kucuk serit goster
+    const check = () => { const el = tabBarRef.current; setStuck(!!el && el.getBoundingClientRect().bottom < 0); };
+    check();
+    window.addEventListener("scroll", check, { passive: true, capture: true });
+    window.addEventListener("resize", check);
+    return () => { window.removeEventListener("scroll", check, { capture: true } as any); window.removeEventListener("resize", check); };
   }, [!!data]);
   const [openSrc, setOpenSrc] = useState<Record<number, boolean>>({});
   const emptyUpRef = useRef<HTMLInputElement>(null);
