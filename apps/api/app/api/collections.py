@@ -136,11 +136,24 @@ async def update_collection(cid: str, body: CollectionPatch, conn=Depends(db), u
 
 
 @router.delete("/collections/{cid}")
-async def delete_collection(cid: str, conn=Depends(db), user=Depends(current_user)):
-    """Calisma kitabini siler; icindeki belgeler silinmez, sadece kitaptan cikar."""
+async def delete_collection(cid: str, with_sources: bool = False, conn=Depends(db), user=Depends(current_user)):
+    """Defteri siler. Varsayilan: icindeki kaynaklar Kutuphane'de deftersiz kalir.
+    with_sources=1: kaynaklar da (dosyalari ve turetilmis verileriyle) kalici silinir."""
     col = await conn.fetchrow("SELECT id FROM collections WHERE id=$1 AND user_id=$2", cid, user["id"])
     if not col:
         raise NotFound("Çalışma kitabı bulunamadı.")
+    if with_sources:
+        from app.storage.object_store import delete_object
+        rows = await conn.fetch("SELECT id, file_path FROM documents WHERE collection_id=$1 AND user_id=$2",
+                                cid, user["id"])
+        for r in rows:
+            for k in (r["file_path"], r["file_path"] + ".pages.json", r["file_path"] + ".ocr.json",
+                      r["file_path"] + ".transcript.json"):
+                try:
+                    await asyncio.to_thread(delete_object, k)
+                except Exception:  # noqa
+                    pass
+        await conn.execute("DELETE FROM documents WHERE collection_id=$1 AND user_id=$2", cid, user["id"])
     await conn.execute("UPDATE documents SET collection_id=NULL WHERE collection_id=$1 AND user_id=$2",
                        cid, user["id"])
     await conn.execute("DELETE FROM collections WHERE id=$1 AND user_id=$2", cid, user["id"])

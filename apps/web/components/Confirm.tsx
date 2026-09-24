@@ -30,15 +30,19 @@ export type ConfirmOptions = {
   danger?: boolean;
   /** Dolduysa: kullanici bu metni birebir yazmadan onay butonu acilmaz. */
   typeToConfirm?: string;
+  /** Istege bagli ek secenek (ornegin "Kaynaklari da sil"); secildi mi -> wasChecked() */
+  checkbox?: string;
 };
 
 export function useConfirm() {
   const [opts, setOpts] = useState<ConfirmOptions | null>(null);
   const [typed, setTyped] = useState("");
+  const [checked, setChecked] = useState(false);
+  const checkedRef = useRef(false);
   const resolver = useRef<((v: boolean) => void) | null>(null);
 
   const confirm = useCallback((o: ConfirmOptions) => {
-    setTyped("");
+    setTyped(""); setChecked(false); checkedRef.current = false;
     setOpts(o);
     return new Promise<boolean>((res) => { resolver.current = res; });
   }, []);
@@ -91,6 +95,14 @@ export function useConfirm() {
           </div>
         ) : null}
 
+        {opts.checkbox && (
+          <label className="mt-3.5 flex cursor-pointer items-start gap-2 rounded-xl border border-danger/30 p-3 text-sm">
+            <input type="checkbox" checked={checked} className="mt-0.5 h-4 w-4 accent-red-600"
+                   onChange={(e) => { setChecked(e.target.checked); checkedRef.current = e.target.checked; }} />
+            <span>{opts.checkbox}</span>
+          </label>
+        )}
+
         {needType && (
           <div className="mt-3.5">
             <label className="block text-xs text-text-secondary">
@@ -119,5 +131,5 @@ export function useConfirm() {
     </div>
   );
 
-  return { confirm, dialog };
+  return { confirm, dialog, wasChecked: () => checkedRef.current };
 }

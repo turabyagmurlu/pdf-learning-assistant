@@ -318,7 +318,7 @@ export default function CollectionPage({ params }: { params: { id: string } }) {
       setErr(e?.message || "Belgeler eklenemedi.");
     } finally { setAddBusy(false); }
   }
-  const { confirm, dialog: confirmDialog } = useConfirm();
+  const { confirm, dialog: confirmDialog, wasChecked } = useConfirm();
 
   async function reprocessDoc(docId: string) {
     try { await api("/documents/" + docId + "/reprocess", { method: "POST" }); } catch {}
@@ -707,12 +707,14 @@ export default function CollectionPage({ params }: { params: { id: string } }) {
               title: `"${col.title}" defteri silinsin mi?`,
               description: "Defter kalıcı olarak silinir; bu işlem geri alınamaz.",
               losses,
-              keeps: n > 0 ? [`İçindeki ${n} kaynak silinmez; Kütüphane'de deftersiz kalır`] : undefined,
+              keeps: n > 0 ? [`Kutuyu işaretlemezsen içindeki ${n} kaynak silinmez; Kütüphane'de deftersiz kalır`] : undefined,
+              checkbox: n > 0 ? `İçindeki ${n} kaynağı da kalıcı olarak sil (dosyaları, dökümleri ve notlarıyla)` : undefined,
               confirmLabel: "Defteri sil", danger: true,
               typeToConfirm: (n > 0 || st.draft_words) ? col.title : undefined,
             });
             if (!ok) return;
-            try { await api("/collections/" + id, { method: "DELETE" }); router.push("/notebooks"); }
+            const withSources = n > 0 && wasChecked();
+            try { await api("/collections/" + id + (withSources ? "?with_sources=1" : ""), { method: "DELETE" }); router.push("/notebooks"); }
             catch (e: any) { setErr(e?.message || "Silinemedi."); }
           }}
           title="Defteri sil" aria-label="Defteri sil"
