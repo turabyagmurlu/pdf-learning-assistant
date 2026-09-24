@@ -45,10 +45,11 @@ async def create_session(body: SessionIn, conn=Depends(db), user=Depends(current
 
 
 @router.get("/sessions")
-async def list_sessions(document_id: str | None = None, nonempty: int = 0,
+async def list_sessions(document_id: str | None = None, nonempty: int = 1,
                         conn=Depends(db), user=Depends(current_user)):
+    # Varsayilan: bos (hic mesaj yazilmamis) oturumlar gizlenir
+    extra = " AND EXISTS (SELECT 1 FROM chat_messages m WHERE m.session_id=chat_sessions.id)" if nonempty else ""
     if document_id:
-        extra = " AND EXISTS (SELECT 1 FROM chat_messages m WHERE m.session_id=chat_sessions.id)" if nonempty else ""
         rows = await conn.fetch(
             "SELECT *, (SELECT content FROM chat_messages m WHERE m.session_id=chat_sessions.id AND m.role='user'"
             " ORDER BY m.created_at LIMIT 1) AS first_q FROM chat_sessions WHERE user_id=$1 AND document_id=$2" + extra +
@@ -56,7 +57,7 @@ async def list_sessions(document_id: str | None = None, nonempty: int = 0,
             user["id"], document_id)
     else:
         rows = await conn.fetch(
-            "SELECT * FROM chat_sessions WHERE user_id=$1 ORDER BY created_at DESC", user["id"])
+            "SELECT * FROM chat_sessions WHERE user_id=$1" + extra + " ORDER BY created_at DESC", user["id"])
     return [dict(r) for r in rows]
 
 

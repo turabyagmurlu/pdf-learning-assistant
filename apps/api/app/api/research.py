@@ -258,3 +258,86 @@ async def compare(cid: str, body: CompareIn, conn=Depends(db), user=Depends(curr
            "gaps": [g for g in data.get("gaps") or [] if g][:3], "sources_used": len(docs)}
     await _cache_put(conn, cid, docs_hash, key, topic, out)
     return out
+
+
+# ------------------------------------------------------------------ konu gruplari (otomatik etiket)
+TOPICS_SCHEMA = {"name": "topics", "schema": {"type": "object", "properties": {"groups": {"type": "array", "items": {
+    "type": "object", "properties": {
+        "label": {"type": "string"}, "description": {"type": "string"},
+        "sources": {"type": "array", "items": {"type": "integer"}}},
+    "required": ["label", "description", "sources"]}}}, "required": ["groups"]}}
+
+
+def _concepts(v) -> str:
+    try:
+        v = json.loads(v) if isinstance(v, str) else v
+        return ", ".join((x.get("term") if isinstance(x, dict) else str(x)) for x in (v or [])[:6])
+    except Exception:  # noqa
+        return ""
+
+
+@router.get("/collections/{cid}/topics")
+async def topics(cid: str, refresh: bool = False, conn=Depends(db), user=Depends(current_user)):
+    """Defterdeki kaynaklari konulara gore gruplar (1 istek). Kaynak kumesi degismedikce kayitli
+    sonuc doner. Her kaynagin konu etiketi Kutuphane etiketlerine de yazilir (filtrelenebilir)."""
+    col = await conn.fetchrow("SELECT id, topics FROM collections WHERE id=$1 AND user_id=$2", cid, user["id"])
+    if not col:
+        raise NotFound("Defter bulunamadı.")
+    rows = await conn.fetch(
+        """SELECT id, title, short_summary, key_concepts, tags FROM documents
+           WHERE user_id=$1 AND collection_id=$2 AND status='ready' ORDER BY created_at""", user["id"], cid)
+    if len(rows) < 3:
+        return {"groups": [], "reason": "Konu grupları en az 3 hazır kaynakla oluşur."}
+    ids = [str(r["id"]) for r in rows]
+    h = hashlib.sha1(",".join(sorted(ids)).encode()).hexdigest()[:16]
+    old = col["topics"]
+    old = json.loads(old) if isinstance(old, str) else old
+    if old and old.get("hash") == h and not refresh:
+        return {**old, "cached": True}
+    lines = [f"KAYNAK {i}: {r['title']} — {(r['short_summary'] or '')[:260]} [{_concepts(r['key_concepts'])}]"
+             for i, r in enumerate(rows, 1)]
+    messages = [
+        {"role": "system", "content":
+            "Bir araştırma defterindeki kaynakları konularına göre gruplayacaksın. Türkçe yaz.\n"
+            f"- 2 ile {min(7, max(2, len(rows) // 2))} arası grup oluştur; her kaynak TAM OLARAK bir gruba girsin.\n"
+            "- label: en fazla 3 kelime, somut ve ayırt edici (ör. 'Kreatin güvenliği', 'Protein zamanlaması'); "
+            "'Genel', 'Diğer', 'Çeşitli' gibi boş etiketler kullanma (gerçekten başka yere uymayan tek kaynak hariç).\n"
+            "- description: grubun neyi kapsadığı, en fazla 12 kelime.\n"
+            "- sources: gruptaki KAYNAK numaraları."},
+        {"role": "user", "content": "\n".join(lines)},
+    ]
+    raw = await asyncio.to_thread(get_llm().structured, messages, TOPICS_SCHEMA, settings.active_llm_model)
+    try:
+        data = json.loads(raw)
+    except Exception:  # noqa
+        raise AppError("Konu grupları oluşturulamadı; tekrar dene.")
+    seen, groups = set(), []
+    for g in data.get("groups") or []:
+        members = []
+        for n in g.get("sources") or []:
+            try:
+                d = ids[int(n) - 1]
+            except Exception:  # noqa
+                continue
+            if d not in seen:
+                seen.add(d); members.append(d)
+        label = (g.get("label") or "").strip()[:40]
+        if members and label:
+            groups.append({"label": label, "description": (g.get("description") or "").strip()[:120], "docs": members})
+    rest = [d for d in ids if d not in seen]
+    if rest:
+        groups.append({"label": "Diğer", "description": "Belirgin bir gruba girmeyen kaynaklar", "docs": rest})
+    # Kutuphane etiketleri: eski otomatik etiketleri kaldir, yenisini ekle (elle girilenlere dokunma)
+    old_labels = {g["label"] for g in (old or {}).get("groups", [])}
+    label_of = {d: g["label"] for g in groups for d in g["docs"]}
+    for r in rows:
+        cur = r["tags"]
+        cur = json.loads(cur) if isinstance(cur, str) else (cur or [])
+        cur = [t for t in cur if t not in old_labels]
+        lab = label_of.get(str(r["id"]))
+        if lab and lab != "Diğer" and lab not in cur:
+            cur.append(lab)
+        await conn.execute("UPDATE documents SET tags=$1 WHERE id=$2", cur, r["id"])
+    out = {"hash": h, "groups": groups}
+    await conn.execute("UPDATE collections SET topics=$1 WHERE id=$2", out, cid)
+    return out
