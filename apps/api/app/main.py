@@ -107,6 +107,16 @@ async def lifespan(app: FastAPI):
                 " question text NOT NULL, payload jsonb,"
                 " created_at timestamptz NOT NULL DEFAULT now())")
             await conn.execute("CREATE INDEX IF NOT EXISTS collection_messages_chat_idx ON collection_messages (chat_id, id)")
+            # okuyucu (tek belge) sohbeti cevap onbellegi
+            await conn.execute(
+                "CREATE TABLE IF NOT EXISTS doc_answer_cache ("
+                " id bigserial PRIMARY KEY,"
+                " document_id uuid NOT NULL REFERENCES documents(id) ON DELETE CASCADE,"
+                " mode text NOT NULL DEFAULT 'default', qnorm text NOT NULL, question text, qvec vector,"
+                " answer text, citations jsonb, hits int NOT NULL DEFAULT 0,"
+                " created_at timestamptz NOT NULL DEFAULT now(), used_at timestamptz NOT NULL DEFAULT now(),"
+                " UNIQUE (document_id, mode, qnorm))")
+            await conn.execute("ALTER TABLE documents ADD COLUMN IF NOT EXISTS text_md5 text")
             # gunluk kullanim sayaci (kota gostergesi)
             await conn.execute(
                 "CREATE TABLE IF NOT EXISTS ai_usage (day date NOT NULL, model text NOT NULL, kind text NOT NULL,"
@@ -115,6 +125,11 @@ async def lifespan(app: FastAPI):
             from app.ai import usage as _usage
             _usage.load_rows(await conn.fetch(
                 "SELECT day::text AS day, model, kind, requests, tokens FROM ai_usage WHERE day >= current_date - 1"))
+            await conn.execute(
+                "CREATE TABLE IF NOT EXISTS ai_user_usage (day date NOT NULL, user_id uuid NOT NULL,"
+                " requests int NOT NULL DEFAULT 0, PRIMARY KEY (day, user_id))")
+            _usage.load_user_rows(await conn.fetch(
+                "SELECT day::text AS day, user_id, requests FROM ai_user_usage WHERE day >= current_date - 1"))
     except Exception:  # noqa
         pass
     # Model havuzu: bu anahtarda olmayan modelleri bastan ele (bos istek harcamasin)
@@ -146,10 +161,16 @@ async def _flush_usage():
     from app.ai import usage
     from app.db.session import get_pool
     rows = usage.pop_dirty()
-    if not rows:
+    urows = usage.pop_user_dirty()
+    if not rows and not urows:
         return
     pool = await get_pool()
     async with pool.acquire() as conn:
+        for (day, uid), req in urows:
+            await conn.execute(
+                """INSERT INTO ai_user_usage (day, user_id, requests) VALUES ($1::text::date,$2::uuid,$3)
+                   ON CONFLICT (day, user_id) DO UPDATE SET requests=GREATEST(ai_user_usage.requests, EXCLUDED.requests)""",
+                day, uid, req)
         for (day, model, kind), (req, tok) in rows:
             await conn.execute(
                 """INSERT INTO ai_usage (day, model, kind, requests, tokens) VALUES ($1::text::date,$2,$3,$4,$5)
@@ -270,6 +291,8 @@ async def usage_status(user=Depends(current_user)):
         "text_models": models(pool_models(), "metin"),
         "tts_models": models(_tts_models(), "ses"),
         "embed": {"model": settings.gemini_embed_model, "status": usage.status(settings.gemini_embed_model)},
+        "me": {"used": usage.user_used(str(user["id"])), "limit": usage.user_limit(),
+               "owner": bool(user.get("is_owner"))},
     }
 
 

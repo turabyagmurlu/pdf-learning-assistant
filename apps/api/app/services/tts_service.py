@@ -167,6 +167,7 @@ def synthesize_pcm(text: str, voice: str = DEFAULT_VOICE, style: str = "") -> by
         # Ses modeli havuzu: biri gunluk kotayi doldurursa digerine gec (her birinin ayri kotasi var)
         r = None
         quota_err = None
+        usage.check_user()
         for model in _tts_models():
             if not usage.available(model):
                 continue

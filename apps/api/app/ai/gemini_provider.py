@@ -170,6 +170,7 @@ class GeminiLLM(LLMProvider):
 
     def _post(self, base_model: str, body: dict, stream: bool = False) -> dict:
         import time
+        usage.check_user()
         last_status, last_text = 0, ""
         for round_ in range(3):
             tried = False
@@ -200,6 +201,7 @@ class GeminiLLM(LLMProvider):
 
     async def stream_chat(self, messages, model=None) -> AsyncIterator[str]:
         import asyncio
+        usage.check_user()
         model = model or settings.active_llm_model
         system, contents = _to_gemini(messages)
         body = {"contents": contents, "generationConfig": {"temperature": 0.2}}

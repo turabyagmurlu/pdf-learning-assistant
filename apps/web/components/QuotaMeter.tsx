@@ -15,6 +15,7 @@ type U = {
   kinds: Record<string, { requests: number; tokens: number }>;
   text_models: M[]; tts_models: M[];
   embed: { model: string; status: string };
+  me?: { used: number; limit: number; owner: boolean };
 };
 
 const KIND: Record<string, string> = { metin: "Soru-cevap ve özetler", dizin: "Kaynak dizinleme", ses: "Seslendirme", video: "Video dökümü", "ses-dokum": "Ses kaydı dökümü", ocr: "Taranmış sayfa okuma", arama: "Web araması" };
@@ -102,7 +103,26 @@ export default function QuotaMeter({ compact }: { compact?: boolean }) {
                     : "Her şey yolunda. Bir model dolarsa uygulama kendiliğinden diğerine geçer."}
                 </p>
 
-                <p className="mb-1.5 mt-4 text-xs font-semibold uppercase tracking-wide text-text-secondary">Bugün harcanan</p>
+                {u.me && (
+                  <div className="mt-3 rounded-xl border p-3">
+                    <div className="flex items-baseline justify-between text-sm">
+                      <span className="font-medium">Senin bugünkü hakkın</span>
+                      <span className="text-text-secondary">{u.me.owner || !u.me.limit ? `${u.me.used} istek · sınırsız (sahip)` : `${u.me.used} / ${u.me.limit}`}</span>
+                    </div>
+                    {!u.me.owner && u.me.limit > 0 && (
+                      <div className="mt-2 h-1.5 w-full overflow-hidden rounded-full bg-surface-muted">
+                        <div className={"h-full rounded-full " + (u.me.used >= u.me.limit ? "bg-red-500" : u.me.used > u.me.limit * 0.8 ? "bg-amber-500" : "bg-accent-purple")}
+                             style={{ width: Math.min(100, (u.me.used / u.me.limit) * 100) + "%" }} />
+                      </div>
+                    )}
+                    <p className="mt-1.5 text-[11px] text-text-secondary">
+                      {u.me.owner ? "Uygulamayı paylaştığın her kişinin ayrı bir günlük hakkı var; senin kotanı bitiremezler."
+                        : "Kayıtlı cevaplar, arama ve okuma hakkından düşmez."}
+                    </p>
+                  </div>
+                )}
+
+                <p className="mb-1.5 mt-4 text-xs font-semibold uppercase tracking-wide text-text-secondary">Bugün harcanan (tüm uygulama)</p>
                 <div className="grid grid-cols-2 gap-2">
                   {Object.keys(KIND).map((k) => (
                     <div key={k} className="rounded-xl border p-2.5">

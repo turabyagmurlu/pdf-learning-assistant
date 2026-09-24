@@ -46,6 +46,10 @@ class Settings(BaseSettings):
 
     # App
     max_upload_mb: int = 50
+    # Paylasim: sahip disindaki her kullanicinin gunluk yapay zeka istegi (0 = sinirsiz)
+    user_daily_ai_limit: int = 60
+    # Sahip hesap(lar)in id'si (virgulle). Bossa ilk kayit olan hesap sahip sayilir.
+    owner_user_ids: str = ""
     cors_origins: str = "http://localhost:3000"
 
     @property

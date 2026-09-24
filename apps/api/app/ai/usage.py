@@ -38,6 +38,10 @@ def record(model: str, kind: str, tokens: int = 0, n: int = 1):
         c[0] += n
         c[1] += int(tokens or 0)
         _DIRTY.add(key)
+    try:
+        record_user(kind, n)
+    except Exception:  # noqa
+        pass
 
 
 def mark_limited(model: str, daily: bool, retry_after: float | None = None):
@@ -94,4 +98,66 @@ def pop_dirty():
     with _LOCK:
         out = [(k, list(_COUNTS[k])) for k in _DIRTY if k in _COUNTS]
         _DIRTY.clear()
+    return out
+
+
+# ------------------------------------------------------------------ kisi basi gunluk hak
+# Uygulama paylasildiginda herkes ayni Gemini anahtarini kullanir. Sahibi (ilk kayit olan
+# hesap) sinirsizdir; digerlerinin her birinin gunluk metin istegi sinirlidir.
+import contextvars
+
+CURRENT_USER: contextvars.ContextVar = contextvars.ContextVar("ai_user", default=None)  # (uid, is_owner)
+USER_KINDS = {"metin", "arama", "ses"}
+_USER: dict[tuple[str, str], int] = {}
+_UDIRTY: set[tuple[str, str]] = set()
+
+
+def set_user(uid: str | None, is_owner: bool = False):
+    CURRENT_USER.set((str(uid), bool(is_owner)) if uid else None)
+
+
+def user_used(uid: str) -> int:
+    with _LOCK:
+        return _USER.get((today(), str(uid)), 0)
+
+
+def user_limit() -> int:
+    from app.config import settings
+    return int(getattr(settings, "user_daily_ai_limit", 60) or 0)
+
+
+def check_user():
+    """Istek atmadan once: kisinin bugunku hakki doldu mu?"""
+    u = CURRENT_USER.get()
+    if not u or u[1]:
+        return
+    lim = user_limit()
+    if lim and user_used(u[0]) >= lim:
+        from app.core.errors import AiUnavailable
+        raise AiUnavailable(
+            f"Bugünkü yapay zekâ hakkın doldu ({lim} istek). Kayıtlı cevaplar, arama ve okuma "
+            "çalışmaya devam ediyor; hakkın gece yarısı (Pasifik saati) yenilenir.")
+
+
+def record_user(kind: str, n: int = 1):
+    u = CURRENT_USER.get()
+    if not u or kind not in USER_KINDS:
+        return
+    key = (today(), u[0])
+    with _LOCK:
+        _USER[key] = _USER.get(key, 0) + n
+        _UDIRTY.add(key)
+
+
+def load_user_rows(rows):
+    with _LOCK:
+        for r in rows:
+            key = (str(r["day"]), str(r["user_id"]))
+            _USER[key] = max(_USER.get(key, 0), int(r["requests"] or 0))
+
+
+def pop_user_dirty():
+    with _LOCK:
+        out = [(k, _USER[k]) for k in _UDIRTY if k in _USER]
+        _UDIRTY.clear()
     return out

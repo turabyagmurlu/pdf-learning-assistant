@@ -264,8 +264,23 @@ async def _run_ingest(document_id: str):
 
         await _set(conn, document_id, processing_stage="analyzing")
         full_text = "\n".join(p["text"] for p in pages)
+        tmd5 = hashlib.md5(full_text.encode("utf-8")).hexdigest()
         try:
-            a = analyze_document(full_text)
+            await conn.execute("UPDATE documents SET text_md5=$2 WHERE id=$1", document_id, tmd5)
+        except Exception:  # noqa
+            pass
+        # Kota tasarrufu 3: ayni metin daha once ozetlendiyse (ayni dosya tekrar yuklendi,
+        # yeniden islendi, baska hesapta var) ozeti kopyala, yapay zekaya gitme
+        prev = None
+        try:
+            prev = await conn.fetchrow(
+                """SELECT short_summary, detailed_summary, purpose, difficulty_level, outline,
+                          key_concepts, difficult_concepts FROM documents
+                   WHERE text_md5=$1 AND id<>$2 AND short_summary IS NOT NULL LIMIT 1""", tmd5, document_id)
+        except Exception:  # noqa
+            prev = None
+        try:
+            a = dict(prev) if prev else analyze_document(full_text)
             await conn.execute(
                 """UPDATE documents SET short_summary=$2, detailed_summary=$3, purpose=$4,
                    difficulty_level=$5, outline=$6, key_concepts=$7, difficult_concepts=$8 WHERE id=$1""",
