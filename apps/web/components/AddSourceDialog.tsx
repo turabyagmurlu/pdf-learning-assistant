@@ -13,6 +13,9 @@ import YoutubeAdd, { linkedExistingText } from "@/components/YoutubeAdd";
 import TextAdd from "@/components/TextAdd";
 import DiscoverPanel from "@/components/DiscoverPanel";
 import SourceIcon from "@/components/SourceIcon";
+import MobileAddExtras from "@/components/MobileAddExtras";
+import Button from "@/components/ui/Button";
+import Badge from "@/components/ui/Badge";
 import { toast } from "@/components/Toast";
 import { api } from "@/lib/api";
 import { ACCEPT, TYPES_HINT, LIMIT_HINT } from "@/lib/sources";
@@ -38,7 +41,8 @@ const cx = (...a: (string | false | null | undefined)[]) => a.filter(Boolean).jo
 export default function AddSourceDialog({ open, onClose, collectionId, segment, onSegment, existingIds, onAdded, onUpload, upBusy }: {
   open: boolean;
   onClose: () => void;
-  collectionId: string;
+  /** Defter kimligi; Kütüphane'den (defter yokken) acilinca bos: "Web'de bul" ve "Kütüphaneden seç" gizlenir */
+  collectionId?: string;
   segment: AddSegment;
   onSegment: (s: AddSegment) => void;
   /** Bu defterde zaten olan kaynaklar (kutuphane listesinde gosterilmez) */
@@ -51,6 +55,7 @@ export default function AddSourceDialog({ open, onClose, collectionId, segment, 
 }) {
   const fileRef = useRef<HTMLInputElement>(null);
   const [drag, setDrag] = useState(false);
+  const segments = collectionId ? SEGMENTS : SEGMENTS.filter(([k]) => k !== "web" && k !== "kutuphane");
 
   async function afterAdd(msg: string, info = false) {
     onClose();
@@ -61,10 +66,10 @@ export default function AddSourceDialog({ open, onClose, collectionId, segment, 
   function segKeys(e: KeyboardEvent<HTMLDivElement>) {
     if (e.key !== "ArrowRight" && e.key !== "ArrowLeft") return;
     e.preventDefault();
-    const i = SEGMENTS.findIndex((s) => s[0] === segment);
-    const j = (i + (e.key === "ArrowRight" ? 1 : -1) + SEGMENTS.length) % SEGMENTS.length;
-    onSegment(SEGMENTS[j][0]);
-    setTimeout(() => document.getElementById("addseg-" + SEGMENTS[j][0])?.focus(), 0);
+    const i = segments.findIndex((s) => s[0] === segment);
+    const j = (i + (e.key === "ArrowRight" ? 1 : -1) + segments.length) % segments.length;
+    onSegment(segments[j][0]);
+    setTimeout(() => document.getElementById("addseg-" + segments[j][0])?.focus(), 0);
   }
 
   async function files(list: FileList | File[] | null) {
@@ -78,19 +83,18 @@ export default function AddSourceDialog({ open, onClose, collectionId, segment, 
     <Modal open={open} onClose={onClose} labelledBy="addsrc-title" size="lg" className="p-0">
       <div className="flex min-h-0 flex-col">
         <div className="flex items-center justify-between gap-3 px-4 pb-2 pt-4">
-          <h2 id="addsrc-title" className="font-heading text-lg">Kaynak ekle</h2>
-          <button type="button" onClick={onClose} aria-label="Kapat" data-modal-close=""
-                  className="flex h-10 w-10 items-center justify-center rounded-lg text-text-secondary hover:bg-surface-muted">
+          <h2 id="addsrc-title" className="font-heading text-title">Kaynak ekle</h2>
+          <Button variant="ghost" icon onClick={onClose} aria-label="Kapat" data-modal-close="">
             <X size={18} />
-          </button>
+          </Button>
         </div>
         <div role="tablist" aria-label="Kaynak ekleme yolu" onKeyDown={segKeys}
              className="flex gap-1 overflow-x-auto border-b px-4 pb-2 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
-          {SEGMENTS.map(([k, label, Icon]) => (
+          {segments.map(([k, label, Icon]) => (
             <button key={k} id={"addseg-" + k} role="tab" aria-selected={segment === k} aria-controls={"addpanel-" + k}
                     tabIndex={segment === k ? 0 : -1} onClick={() => onSegment(k)}
-                    className={cx("flex min-h-[40px] shrink-0 items-center gap-1.5 whitespace-nowrap rounded-full px-3 text-sm",
-                      segment === k ? "bg-accent-purple/10 font-semibold text-text-primary ring-1 ring-accent-purple/40" : "text-text-secondary hover:bg-surface-muted")}>
+                    className={cx("flex min-h-[40px] shrink-0 items-center gap-1.5 whitespace-nowrap rounded-full border px-3 text-sm",
+                      segment === k ? "border-accent-purple/40 bg-accent-soft font-medium text-accent-purple" : "border-transparent text-text-secondary hover:bg-surface-hover")}>
               <Icon size={15} aria-hidden /> {label}
             </button>
           ))}
@@ -105,19 +109,29 @@ export default function AddSourceDialog({ open, onClose, collectionId, segment, 
                       onDragOver={(e) => { e.preventDefault(); setDrag(true); }} onDragLeave={() => setDrag(false)} onDrop={onDrop}
                       aria-busy={!!upBusy}
                       className={cx("flex w-full items-center gap-3 rounded-xl border-2 border-dashed px-4 py-5 text-left transition",
-                        drag ? "border-accent-purple bg-accent-purple/10" : "border-accent-purple/40 hover:bg-accent-purple/5")}>
-                <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-accent-purple/10 text-accent-purple">
+                        drag ? "border-accent-purple bg-accent-soft" : "border-accent-purple/40 hover:bg-surface-hover")}>
+                <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-accent-soft text-accent-purple">
                   {upBusy ? <Loader2 size={18} className="animate-spin" /> : <Plus size={18} />}
                 </span>
                 <span className="min-w-0">
                   <span className="block text-sm font-medium">
-                    {upBusy ? `Yükleniyor… ${upBusy.done}/${upBusy.total}` : "Bilgisayardan dosya seç ya da buraya bırak"}
+                    {upBusy ? `Yükleniyor… ${upBusy.done}/${upBusy.total}` : (
+                      <>
+                        {/* Dokunmatikte "bilgisayar" ve "bırak" anlamsiz: kisa metin (T-6) */}
+                        <span className="touch:hidden">Bilgisayardan dosya seç ya da buraya bırak</span>
+                        <span className="mouse:hidden">Dosya seç</span>
+                      </>
+                    )}
                   </span>
                   <span className="mt-0.5 block text-xs text-text-secondary">
                     {upBusy ? "Pencereyi kapatabilirsin; yükleme sürer. Sayfadan ayrılma." : `${TYPES_HINT} · ${LIMIT_HINT} · çoklu seçim`}
                   </span>
                 </span>
               </button>
+              {/* Telefon: "Sayfa fotoğrafla" ve "Panodan yapıştır" (T-6; T ajaninin bileseni) */}
+              <MobileAddExtras collectionId={collectionId} className="mt-3"
+                               onUpload={async (list) => { const n = await onUpload(list); if (n > 0) onClose(); return n; }}
+                               onAdded={() => { onClose(); void onAdded(); }} />
               <p className="mt-3 text-xs text-text-secondary">
                 {PRIVACY_NOTE} <Link href="/gizlilik" className="underline underline-offset-2 hover:text-accent-purple">Gizlilik</Link>
               </p>
@@ -134,13 +148,13 @@ export default function AddSourceDialog({ open, onClose, collectionId, segment, 
                      onAdded={(r) => afterAdd(r?.linked_existing ? linkedExistingText(true) : `“${r?.title || "Metin"}” kaynak olarak eklendi.`, !!r?.linked_existing)} />
           )}
 
-          {segment === "web" && (
+          {segment === "web" && collectionId && (
             <DiscoverPanel collectionId={collectionId} autoFocus
                            onAdded={(n, linked) => afterAdd(
                              [n ? `${n} kaynak deftere eklendi; hazırlanıyor.` : "", linked ? `${linked} kaynak zaten kütüphanende vardı, deftere bağlandı.` : ""].filter(Boolean).join(" "))} />
           )}
 
-          {segment === "kutuphane" && (
+          {segment === "kutuphane" && collectionId && (
             <LibraryPicker collectionId={collectionId} existingIds={existingIds}
                            onDone={(n) => afterAdd(`${n} kaynak deftere eklendi. Diğer defterlerinde de kalmaya devam eder.`)}
                            onCancel={onClose} />
@@ -215,7 +229,7 @@ function LibraryPicker({ collectionId, existingIds, onDone, onCancel }: {
             <button key={d.id} type="button" role="checkbox" aria-checked={on}
                     onClick={() => setPicked((p) => ({ ...p, [d.id]: !on }))}
                     className={cx("flex min-h-[44px] w-full items-start gap-2.5 rounded-xl px-3 py-2.5 text-left transition",
-                      on ? "bg-accent-purple/10" : "hover:bg-surface-muted")}>
+                      on ? "bg-accent-soft" : "hover:bg-surface-hover")}>
               {on ? <CheckSquare size={18} className="mt-0.5 shrink-0 text-accent-purple" aria-hidden />
                   : <Square size={18} className="mt-0.5 shrink-0 text-text-secondary" aria-hidden />}
               <SourceIcon kind={d.source_type || "pdf"} size={15} className="mt-0.5 shrink-0" />
@@ -225,11 +239,9 @@ function LibraryPicker({ collectionId, existingIds, onDone, onCancel }: {
                 {others.length > 0 && (
                   <span className="mt-1 flex flex-wrap gap-1">
                     {others.slice(0, 3).map((c) => (
-                      <span key={c} className="rounded-full bg-surface-muted px-2 py-0.5 text-[11px] text-text-secondary">
-                        {titles[c] ? `${titles[c]} defterinde` : "başka bir defterde"}
-                      </span>
+                      <Badge key={c} tone="neutral">{titles[c] ? `${titles[c]} defterinde` : "başka bir defterde"}</Badge>
                     ))}
-                    {others.length > 3 && <span className="text-[11px] text-text-secondary">+{others.length - 3} defter</span>}
+                    {others.length > 3 && <span className="text-2xs text-text-secondary">+{others.length - 3} defter</span>}
                   </span>
                 )}
               </span>
@@ -239,13 +251,11 @@ function LibraryPicker({ collectionId, existingIds, onDone, onCancel }: {
       </div>
       {err && <p role="alert" className="mt-2 text-sm text-danger">{err}</p>}
       <div className="mt-3 flex items-center justify-end gap-2 border-t pt-3">
-        <button onClick={onCancel} disabled={busy}
-                className="min-h-[40px] rounded-lg px-3 text-sm text-text-secondary hover:bg-surface-muted disabled:opacity-60">Vazgeç</button>
-        <button onClick={add} disabled={busy || !ids.length}
-                className="flex min-h-[40px] items-center gap-1.5 rounded-lg bg-accent-purple px-4 text-sm text-white disabled:opacity-50">
+        <Button variant="ghost" onClick={onCancel} disabled={busy}>Vazgeç</Button>
+        <Button variant="primary" onClick={add} disabled={busy || !ids.length}>
           {busy && <Loader2 size={14} className="animate-spin" />}
           {ids.length ? `${ids.length} kaynağı deftere ekle` : "Kaynak seç"}
-        </button>
+        </Button>
       </div>
     </div>
   );

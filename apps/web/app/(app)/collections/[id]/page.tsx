@@ -9,10 +9,12 @@ import dynamic from "next/dynamic";
 import Link from "next/link";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import {
-  BookOpen, Sparkles, ArrowLeft, PenLine, Loader2, Pencil, Check, Plus, X, Trash2,
+  BookOpen, Sparkles, PenLine, Loader2, Pencil, Check, Plus, X, Trash2,
   RefreshCw, Tags, Link2, Globe, MessageSquare, StickyNote, Library,
 } from "lucide-react";
 import { api } from "@/lib/api";
+import { docHref } from "@/lib/links";
+import { topicColor } from "@/lib/palette";
 import { ACCEPT, LIMIT_HINT } from "@/lib/sources";
 import { YoutubeIcon } from "@/components/YoutubeAdd";
 import SourceIcon, { sourceTint, sourceLabel } from "@/components/SourceIcon";
@@ -45,13 +47,7 @@ type Doc = {
 };
 type Prog = { page: number; numPages: number; pct: number };
 
-const TOPIC_BAR = ["bg-violet-500", "bg-emerald-500", "bg-orange-500", "bg-sky-500", "bg-pink-500", "bg-amber-500", "bg-stone-400"];
-const TOPIC_TINT = ["bg-violet-100 dark:bg-violet-500/15", "bg-emerald-100 dark:bg-emerald-500/15", "bg-orange-100 dark:bg-orange-500/15",
-  "bg-sky-100 dark:bg-sky-500/15", "bg-pink-100 dark:bg-pink-500/15", "bg-amber-100 dark:bg-amber-500/15", "bg-stone-200 dark:bg-stone-500/20"];
-const TYPE_BAR: Record<string, string> = {
-  pdf: "bg-violet-500", youtube: "bg-red-500", audio: "bg-purple-400", docx: "bg-blue-500", xlsx: "bg-emerald-500", csv: "bg-emerald-500",
-  pptx: "bg-orange-500", web: "bg-sky-500", html: "bg-sky-500", text: "bg-amber-500", md: "bg-amber-500", txt: "bg-amber-500", rtf: "bg-amber-500", epub: "bg-fuchsia-500",
-};
+// Konu rengi lib/palette.ts'den (TS-6): topicColor(i) → { bar, tint }. Tur rengi yalniz ikon/etikette (SourceIcon).
 const GENERIC_FIRST_Q = "Bu kaynakların ana fikri ne? Kısaca özetle.";
 
 function cx(...a: (string | false | null | undefined)[]) { return a.filter(Boolean).join(" "); }
@@ -82,6 +78,8 @@ function CollectionPage({ id }: { id: string }) {
   const sp = useSearchParams();
   const tab: TabKey = parseTab(sp?.get("tab"));
   const chatId = sp?.get("chat") || null;
+  // Okuyucudan "Tüm deftere sor" (?tab=sohbet&q=...): soru kutusuna on-dolgu; adresten hemen silinir
+  const [prefillQ, setPrefillQ] = useState<string | null>(() => sp?.get("q") || null);
 
   const [data, setData] = useState<any>(null);
   const [loadErr, setLoadErr] = useState("");
@@ -108,6 +106,10 @@ function CollectionPage({ id }: { id: string }) {
   }
   const [visited, setVisited] = useState<Set<TabKey>>(() => new Set([tab]));
   useEffect(() => { setVisited((v) => (v.has(tab) ? v : new Set(v).add(tab))); }, [tab]);
+  useEffect(() => {
+    if (sp?.get("q")) router.replace(urlWith((p) => p.delete("q")), { scroll: false });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   /* ---------- veri ---------- */
   const prevStatus = useRef<Record<string, string> | null>(null);
@@ -351,7 +353,7 @@ function CollectionPage({ id }: { id: string }) {
     if (readyN > 0 && chatCount === 0) {
       return { text: <>İlk sorunu sor: <span className="italic">“{firstQ}”</span></>, label: "Sor", cost: 1, go: () => askFirst(firstQ) };
     }
-    if (reading) return { text: `“${reading.title.length > 60 ? reading.title.slice(0, 57) + "…" : reading.title}” okumaya devam et (%${prog[reading.id]?.pct || 0}).`, label: "Aç", go: () => router.push("/documents/" + reading.id) };
+    if (reading) return { text: `“${reading.title.length > 60 ? reading.title.slice(0, 57) + "…" : reading.title}” okumaya devam et (%${prog[reading.id]?.pct || 0}).`, label: "Aç", go: () => router.push(docHref(reading.id, { from: id })) };
     if (!st.draft_words) return { text: "Beğendiğin sohbet cevaplarını tek dokunuşla taslağa ekleyip yazmaya başla.", label: "Sohbet", go: () => setTab("sohbet") };
     if (readyN >= 2) return { text: "Kaynakların aynı konuda ne dediğini yan yana gör.", label: "Karşılaştır", go: () => setTab("karsilastir") };
     if (readyN >= 3 && !studio.glossary) return { text: "Kaynaklardaki kavramları tek yerde topla: sözlüğü oluştur.", label: "Sözlük", go: () => setTab("sozluk") };
@@ -369,9 +371,9 @@ function CollectionPage({ id }: { id: string }) {
     return (
       <div key={d.id} className="lift group relative flex flex-col overflow-hidden rounded-xl border bg-surface hover:border-accent-purple/40 focus-within:border-accent-purple/60">
         {/* Kartin tamami tek dugme (ic ice etkilesimli oge yok); diger dugmeler ustte */}
-        <button type="button" onClick={() => router.push("/documents/" + d.id)} aria-label={`${d.title} · aç`}
+        <button type="button" onClick={() => router.push(docHref(d.id, { from: id }))} aria-label={`${d.title} · aç`}
                 className="absolute inset-0 z-0 rounded-xl focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-purple" />
-        <div className={cx("pointer-events-none relative flex h-16 items-end justify-between px-3 pb-2", tp && kind === "pdf" ? TOPIC_TINT[tp.i % TOPIC_TINT.length] : sourceTint(kind))}>
+        <div className={cx("pointer-events-none relative flex h-16 items-end justify-between px-3 pb-2", tp ? topicColor(tp.i).tint : sourceTint(kind))}>
           <SourceIcon kind={kind} size={30} className="absolute right-3 top-2.5 opacity-25" />
           <span className="flex items-center gap-1 rounded-full bg-surface/90 px-2 py-0.5 text-[11px] font-medium text-text-primary">
             <SourceIcon kind={kind} size={12} /> {sourceLabel(kind, d.page_count)}
@@ -393,7 +395,7 @@ function CollectionPage({ id }: { id: string }) {
           <h3 className="line-clamp-2 text-sm font-medium leading-snug">{d.title}</h3>
           {tp ? (
             <p className="mt-1 flex items-center gap-1.5 text-xs text-text-secondary">
-              <span className={cx("h-1.5 w-1.5 rounded-full", TOPIC_BAR[tp.i % TOPIC_BAR.length])} />{tp.label}
+              <span className={cx("h-1.5 w-1.5 rounded-full", topicColor(tp.i).bar)} />{tp.label}
             </p>
           ) : d.short_summary ? (
             <p className="mt-1 line-clamp-2 text-xs text-text-secondary">{d.short_summary}</p>
@@ -410,7 +412,7 @@ function CollectionPage({ id }: { id: string }) {
           )}
           <div className="mt-auto pt-2.5">
             <div className="h-1 w-full overflow-hidden rounded-full bg-surface-muted">
-              <div className={cx("h-full rounded-full transition-all", w ? "bg-accent-purple/60" : tp ? TOPIC_BAR[tp.i % TOPIC_BAR.length] : "bg-accent-purple")}
+              <div className={cx("h-full rounded-full transition-all", w ? "bg-accent-purple/60" : tp ? topicColor(tp.i).bar : "bg-accent-purple")}
                    style={{ width: (w ? (w.pct ?? 15) : (p?.pct || 0)) + "%" }} />
             </div>
             {!w && p && p.pct > 0 && p.pct < 95 && <p className="mt-1 text-xs text-text-secondary">%{p.pct} · s.{p.page}/{p.numPages}</p>}
@@ -423,15 +425,14 @@ function CollectionPage({ id }: { id: string }) {
 
   const next = docs.length ? nextStep() : null;
   const segs = topics?.groups?.length
-    ? topics.groups.map((g, i) => ({ key: g.label, n: g.docs.length, cls: TOPIC_BAR[i % TOPIC_BAR.length], title: `${g.label} · ${g.docs.length} kaynak` }))
+    ? topics.groups.map((g, i) => ({ key: g.label, n: g.docs.length, cls: topicColor(i).bar, title: `${g.label} · ${g.docs.length} kaynak` }))
+    // Konu yokken serit tur dagilimini gosterir; tur rengi yerine notr tonlar (TS-6: renk yalniz konu icin)
     : Object.entries(docs.reduce((m: Record<string, number>, d) => { const k = d.source_type || "pdf"; m[k] = (m[k] || 0) + 1; return m; }, {}))
-        .map(([k, n]) => ({ key: k, n, cls: TYPE_BAR[k] || "bg-accent-purple", title: `${sourceLabel(k)} · ${n}` }));
+        .map(([k, n], i) => ({ key: k, n, cls: i % 2 ? "bg-border" : "bg-border-strong", title: `${sourceLabel(k)} · ${n}` }));
 
   return (
     <div className="mx-auto w-full max-w-6xl px-4 py-5 md:px-6 md:py-8">
-      <Link href="/notebooks" className="mb-3 inline-flex min-h-[40px] items-center gap-1.5 text-sm text-text-secondary hover:text-accent-purple">
-        <ArrowLeft size={15} /> Defterler
-      </Link>
+      {/* Tek "Geri": ust cubuk/menudeki BackButton (layout). Sayfa ici ikinci "← Defterler" kaldirildi (T-3). */}
 
       {/* başlık */}
       <div className="flex items-start justify-between gap-3">
@@ -447,7 +448,7 @@ function CollectionPage({ id }: { id: string }) {
                         className="flex h-10 w-10 items-center justify-center rounded-lg bg-accent-purple text-white"><Check size={16} /></button>
               </div>
             ) : (
-              <h1 className="truncate font-heading text-[34px] leading-[1.05] tracking-tight md:text-[40px]">{col.title}</h1>
+              <h1 className="line-clamp-2 font-heading text-[30px] leading-[1.08] tracking-tight md:text-[40px] md:leading-[1.05]">{col.title}</h1>
             )}
             {!renaming && (
               <button onClick={() => { setNewTitle(col.title || ""); setRenaming(true); }} aria-label="Defteri yeniden adlandır"
@@ -473,12 +474,12 @@ function CollectionPage({ id }: { id: string }) {
           {topics?.groups?.length ? (
             <div className="mt-2 flex flex-wrap gap-x-3 gap-y-1 text-xs text-text-secondary">
               {topics.groups.map((g, i) => (
-                <span key={g.label} className="flex items-center gap-1"><span className={cx("h-2 w-2 rounded-full", TOPIC_BAR[i % TOPIC_BAR.length])} />{g.label}</span>
+                <span key={g.label} className="flex items-center gap-1"><span className={cx("h-2 w-2 rounded-full", topicColor(i).bar)} />{g.label}</span>
               ))}
             </div>
           ) : null}
           <div className="mt-3 flex flex-wrap items-center gap-x-5 gap-y-1.5 text-sm text-text-secondary">
-            <span className="flex items-center gap-1.5"><BookOpen size={15} aria-hidden /> %{overall} okundu{remainingPages > 0 ? ` · ~${etaRead} kaldı` : ""}</span>
+            <span className="flex items-center gap-1.5"><BookOpen size={15} aria-hidden /> %{overall} okundu{remainingPages > 0 ? <span className="hidden sm:inline"> · ~{etaRead} kaldı</span> : null}</span>
             <button onClick={() => setTab("taslak")} className="flex min-h-[36px] items-center gap-1.5 hover:text-accent-purple">
               <PenLine size={15} aria-hidden /> {st.draft_words > 0 ? `Taslak ${st.draft_words} kelime` : "Taslak henüz boş"}
             </button>
@@ -507,7 +508,7 @@ function CollectionPage({ id }: { id: string }) {
         <TabBar tab={tab} onTab={setTab} readyN={readyN} processing={processingN} lastInGroup={lastInGroup.current} />
       </div>
       {stuck && (
-        <div className="fixed inset-x-0 top-[calc(max(env(safe-area-inset-top),8px)+53px)] z-20 border-b bg-surface/95 backdrop-blur md:left-56 md:top-0">
+        <div className="fixed inset-x-0 top-[calc(max(env(safe-area-inset-top),8px)+53px)] z-20 border-b bg-surface/95 backdrop-blur md:left-[var(--sidebar-w,224px)] md:top-0">
           <div className="mx-auto flex w-full max-w-6xl items-center gap-3 px-4 md:px-6">
             <button onClick={scrollTop} className="hidden shrink-0 truncate font-heading text-lg md:block md:max-w-[220px]" title="Başa dön">{col.title}</button>
             <div className="min-w-0 flex-1">
@@ -659,6 +660,7 @@ function CollectionPage({ id }: { id: string }) {
                      chatId={chatId} setChatUrl={setChatUrl}
                      sugg={sugg} suggBusy={suggBusy} loadSuggestions={loadSuggestions}
                      pendingAsk={pendingAsk} onPendingDone={() => setPendingAsk(null)}
+                     prefill={prefillQ} onPrefillDone={() => setPrefillQ(null)}
                      onToDraft={answerToDraft} onAsked={() => setAskedLocal(true)}
                      onCompare={(q) => { setCompareTopic(q); setTab("karsilastir"); scrollTop(); }} />
           </div>

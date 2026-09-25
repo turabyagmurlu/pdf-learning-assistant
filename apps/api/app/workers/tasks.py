@@ -128,6 +128,21 @@ async def _audio_pages(conn, document_id: str, key: str, media: dict):
     return [{"page_number": s["page"], "text": s["text"]} for s in secs], len(secs)
 
 
+def _save_pdf_pages(key: str, pages: list[dict]) -> None:
+    """PDF (metinli ya da OCR'li) icin de `<key>.pages.json` yazar (T-5, 2. asama).
+    Bicim: [{"page": n, "page_number": n, "text": "..."}] — `page` yeni tuketiciler
+    (telefon metin gorunumu) icin, `page_number` mevcut /content tuketicileriyle uyum icin.
+    Yazilamazsa isleme durmaz (metin gorunumu istemcide pdf.js ile de calisir)."""
+    try:
+        out = [{"page": int(p.get("page_number") or p.get("page") or i + 1),
+                "page_number": int(p.get("page_number") or p.get("page") or i + 1),
+                "text": p.get("text") or ""} for i, p in enumerate(pages)]
+        put_object(key + ".pages.json", json.dumps(out, ensure_ascii=False).encode("utf-8"),
+                   content_type="application/json")
+    except Exception:  # noqa - yan urun; ana isleme etkilemesin
+        pass
+
+
 def _other_pages(stype: str, key: str, media: dict) -> list[dict]:
     """PDF/video disi kaynaklari bolumlere cevirir; okuyucu icin bolumleri de saklar."""
     from app.sources.extract import extract, text_pages, _decode
@@ -191,6 +206,8 @@ async def _run_ingest(document_id: str):
                 await _set(conn, document_id, status="failed", error_message=e.user_message, processing_stage=None)
                 return
             pc = page_count(pdf_bytes)
+            # metin gorunumu / GET /documents/{id}/content icin sayfa metinleri (OCR dahil)
+            await asyncio.to_thread(_save_pdf_pages, key, pages)
         await _set(conn, document_id, processing_stage="chunking", page_count=pc)
         chunks = chunk_pages(pages)
         if not chunks:

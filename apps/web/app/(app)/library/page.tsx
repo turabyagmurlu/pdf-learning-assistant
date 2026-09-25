@@ -1,25 +1,33 @@
 "use client";
+/**
+ * Kutuphane (T-1 telefon ilk ekrani):
+ * - Telefonda hero yok: duz baslik + "+ Kaynak ekle"; satirda yalniz arama + "Süz (N)" + "Seç".
+ *   Siralama, favoriler, tur, kategori ve etiket suzgecleri alttan acilan "Süz" tabakasinda.
+ * - Defter suzgeci lg altinda listenin USTUNDE yatay cip seridi (TB-5); lg'de sag panel.
+ * - Yukleme alanlari yerine tek "+ Kaynak ekle" -> components/AddSourceDialog (TK-6).
+ *   Bir defter suzgeci acikken eklenen kaynak o deftere baglanir.
+ * - Kartta en fazla 1 renkli rozet (hazirlaniyor / hata); "Hazır" rozeti gosterilmez.
+ * - Okuma yuzdesi: GET /documents `progress_pct` varsa o (TO-1, cihazlar arasi), yoksa localStorage.
+ */
 import { toast } from "@/components/Toast";
-import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useId, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import { api, errorMessage } from "@/lib/api";
 import { CardSkeleton } from "@/components/Skeleton";
 import PageHeader from "@/components/PageHeader";
 import { etaText, stageInfo } from "@/lib/docstage";
-import YoutubeAdd from "@/components/YoutubeAdd";
-import TextAdd from "@/components/TextAdd";
-import DiscoverPanel from "@/components/DiscoverPanel";
 import SourceIcon, { sourceLabel } from "@/components/SourceIcon";
 import Modal from "@/components/Modal";
-import { ACCEPT, LIMIT_HINT, TYPES_HINT, rejectReason } from "@/lib/sources";
-import { PRIVACY_LINE, usePrivacyGate } from "@/lib/privacy";
+import AddSourceDialog, { AddSegment } from "@/components/AddSourceDialog";
+import { rejectReason } from "@/lib/sources";
+import { usePrivacyGate } from "@/lib/privacy";
 import { useRefreshOn } from "@/components/Wake";
 import { useConfirm } from "@/components/Confirm";
 import { usePoll } from "@/hooks/usePoll";
 import Link from "next/link";
 import {
   UploadCloud, Search, Star, Trash2, Pencil, LayoutGrid, List, MoreVertical, Notebook, BookMarked, Plus, Check,
-  BookOpen, RefreshCw, Globe, ChevronDown, CheckSquare, Square, X, Loader2,
+  BookOpen, RefreshCw, CheckSquare, Square, X, Loader2, SlidersHorizontal,
 } from "lucide-react";
 
 type Doc = {
@@ -28,8 +36,12 @@ type Doc = {
   key_concepts?: unknown; category?: string | null; tags?: unknown; is_favorite?: boolean;
   collection_id?: string | null; collection_ids?: string[] | null; created_at?: string;
   progress_done?: number | null; progress_total?: number | null; error_message?: string | null;
+  /** TO-1: sunucudaki okuma ilerlemesi (cihazlar arasi) */
+  progress_pct?: number | null;
+  reading?: { page?: number | null; pct?: number | null; updated_at?: string | null } | null;
 };
 type Col = { id: string; title: string };
+type Prog = { page: number | null; numPages: number | null; pct: number };
 
 const cx = (...a: (string | false | null | undefined)[]) => a.filter(Boolean).join(" ");
 const KIND_GROUP: Record<string, string> = {
@@ -37,6 +49,8 @@ const KIND_GROUP: Record<string, string> = {
   xlsx: "Tablo", csv: "Tablo", web: "Web", html: "Web", text: "Metin", md: "Metin", txt: "Metin", image: "Görsel",
 };
 const KIND_ORDER = ["PDF", "Video", "Ses", "Web", "Belge", "Tablo", "Metin", "Görsel"];
+type Sort = "recent" | "title" | "fav";
+const SORT_LABEL: Record<Sort, string> = { recent: "En yeni", title: "Başlık (A-Z)", fav: "Favoriler önce" };
 
 function toArr(v: unknown): unknown[] {
   if (Array.isArray(v)) return v;
@@ -75,13 +89,13 @@ export default function LibraryPage() {
   const [kind, setKind] = useState("");
   const [view, setView] = useState<"grid" | "list">("grid");
   const [density, setDensity] = useState<"comfortable" | "compact">("comfortable");
-  const [sort, setSort] = useState<"recent" | "title" | "fav">("recent");
+  const [sort, setSort] = useState<Sort>("recent");
   const [uploading, setUploading] = useState<{ done: number; total: number } | null>(null);
   const [drag, setDrag] = useState(false);
   const [editing, setEditing] = useState<Doc | null>(null);
   const [menuFor, setMenuFor] = useState<string | null>(null);
   const [collections, setCollections] = useState<Col[]>([]);
-  const [prog, setProg] = useState<Record<string, { page: number; numPages: number; pct: number }>>({});
+  const [prog, setProg] = useState<Record<string, Prog>>({});
   const [nb, setNb] = useState("");                     // defter filtresi ("" tumu, "__none__" deftersiz)
   const [creatingNb, setCreatingNb] = useState(false);
   const [newNb, setNewNb] = useState("");
@@ -92,9 +106,10 @@ export default function LibraryPage() {
   const [selecting, setSelecting] = useState(false);
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [linkFor, setLinkFor] = useState<string[] | null>(null);      // "Deftere ekle" penceresi: kaynak kimlikleri
-  const [webOpen, setWebOpen] = useState(false);
-  const [webNb, setWebNb] = useState("");
-  const fileRef = useRef<HTMLInputElement>(null);
+  const [filterOpen, setFilterOpen] = useState(false);                // telefon: "Süz" tabakasi
+  const [addOpen, setAddOpen] = useState(false);                      // "+ Kaynak ekle" penceresi
+  const [addSeg, setAddSeg] = useState<AddSegment>("dosya");
+  const [isLg, setIsLg] = useState(false);                             // >=1024: defter paneli sagda
   const { confirm, dialog: confirmDialog } = useConfirm();
   const { gate, dialog: privacyDialog } = usePrivacyGate();
   const ids = useId();
@@ -126,6 +141,22 @@ export default function LibraryPage() {
   useEffect(() => { reload(); }, [reload]);
   useRefreshOn(reload);
 
+  useEffect(() => {
+    const mq = window.matchMedia("(min-width: 1024px)");
+    const apply = () => setIsLg(mq.matches);
+    apply();
+    mq.addEventListener?.("change", apply);
+    return () => mq.removeEventListener?.("change", apply);
+  }, []);
+
+  // manifest kisayolu / paylasim: /library?add=1 pencereyi acar
+  useEffect(() => {
+    try {
+      const sp = new URLSearchParams(window.location.search);
+      if (sp.get("add") === "1") { setAddOpen(true); window.history.replaceState(null, "", "/library"); }
+    } catch { /* yok say */ }
+  }, []);
+
   // Islenen kaynak varken durum yoklamasi (sekme gizliyken / cevrimdisiyken durur, aralik uzar)
   const anyProc = docs.some(isProcessing);
   usePoll(async () => {
@@ -133,17 +164,23 @@ export default function LibraryPage() {
     return !!d && !d.some(isProcessing);
   }, { active: anyProc, base: 3000, max: 15000 });
 
-  // okuma ilerlemesini oku (okuyucu localStorage'a yazar)
+  // okuma ilerlemesi: sunucu (progress_pct / reading) once, yoksa okuyucunun localStorage kaydi
   useEffect(() => {
     if (!docs.length) return;
-    const out: Record<string, { page: number; numPages: number; pct: number }> = {};
+    const out: Record<string, Prog> = {};
     for (const d of docs) {
+      let local: Prog | null = null;
       try {
         const raw = localStorage.getItem("reader.prog." + d.id);
-        if (!raw) continue;
-        const p = JSON.parse(raw);
-        if (p && typeof p.pct === "number") out[d.id] = { page: p.page, numPages: p.numPages, pct: p.pct };
+        if (raw) {
+          const p = JSON.parse(raw);
+          if (p && typeof p.pct === "number") local = { page: p.page ?? null, numPages: p.numPages ?? null, pct: p.pct };
+        }
       } catch { /* bozuk kayit yok sayilir */ }
+      const srvPct = typeof d.progress_pct === "number" ? d.progress_pct : typeof d.reading?.pct === "number" ? d.reading.pct : null;
+      if (srvPct !== null && (!local || srvPct >= local.pct)) {
+        out[d.id] = { page: d.reading?.page ?? local?.page ?? null, numPages: d.page_count ?? local?.numPages ?? null, pct: Math.round(srvPct) };
+      } else if (local) out[d.id] = local;
     }
     setProg(out);
   }, [docs]);
@@ -183,14 +220,21 @@ export default function LibraryPage() {
     docs.forEach((d) => { const g = KIND_GROUP[d.source_type || "pdf"] || "Metin"; m[g] = (m[g] || 0) + 1; });
     return m;
   }, [docs]);
+  // "Süz (N)": etkin suzgec sayisi (defter suzgeci ayri seritte, sayilmaz)
+  const activeFilters = Number(!!favOnly) + Number(!!kind) + Number(!!cat) + Number(!!tag) + Number(sort !== "recent");
+  const clearFilters = () => { setQ(""); setCat(""); setTag(""); setKind(""); setFavOnly(false); setSort("recent"); };
+  // suzgec acikken eklenen kaynak o deftere baglanir
+  const targetNb = nb && nb !== "__none__" ? nb : "";
 
-  async function upload(files: File[]) {
+  /** Dosya yukleme; basarili sayiyi dondurur (AddSourceDialog onUpload sozlesmesi). */
+  async function upload(files: File[]): Promise<number> {
     const ok: string[] = [];
     let linked = 0;
     setUploading({ done: 0, total: files.length });
     for (let i = 0; i < files.length; i++) {
       const f = files[i];
       const fd = new FormData(); fd.append("file", f);
+      if (targetNb) fd.append("collection_id", targetNb);
       try {
         const r = (await api("/documents", { method: "POST", body: fd })) as { id?: string; linked_existing?: boolean } | null;
         if (r?.id) ok.push(r.id);
@@ -205,20 +249,25 @@ export default function LibraryPage() {
     if (ok.length) {
       const msg = linked === ok.length
         ? (ok.length === 1 ? "Bu dosya zaten Kütüphane'nde; yeniden yüklenmedi." : `${ok.length} dosya zaten Kütüphane'nde; yeniden yüklenmedi.`)
-        : `${ok.length} kaynak eklendi; hazırlanıyor. Soru sormak için bir deftere ekle.`;
-      toast(msg, { action: { label: "Deftere ekle", run: () => setLinkFor(ok) } });
+        : targetNb
+          ? `${ok.length} kaynak «${colName[targetNb] || "defter"}» defterine eklendi; hazırlanıyor.`
+          : `${ok.length} kaynak eklendi; hazırlanıyor. Soru sormak için bir deftere ekle.`;
+      toast(msg, targetNb ? undefined : { action: { label: "Deftere ekle", run: () => setLinkFor(ok) } });
     }
+    return ok.length;
   }
-
-  function onFiles(list: FileList | null) {
-    if (!list || !list.length) return;
+  /** Tur/boyut denetimi + gizlilik notu; AddSourceDialog ve surukle-birak bunu kullanir. */
+  function onFiles(list: FileList | File[] | null): Promise<number> {
+    if (!list) return Promise.resolve(0);
     const files: File[] = [];
     for (const f of Array.from(list)) {
       const why = rejectReason(f);
       if (why) toast.error(why); else files.push(f);
     }
-    if (fileRef.current) fileRef.current.value = "";
-    if (files.length) gate(() => { void upload(files); });
+    if (!files.length || uploading) return Promise.resolve(0);
+    let p: Promise<number> = Promise.resolve(0);
+    gate(() => { p = upload(files); });
+    return p;
   }
 
   async function patchDoc(id: string, body: Partial<Doc>) {
@@ -314,156 +363,185 @@ export default function LibraryPage() {
   const gap = density === "compact" ? "gap-2" : "gap-5";
   const pad = density === "compact" ? "p-3" : "p-5";
   const chip = (on: boolean) => cx("shrink-0 min-h-[36px] rounded-full px-3 text-xs", on ? "bg-accent-purple text-on-accent" : "border bg-surface text-text-secondary hover:border-accent-purple/50");
+  const ctl = "flex min-h-[40px] items-center gap-1.5 rounded-xl border px-3 text-sm";
+  const addBtn = (
+    <button type="button" onClick={() => { setAddSeg("dosya"); setAddOpen(true); }}
+            className="flex min-h-[44px] shrink-0 items-center gap-1.5 rounded-xl bg-accent-purple px-3.5 text-sm font-medium text-on-accent md:min-h-[40px]">
+      <Plus size={16} aria-hidden="true" /> Kaynak ekle
+    </button>
+  );
+  const nbCreateForm = (
+    <form className="flex items-center gap-1" onSubmit={(e) => { e.preventDefault(); void createNb(); }}>
+      <input autoFocus value={newNb} onChange={(e) => setNewNb(e.target.value)}
+             onKeyDown={(e) => { if (e.key === "Escape") setCreatingNb(false); }}
+             placeholder="Defter adı" aria-label="Yeni defter adı" disabled={nbBusy}
+             className="min-w-0 flex-1 rounded-lg border bg-surface px-2.5 py-1.5 text-[16px] outline-none focus:border-accent-purple md:text-sm" />
+      <button type="submit" aria-label="Defteri oluştur" disabled={nbBusy || !newNb.trim()}
+              className="flex h-10 w-10 items-center justify-center rounded-lg bg-accent-purple text-on-accent disabled:opacity-50">
+        {nbBusy ? <Loader2 size={14} className="animate-spin" /> : <Check size={14} />}
+      </button>
+    </form>
+  );
 
   return (
-    <div className="mx-auto w-full max-w-6xl px-4 py-5 md:px-6 md:py-8" onClick={() => { setMenuFor(null); setNbMenu(null); }}>
-      <PageHeader hero eyebrow="TY PDF" title="Kütüphane"
-                  subtitle="Tüm kaynakların tek yerde. Bir kaynak birden çok defterde olabilir; defterden çıkarmak kaynağı silmez." />
+    <div className="mx-auto w-full max-w-6xl px-4 py-3 md:px-6 md:py-8" onClick={() => { setMenuFor(null); setNbMenu(null); }}>
+      {/* tablet/masaustu: editoryal baslik; telefon: duz baslik + ekle (ilk kart ilk ekranda) */}
+      <div className="hidden md:block">
+        <PageHeader hero eyebrow="TY PDF" title="Kütüphane"
+                    subtitle="Tüm kaynakların tek yerde. Bir kaynak birden çok defterde olabilir; defterden çıkarmak kaynağı silmez."
+                    right={addBtn} />
+      </div>
+      <div className="flex items-center justify-between gap-3 md:hidden">
+        <h1 className="font-heading text-[26px] leading-tight tracking-tight">Kütüphane</h1>
+        {addBtn}
+      </div>
 
       {loadErr && (
-        <div role="alert" className="mb-4 flex flex-wrap items-center justify-between gap-2 rounded-xl border border-warning/40 bg-warning/10 px-4 py-3 text-sm">
+        <div role="alert" className="mt-3 flex flex-wrap items-center justify-between gap-2 rounded-xl border border-warning/40 bg-warning/10 px-4 py-3 text-sm md:mt-0 md:mb-4">
           <span>Kaynakların yüklenemedi; silinmedi. {loadErr}</span>
           <button type="button" onClick={() => reload()} className="min-h-[40px] rounded-lg bg-accent-purple px-3 text-on-accent">Tekrar dene</button>
         </div>
       )}
 
-      <div className="mt-5 flex flex-col gap-6 lg:flex-row">
+      <div className="mt-3 flex flex-col gap-6 md:mt-5 lg:flex-row">
       <div className="min-w-0 flex-1">
 
+      {/* arama + (telefon) Süz + Seç | (sm+) siralama, favoriler, gorunum, yogunluk, Seç */}
       <div className="flex flex-wrap items-center gap-2">
-        <div className="flex min-w-[220px] flex-1 items-center gap-2 rounded-xl border border-border-strong bg-surface px-3">
-          <Search size={16} className="text-text-secondary" aria-hidden="true" />
-          <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Ara: başlık, özet, etiket…" aria-label="Kaynakların adında, özetinde ve etiketlerinde ara"
-                 className="w-full border-0 bg-transparent py-2 text-sm outline-none" />
+        <div className="flex min-w-0 flex-1 items-center gap-2 rounded-xl border border-border-strong bg-surface px-3 sm:min-w-[220px]">
+          <Search size={16} className="shrink-0 text-text-secondary" aria-hidden="true" />
+          <input type="search" value={q} onChange={(e) => setQ(e.target.value)} placeholder="Ara: başlık, özet, etiket…"
+                 aria-label="Kaynakların adında, özetinde ve etiketlerinde ara" enterKeyHint="search" autoCapitalize="none" autoCorrect="off"
+                 className="w-full min-w-0 border-0 bg-transparent py-2 text-[16px] outline-none md:text-sm [&::-webkit-search-cancel-button]:appearance-none" />
         </div>
-        <select value={sort} onChange={(e) => setSort(e.target.value as "recent" | "title" | "fav")} aria-label="Sırala" className="min-h-[40px] rounded-xl border bg-surface px-3 text-sm">
-          <option value="recent">En yeni</option>
-          <option value="title">Başlık (A-Z)</option>
-          <option value="fav">Favoriler önce</option>
+        <button type="button" onClick={() => setFilterOpen(true)} aria-haspopup="dialog" aria-expanded={filterOpen}
+                className={cx(ctl, "sm:hidden", activeFilters ? "border-accent-purple text-accent-purple" : "bg-surface text-text-secondary")}>
+          <SlidersHorizontal size={15} aria-hidden="true" /> Süz{activeFilters ? ` (${activeFilters})` : ""}
+        </button>
+        {docs.length > 0 && (
+          <button type="button" onClick={() => (selecting ? endSelect() : setSelecting(true))} aria-pressed={selecting}
+                  className={cx(ctl, "sm:order-last", selecting ? "border-accent-purple text-accent-purple" : "bg-surface text-text-secondary")}>
+            <CheckSquare size={15} aria-hidden="true" /> <span className="hidden sm:inline">{selecting ? "Seçimi bitir" : "Seç"}</span><span className="sm:hidden">{selecting ? "Bitir" : "Seç"}</span>
+          </button>
+        )}
+        <select value={sort} onChange={(e) => setSort(e.target.value as Sort)} aria-label="Sırala" className="hidden min-h-[40px] rounded-xl border bg-surface px-3 text-sm sm:block">
+          {(Object.keys(SORT_LABEL) as Sort[]).map((s) => <option key={s} value={s}>{SORT_LABEL[s]}</option>)}
         </select>
-        <button type="button" onClick={() => setFavOnly((v) => !v)} aria-pressed={favOnly} className={cx("flex min-h-[40px] items-center gap-1.5 rounded-xl border px-3 text-sm", favOnly ? "border-accent-purple text-accent-purple" : "bg-surface text-text-secondary")}>
+        <button type="button" onClick={() => setFavOnly((v) => !v)} aria-pressed={favOnly} className={cx(ctl, "hidden sm:flex", favOnly ? "border-accent-purple text-accent-purple" : "bg-surface text-text-secondary")}>
           <Star size={15} className={favOnly ? "fill-current" : ""} aria-hidden="true" /> Favoriler
         </button>
-        <div className="flex items-center rounded-xl border bg-surface" role="group" aria-label="Görünüm">
+        <div className="hidden items-center rounded-xl border bg-surface sm:flex" role="group" aria-label="Görünüm">
           <button type="button" onClick={() => setView("grid")} aria-label="Izgara görünümü" aria-pressed={view === "grid"} className={cx("flex h-10 w-10 items-center justify-center rounded-l-xl", view === "grid" ? "text-accent-purple" : "text-text-secondary")}><LayoutGrid size={16} /></button>
           <button type="button" onClick={() => setView("list")} aria-label="Liste görünümü" aria-pressed={view === "list"} className={cx("flex h-10 w-10 items-center justify-center rounded-r-xl", view === "list" ? "text-accent-purple" : "text-text-secondary")}><List size={16} /></button>
         </div>
         <button type="button" onClick={() => setDensity((d) => (d === "comfortable" ? "compact" : "comfortable"))}
                 aria-label={density === "comfortable" ? "Sık görünüme geç" : "Ferah görünüme geç"}
-                className="min-h-[40px] rounded-xl border bg-surface px-3 text-sm text-text-secondary">
+                className="hidden min-h-[40px] rounded-xl border bg-surface px-3 text-sm text-text-secondary sm:block">
           {density === "comfortable" ? "Sık" : "Ferah"}
         </button>
-        {docs.length > 0 && (
-          <button type="button" onClick={() => (selecting ? endSelect() : setSelecting(true))} aria-pressed={selecting}
-                  className={cx("flex min-h-[40px] items-center gap-1.5 rounded-xl border px-3 text-sm", selecting ? "border-accent-purple text-accent-purple" : "bg-surface text-text-secondary")}>
-            <CheckSquare size={15} aria-hidden="true" /> {selecting ? "Seçimi bitir" : "Seç"}
-          </button>
-        )}
       </div>
 
-      {(Object.keys(kindCounts).length > 1 || looseCount > 0) && (
-        <div className="mt-3 flex gap-1.5 overflow-x-auto pb-0.5 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden" role="group" aria-label="Türe göre süz">
+      {/* telefon: yalniz etkin suzgecler (kaldirilabilir) */}
+      {activeFilters > 0 && (
+        <div className="mt-2 flex gap-1.5 overflow-x-auto pb-0.5 sm:hidden [scrollbar-width:none] [&::-webkit-scrollbar]:hidden" aria-label="Etkin süzgeçler">
+          {kind && <button type="button" onClick={() => setKind("")} aria-label={`Tür süzgecini kaldır: ${kind}`} className={chip(true)}>{kind} ✕</button>}
+          {favOnly && <button type="button" onClick={() => setFavOnly(false)} aria-label="Favoriler süzgecini kaldır" className={chip(true)}>Favoriler ✕</button>}
+          {cat && <button type="button" onClick={() => setCat("")} aria-label={`Kategori süzgecini kaldır: ${cat}`} className={chip(true)}>{cat} ✕</button>}
+          {tag && <button type="button" onClick={() => setTag("")} aria-label={`Etiket süzgecini kaldır: ${tag}`} className={chip(true)}>#{tag} ✕</button>}
+          {sort !== "recent" && <button type="button" onClick={() => setSort("recent")} aria-label="Sıralamayı varsayılana döndür" className={chip(true)}>{SORT_LABEL[sort]} ✕</button>}
+        </div>
+      )}
+
+      {/* sm+: tur cipleri */}
+      {Object.keys(kindCounts).length > 1 && (
+        <div className="mt-3 hidden gap-1.5 overflow-x-auto pb-0.5 sm:flex [scrollbar-width:none] [&::-webkit-scrollbar]:hidden" role="group" aria-label="Türe göre süz">
           <button type="button" onClick={() => setKind("")} aria-pressed={!kind} className={chip(!kind)}>
             Tüm kaynaklar <span className="opacity-80">{docs.length}</span>
           </button>
-          {Object.keys(kindCounts).length > 1 && KIND_ORDER.filter((k) => kindCounts[k]).map((k) => (
+          {KIND_ORDER.filter((k) => kindCounts[k]).map((k) => (
             <button type="button" key={k} onClick={() => setKind(kind === k ? "" : k)} aria-pressed={kind === k} className={chip(kind === k)}>
               {k} <span className="opacity-80">{kindCounts[k]}</span>
             </button>
           ))}
-          {looseCount > 0 && (
-            <button type="button" onClick={() => setNb(nb === "__none__" ? "" : "__none__")} aria-pressed={nb === "__none__"} className={chip(nb === "__none__")}
-                    title="Hiçbir deftere eklenmemiş kaynaklar">
-              Deftersiz <span className="opacity-80">{looseCount}</span>
-            </button>
-          )}
         </div>
       )}
 
+      {/* sm+: kategori ve etiket cipleri */}
       {(categories.length > 0 || allTags.length > 0) && (
-        <div className="mt-3 flex flex-wrap items-center gap-1.5">
+        <div className="mt-3 hidden flex-wrap items-center gap-1.5 sm:flex">
           {cat && <button type="button" onClick={() => setCat("")} aria-label={`Kategori süzgecini kaldır: ${cat}`} className="min-h-[32px] rounded-full bg-accent-purple/15 px-2.5 text-xs text-accent-purple">kategori: {cat} ✕</button>}
           {!cat && categories.map((c) => (
             <button type="button" key={c} onClick={() => setCat(c)} className="min-h-[32px] rounded-full border bg-surface px-2.5 text-xs text-text-secondary hover:border-accent-purple/50">{c}</button>
           ))}
-          {tag && <button type="button" onClick={() => setTag("")} aria-label={`Etiket süzgecini kaldır: ${tag}`} className="min-h-[32px] rounded-full bg-accent-amber/15 px-2.5 text-xs text-accent-amber">#{tag} ✕</button>}
+          {tag && <button type="button" onClick={() => setTag("")} aria-label={`Etiket süzgecini kaldır: ${tag}`} className="min-h-[32px] rounded-full bg-accent-purple/15 px-2.5 text-xs text-accent-purple">#{tag} ✕</button>}
           {!tag && allTags.slice(0, 12).map((t) => (
             <button type="button" key={t} onClick={() => setTag(t)} className="min-h-[32px] rounded-full border bg-surface px-2.5 text-xs text-text-secondary hover:border-accent-purple/50">#{t}</button>
           ))}
         </div>
       )}
 
+      {/* lg altinda: defter suzgeci yatay cip seridi (TB-5) */}
+      {(collections.length > 0 || looseCount > 0) && (
+        <div className="mt-3 flex gap-1.5 overflow-x-auto pb-0.5 lg:hidden [scrollbar-width:none] [&::-webkit-scrollbar]:hidden" role="group" aria-label="Deftere göre süz">
+          <button type="button" onClick={() => setNb("")} aria-pressed={nb === ""} className={cx(chip(nb === ""), "flex items-center gap-1")}>
+            <Notebook size={12} aria-hidden="true" /> Tümü <span className="opacity-80">{docs.length}</span>
+          </button>
+          {collections.map((c) => {
+            const n = docs.filter((d) => colIds(d).includes(c.id)).length;
+            return (
+              <button type="button" key={c.id} onClick={() => setNb(nb === c.id ? "" : c.id)} aria-pressed={nb === c.id}
+                      aria-label={`${c.title} defterindeki kaynakları göster (${n})`} className={cx(chip(nb === c.id), "max-w-[180px]")}>
+                <span className="truncate">{c.title}</span> <span className="opacity-80">{n}</span>
+              </button>
+            );
+          })}
+          {looseCount > 0 && (
+            <button type="button" onClick={() => setNb(nb === "__none__" ? "" : "__none__")} aria-pressed={nb === "__none__"} className={chip(nb === "__none__")}>
+              Deftersiz <span className="opacity-80">{looseCount}</span>
+            </button>
+          )}
+          <button type="button" onClick={() => setCreatingNb(true)} className={cx(chip(false), "flex items-center gap-1")} aria-label="Yeni defter oluştur">
+            <Plus size={12} aria-hidden="true" /> Defter
+          </button>
+        </div>
+      )}
+
+      {/* md+: surukle-birak seridi (tiklayinca pencere) */}
       <button type="button"
         onDragOver={(e) => { e.preventDefault(); setDrag(true); }}
         onDragLeave={() => setDrag(false)}
-        onDrop={(e) => { e.preventDefault(); setDrag(false); onFiles(e.dataTransfer.files); }}
-        onClick={() => fileRef.current?.click()}
+        onDrop={(e) => { e.preventDefault(); setDrag(false); void onFiles(e.dataTransfer.files); }}
+        onClick={() => { setAddSeg("dosya"); setAddOpen(true); }}
         disabled={!!uploading}
-        aria-describedby={ids + "-types"}
-        className={cx("mt-5 flex w-full cursor-pointer flex-col items-center justify-center rounded-2xl border-2 border-dashed px-4 py-10 transition disabled:cursor-wait",
-          drag ? "border-accent-purple bg-accent-purple/5" : "border-border-strong")}
+        className={cx("mt-4 hidden w-full cursor-pointer items-center justify-center gap-2 rounded-2xl border-2 border-dashed px-4 py-3 text-sm transition disabled:cursor-wait md:flex",
+          drag ? "border-accent-purple bg-accent-purple/5 text-accent-purple" : "border-border-strong text-text-secondary hover:border-accent-purple/50")}
       >
-        {uploading ? <Loader2 size={26} className="animate-spin text-accent-purple" aria-hidden="true" /> : <UploadCloud size={26} className="text-accent-purple" aria-hidden="true" />}
-        <span className="mt-2 text-sm text-text-primary" role="status">
-          {uploading ? `Yükleniyor… ${uploading.done}/${uploading.total}` : "Dosya yüklemek için tıkla ya da sürükle"}
+        {uploading ? <Loader2 size={18} className="animate-spin text-accent-purple" aria-hidden="true" /> : <UploadCloud size={18} className="text-accent-purple" aria-hidden="true" />}
+        <span role="status">
+          {uploading ? `Yükleniyor… ${uploading.done}/${uploading.total}` : <>Dosyaları buraya sürükle ya da <b className="font-medium text-text-primary">Kaynak ekle</b> ile dosya, link, metin ekle{targetNb ? ` — «${colName[targetNb] || "defter"}» defterine bağlanır` : ""}</>}
         </span>
-        <span id={ids + "-types"} className="mt-0.5 text-center text-xs text-text-secondary">{TYPES_HINT} · {LIMIT_HINT}</span>
-        <span className="mt-0.5 text-center text-xs text-text-secondary">{PRIVACY_LINE}</span>
       </button>
-      <input ref={fileRef} type="file" accept={ACCEPT} multiple hidden onChange={(e) => onFiles(e.target.files)} />
-      <div className="mt-3 rounded-2xl border bg-surface px-4 py-3">
-        <YoutubeAdd onAdded={() => reload()} />
-        <div className="mt-2"><TextAdd onAdded={() => reload()} /></div>
-        <div className="mt-2 border-t pt-2">
-          <button type="button" onClick={() => setWebOpen((v) => !v)} aria-expanded={webOpen} aria-controls={ids + "-web"}
-                  className="flex min-h-[40px] w-full items-center gap-2 text-left text-sm text-text-secondary hover:text-accent-purple">
-            <Globe size={16} aria-hidden="true" /> <span className="flex-1">Web&apos;de kaynak bul</span>
-            <ChevronDown size={15} className={cx("transition", webOpen && "rotate-180")} aria-hidden="true" />
-          </button>
-          {webOpen && (
-            <div id={ids + "-web"} className="mt-2">
-              {collections.length === 0 ? (
-                <p className="text-sm text-text-secondary">
-                  Web&apos;de bulunan kaynaklar bir deftere eklenir. Önce <button type="button" onClick={() => setCreatingNb(true)} className="text-accent-purple underline underline-offset-2">bir defter aç</button>.
-                </p>
-              ) : (
-                <>
-                  <label htmlFor={ids + "-webnb"} className="block text-xs font-medium text-text-secondary">Bulunanlar hangi deftere eklensin?</label>
-                  <select id={ids + "-webnb"} value={webNb} onChange={(e) => setWebNb(e.target.value)}
-                          className="mt-1 min-h-[40px] w-full rounded-lg border bg-surface px-3 text-sm sm:w-auto">
-                    <option value="">Defter seç…</option>
-                    {collections.map((c) => <option key={c.id} value={c.id}>{c.title}</option>)}
-                  </select>
-                  {webNb && (
-                    <div className="mt-3">
-                      <DiscoverPanel key={webNb} collectionId={webNb}
-                                     onAdded={(added, linked) => {
-                                       reload();
-                                       toast(`${added + linked} kaynak «${colName[webNb] || "defter"}» defterine eklendi.`);
-                                     }} />
-                    </div>
-                  )}
-                </>
-              )}
-            </div>
-          )}
-        </div>
-      </div>
+      {uploading && (
+        <p className="mt-2 text-xs text-text-secondary md:hidden" role="status">
+          <Loader2 size={12} className="mr-1 inline animate-spin" aria-hidden="true" /> Yükleniyor… {uploading.done}/{uploading.total}
+        </p>
+      )}
 
       {loading ? (
-        <div className="mt-6"><CardSkeleton n={3} /></div>
+        <div className="mt-4 md:mt-6"><CardSkeleton n={3} /></div>
       ) : filtered.length === 0 ? (
-        <div className="mt-6 rounded-2xl border bg-surface p-10 text-center text-sm text-text-secondary">
+        <div className="mt-4 rounded-2xl border bg-surface p-8 text-center text-sm text-text-secondary md:mt-6 md:p-10">
           {docs.length === 0
-            ? "Henüz kaynak eklemedin. PDF, Word, Excel, sunum, link ya da metin ekle; senin için özetleyeyim ve soru sorabileceğin hâle getireyim. Başlamak için yukarıdaki alana dosya sürükle."
-            : <>Süzgeçle eşleşen kaynak yok. <button type="button" onClick={() => { setQ(""); setCat(""); setTag(""); setKind(""); setNb(""); setFavOnly(false); }} className="text-accent-purple underline underline-offset-2">Süzgeçleri temizle</button></>}
+            ? <>Henüz kaynak eklemedin. PDF, Word, Excel, sunum, link ya da metin ekle; senin için özetleyeyim ve soru sorabileceğin hâle getireyim. <button type="button" onClick={() => setAddOpen(true)} className="text-accent-purple underline underline-offset-2">Kaynak ekle</button></>
+            : <>Süzgeçle eşleşen kaynak yok. <button type="button" onClick={() => { clearFilters(); setNb(""); }} className="text-accent-purple underline underline-offset-2">Süzgeçleri temizle</button></>}
         </div>
       ) : (
-        <ul className={view === "grid" ? "mt-6 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 " + gap : "mt-6 flex flex-col " + gap} aria-label="Kaynaklar">
+        <ul className={(view === "grid" ? "mt-4 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 md:mt-6 " : "mt-4 flex flex-col md:mt-6 ") + gap} aria-label="Kaynaklar">
           {filtered.map((d) => {
             const cids = colIds(d);
             const isSel = selected.has(d.id);
             const st = stageInfo(d);
+            const p = prog[d.id];
             return (
             <li key={d.id}
                 className={cx("lift group relative rounded-2xl border bg-surface", pad, "hover:border-accent-purple/40", isSel && "border-accent-purple ring-1 ring-accent-purple")}>
@@ -501,12 +579,15 @@ export default function LibraryPage() {
                 </div>
               </div>
               {d.short_summary && <p className="mt-1.5 line-clamp-2 text-sm text-text-secondary">{d.short_summary}</p>}
+              {/* rozetler: en fazla 1 renkli (durum); "Hazır" gosterilmez, gerisi notr */}
               <div className="mt-2 flex flex-wrap items-center gap-1.5 text-xs">
-                <span className={cx("rounded-full px-2 py-0.5", d.status === "ready" ? "bg-green-100 text-green-800 dark:bg-green-500/15 dark:text-green-300" : d.status === "failed" ? "bg-red-100 text-red-800 dark:bg-red-500/15 dark:text-red-300" : "bg-accent-purple/10 text-accent-purple")}>{st.label}</span>
-                {d.category && <span className="rounded-full bg-accent-purple/10 px-2 py-0.5 text-accent-purple">{d.category}</span>}
-                {d.difficulty_level && <span className="rounded-full bg-surface-muted px-2 py-0.5 text-text-secondary">{d.difficulty_level}</span>}
+                {d.status !== "ready" && (
+                  <span className={cx("rounded-full px-2 py-0.5", d.status === "failed" ? "bg-danger-bg text-danger" : "bg-accent-purple/10 text-accent-purple")}>{st.label}</span>
+                )}
+                {d.category && <span className="rounded-full bg-surface-muted px-2 py-0.5 text-text-secondary">{d.category}</span>}
                 {d.page_count ? <span className="rounded-full bg-surface-muted px-2 py-0.5 text-text-secondary">{d.page_count} sayfa</span> : null}
-                {toArr(d.tags).slice(0, 4).map((t, i) => <span key={i} className="rounded-full bg-accent-amber/15 px-2 py-0.5 text-accent-amber">#{String(t)}</span>)}
+                {d.difficulty_level && <span className="hidden rounded-full bg-surface-muted px-2 py-0.5 text-text-secondary sm:inline">{d.difficulty_level}</span>}
+                {toArr(d.tags).slice(0, 3).map((t, i) => <span key={i} className="rounded-full bg-surface-muted px-2 py-0.5 text-text-secondary">#{String(t)}</span>)}
               </div>
               {cids.length > 0 && (
                 <div className="relative z-10 mt-2 flex flex-wrap items-center gap-1" aria-label="Bağlı olduğu defterler">
@@ -533,21 +614,21 @@ export default function LibraryPage() {
                 </div>
               )}
               {d.status === "failed" && (
-                <div className="relative z-10 mt-2.5 rounded-lg bg-red-50 px-2.5 py-2 text-xs text-red-800 dark:bg-red-950/30 dark:text-red-300">
+                <div className="relative z-10 mt-2.5 rounded-lg bg-danger-bg px-2.5 py-2 text-xs text-danger">
                   <p>{d.error_message || "Bu kaynak hazırlanamadı. Yeniden dene; olmazsa dosyayı farklı biçimde kaydedip yükle."}</p>
                   <button type="button" onClick={(e) => { e.stopPropagation(); reprocess(d.id); }}
-                          className="mt-1.5 flex min-h-[36px] items-center gap-1 rounded-md border border-red-300 px-2 text-red-800 hover:bg-red-100 dark:border-red-800 dark:text-red-300 dark:hover:bg-red-950/50">
+                          className="mt-1.5 flex min-h-[36px] items-center gap-1 rounded-md border border-danger/40 px-2 text-danger hover:bg-danger/10">
                     <RefreshCw size={12} aria-hidden="true" /> Yeniden hazırla
                   </button>
                 </div>
               )}
-              {d.status === "ready" && prog[d.id] && prog[d.id].pct > 0 && (
+              {d.status === "ready" && p && p.pct > 0 && (
                 <div className="mt-2.5">
                   <div className="h-1.5 w-full overflow-hidden rounded-full bg-surface-muted">
-                    <div className="h-full rounded-full bg-accent-purple transition-all" style={{ width: prog[d.id].pct + "%" }} />
+                    <div className="h-full rounded-full bg-accent-purple transition-all" style={{ width: Math.min(100, p.pct) + "%" }} />
                   </div>
                   <p className="mt-1 text-xs text-text-secondary">
-                    %{prog[d.id].pct} okundu · s.{prog[d.id].page}/{prog[d.id].numPages} · kaldığın yerden devam et
+                    %{p.pct} okundu{p.page && p.numPages ? ` · s.${p.page}/${p.numPages}` : ""} · kaldığın yerden devam et
                   </p>
                 </div>
               )}
@@ -574,8 +655,8 @@ export default function LibraryPage() {
 
       </div>
 
-      {/* Defterler */}
-      <aside className="w-full shrink-0 lg:w-64" aria-labelledby={ids + "-nbs"}>
+      {/* Defterler: yalniz lg ve ustunde sag panel (altinda ustteki cip seridi) */}
+      <aside className="hidden w-full shrink-0 lg:block lg:w-64" aria-labelledby={ids + "-nbs"}>
         <div className="rounded-2xl border bg-surface p-3">
           <h2 id={ids + "-nbs"} className="mb-2 flex items-center gap-1.5 px-1 text-sm font-medium text-text-primary">
             <Notebook size={15} className="text-accent-purple" aria-hidden="true" /> Defterler
@@ -652,25 +733,14 @@ export default function LibraryPage() {
           {looseCount > 0 && (
             <button type="button" onClick={() => setNb(nb === "__none__" ? "" : "__none__")} aria-pressed={nb === "__none__"}
                     className={cx("mt-1 flex min-h-[40px] w-full items-center justify-between rounded-lg px-2.5 text-sm",
-                      nb === "__none__" ? "bg-accent-amber/15 text-accent-amber" : "text-text-secondary hover:bg-surface-muted")}>
+                      nb === "__none__" ? "bg-accent-purple/10 text-accent-purple" : "text-text-secondary hover:bg-surface-muted")}>
               <span className="flex items-center gap-2"><Notebook size={14} className="opacity-50" aria-hidden="true" /> Deftersiz</span>
               <span className="text-xs">{looseCount}</span>
             </button>
           )}
 
           <div className="mt-2 border-t pt-2">
-            {creatingNb ? (
-              <form className="flex items-center gap-1" onSubmit={(e) => { e.preventDefault(); void createNb(); }}>
-                <input autoFocus value={newNb} onChange={(e) => setNewNb(e.target.value)}
-                       onKeyDown={(e) => { if (e.key === "Escape") setCreatingNb(false); }}
-                       placeholder="Defter adı" aria-label="Yeni defter adı" disabled={nbBusy}
-                       className="min-w-0 flex-1 rounded-lg border bg-surface px-2.5 py-1.5 text-sm outline-none focus:border-accent-purple" />
-                <button type="submit" aria-label="Defteri oluştur" disabled={nbBusy || !newNb.trim()}
-                        className="flex h-10 w-10 items-center justify-center rounded-lg bg-accent-purple text-on-accent disabled:opacity-50">
-                  {nbBusy ? <Loader2 size={14} className="animate-spin" /> : <Check size={14} />}
-                </button>
-              </form>
-            ) : (
+            {creatingNb ? nbCreateForm : (
               <button type="button" onClick={() => setCreatingNb(true)}
                       className="flex min-h-[40px] w-full items-center gap-2 rounded-lg px-2.5 text-sm text-text-secondary hover:bg-surface-muted hover:text-accent-purple">
                 <Plus size={14} aria-hidden="true" /> Yeni defter
@@ -686,6 +756,66 @@ export default function LibraryPage() {
       </aside>
       </div>
 
+      {/* lg altinda "Yeni defter": kucuk pencere (lg'de sag paneldeki satir ici form) */}
+      <Modal open={creatingNb && !isLg} onClose={() => setCreatingNb(false)} title="Yeni defter" size="sm">
+        {nbCreateForm}
+      </Modal>
+
+      {/* telefon: "Süz" tabakasi */}
+      <Modal open={filterOpen} onClose={() => setFilterOpen(false)} title="Süz ve sırala" size="md">
+        <div className="space-y-4">
+          <div>
+            <label htmlFor={ids + "-sort"} className="mb-1 block text-xs font-medium text-text-secondary">Sıralama</label>
+            <select id={ids + "-sort"} value={sort} onChange={(e) => setSort(e.target.value as Sort)} className="min-h-[44px] w-full rounded-xl border bg-surface px-3 text-[16px]">
+              {(Object.keys(SORT_LABEL) as Sort[]).map((s) => <option key={s} value={s}>{SORT_LABEL[s]}</option>)}
+            </select>
+          </div>
+          <label className="flex min-h-[44px] items-center gap-3 text-sm">
+            <input type="checkbox" checked={favOnly} onChange={(e) => setFavOnly(e.target.checked)} className="h-5 w-5 accent-[var(--accent-purple)]" />
+            <Star size={15} className={favOnly ? "fill-current text-accent-amber" : "text-text-secondary"} aria-hidden="true" /> Yalnız favoriler
+          </label>
+          {Object.keys(kindCounts).length > 1 && (
+            <div>
+              <p className="mb-1.5 text-xs font-medium text-text-secondary">Tür</p>
+              <div className="flex flex-wrap gap-1.5" role="group" aria-label="Türe göre süz">
+                <button type="button" onClick={() => setKind("")} aria-pressed={!kind} className={chip(!kind)}>Tümü <span className="opacity-80">{docs.length}</span></button>
+                {KIND_ORDER.filter((k) => kindCounts[k]).map((k) => (
+                  <button type="button" key={k} onClick={() => setKind(kind === k ? "" : k)} aria-pressed={kind === k} className={chip(kind === k)}>
+                    {k} <span className="opacity-80">{kindCounts[k]}</span>
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
+          {categories.length > 0 && (
+            <div>
+              <p className="mb-1.5 text-xs font-medium text-text-secondary">Kategori</p>
+              <div className="flex flex-wrap gap-1.5" role="group" aria-label="Kategoriye göre süz">
+                {categories.map((c) => (
+                  <button type="button" key={c} onClick={() => setCat(cat === c ? "" : c)} aria-pressed={cat === c} className={chip(cat === c)}>{c}</button>
+                ))}
+              </div>
+            </div>
+          )}
+          {allTags.length > 0 && (
+            <div>
+              <p className="mb-1.5 text-xs font-medium text-text-secondary">Etiket</p>
+              <div className="flex flex-wrap gap-1.5" role="group" aria-label="Etikete göre süz">
+                {allTags.slice(0, 30).map((t) => (
+                  <button type="button" key={t} onClick={() => setTag(tag === t ? "" : t)} aria-pressed={tag === t} className={chip(tag === t)}>#{t}</button>
+                ))}
+              </div>
+            </div>
+          )}
+          <div className="flex items-center justify-between gap-2 border-t pt-3">
+            <button type="button" onClick={clearFilters} disabled={!activeFilters && !q} className="min-h-[44px] rounded-xl px-3 text-sm text-text-secondary hover:bg-surface-muted disabled:opacity-50">Temizle</button>
+            <button type="button" onClick={() => setFilterOpen(false)} className="min-h-[44px] rounded-xl bg-accent-purple px-4 text-sm font-medium text-on-accent">
+              {filtered.length} kaynağı göster
+            </button>
+          </div>
+        </div>
+      </Modal>
+
       {selecting && (
         <div className="fixed inset-x-0 z-40 flex justify-center px-3"
              style={{ bottom: "calc(var(--bottom-nav, 0px) + 12px)" }}>
@@ -699,6 +829,13 @@ export default function LibraryPage() {
           </div>
         </div>
       )}
+
+      {/* Tek "Kaynak ekle" penceresi. collectionId: defter suzgeci acikken o defter, yoksa "" (TS notu: opsiyonel olsun). */}
+      <AddSourceDialog open={addOpen} onClose={() => setAddOpen(false)} collectionId={targetNb}
+                       segment={addSeg} onSegment={setAddSeg}
+                       existingIds={targetNb ? docs.filter((d) => colIds(d).includes(targetNb)).map((d) => d.id) : docs.map((d) => d.id)}
+                       onAdded={async () => { await reload(); }}
+                       onUpload={(files) => onFiles(files)} upBusy={uploading} />
 
       <EditModal doc={editing} onClose={() => setEditing(null)}
                  onSave={(b) => { if (editing) patchDoc(editing.id, b); setEditing(null); }}
@@ -801,7 +938,7 @@ function LinkDialog({ docIds, docs, collections, onClose, onDone, onCreated }: {
       <form className="mt-3 flex items-center gap-2 border-t pt-3" onSubmit={(e) => { e.preventDefault(); void createAndCheck(); }}>
         <label htmlFor={fid} className="sr-only">Yeni defter adı</label>
         <input id={fid} value={newTitle} onChange={(e) => setNewTitle(e.target.value)} placeholder="Yeni defter adı"
-               className="min-w-0 flex-1 rounded-lg border bg-surface px-3 py-2 text-sm outline-none focus:border-accent-purple" />
+               className="min-w-0 flex-1 rounded-lg border bg-surface px-3 py-2 text-[16px] outline-none focus:border-accent-purple md:text-sm" />
         <button type="submit" disabled={!newTitle.trim() || creating}
                 className="flex min-h-[40px] items-center gap-1 rounded-lg border px-3 text-sm hover:border-accent-purple/50 disabled:opacity-50">
           {creating ? <Loader2 size={14} className="animate-spin" aria-hidden="true" /> : <Plus size={14} aria-hidden="true" />} Oluştur
@@ -833,7 +970,7 @@ function EditModal({ doc, onClose, onSave, onNotebooks, notebookNames }: {
     setTagsStr(toArr(doc.tags).join(", ")); setFav(!!doc.is_favorite);
   }, [doc]);
 
-  const input = "mb-3 w-full rounded-lg border bg-surface px-3 py-2 text-sm outline-none focus:border-accent-purple";
+  const input = "mb-3 w-full rounded-lg border bg-surface px-3 py-2 text-[16px] outline-none focus:border-accent-purple md:text-sm";
   return (
     <Modal open={!!doc} onClose={onClose} title="Kaynağı düzenle" size="md">
       <form onSubmit={(e) => {

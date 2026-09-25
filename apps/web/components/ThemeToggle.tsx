@@ -26,8 +26,8 @@ export function applyTheme(mode: ThemeMode) {
     document.head.appendChild(link);
   }
   link.href = dark ? "/brand-night.svg" : "/brand-day.svg";
-  // durum cubugu rengi: layout'taki (media'li) etiketler dahil hepsi secilen temaya uysun
-  const color = dark ? "#1c1747" : "#f6b45c";
+  // durum cubugu rengi = uygulama zemini (--bg); marka turuncusu yalniz ikon/illustrasyonda kalir.
+  const color = dark ? "#0F1420" : "#FAF8F4";
   const metas = document.querySelectorAll<HTMLMetaElement>('meta[name="theme-color"]');
   if (metas.length) metas.forEach((m) => { m.content = color; });
   else {
@@ -77,7 +77,7 @@ export default function ThemeToggle({ className = "" }: { className?: string }) 
   return (
     <button type="button" onClick={() => set(next[mode])}
             aria-label={`Tema: ${label}. ${THEME_LABEL[next[mode]]} temaya geçmek için tıkla`}
-            className={"flex items-center gap-2 rounded-md px-3 py-2 text-text-secondary hover:bg-surface-muted " + className}>
+            className={"flex items-center gap-2 rounded-md px-3 py-2 text-text-secondary hover:bg-surface-hover " + className}>
       <Icon size={18} aria-hidden="true" /> Tema: {label}
     </button>
   );

@@ -36,7 +36,7 @@ export function stageInfo(d: StageDoc): { label: string; pct: number | null } {
 }
 
 /** Saniye araligini "1-2 dk" / "1 dakikadan az" gibi okunur metne cevirir. */
-export function formatRange(loSec: number, hiSec: number): string {
+function formatRange(loSec: number, hiSec: number): string {
   if (hiSec < 60) return "1 dakikadan az";
   const lo = Math.max(1, Math.round(loSec / 60));
   const hi = Math.max(lo, Math.round(hiSec / 60));
@@ -48,8 +48,9 @@ export function formatRange(loSec: number, hiSec: number): string {
  * Kalan sure icin kaba tahmin (aralik). Hazir / basarisiz kaynakta null.
  * Tahmin bilerek genistir; kullaniciya "yaklasik" diye gosterilir:
  *   `Tahmini kalan: ${etaText(d)}`
+ * Disariya yalniz etaText acilir (stageInfo + etaText tek giris noktasi).
  */
-export function etaRange(d: StageDoc): { lo: number; hi: number } | null {
+function etaRange(d: StageDoc): { lo: number; hi: number } | null {
   if (d.status === "ready" || d.status === "failed") return null;
   const s = d.processing_stage;
   const t = d.progress_total || 0, n = d.progress_done || 0;

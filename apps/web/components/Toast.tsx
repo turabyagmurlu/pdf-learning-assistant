@@ -88,12 +88,12 @@ export default function ToastHost() {
         <span className="min-w-0 flex-1 py-1">{t.msg}</span>
         {t.action && (
           <button type="button" onClick={() => { t.action!.run(); remove(t.id); }}
-                  className="min-h-[40px] shrink-0 rounded-lg px-2.5 text-sm font-medium text-accent-purple hover:bg-accent-purple/10">
+                  className="min-h-[40px] shrink-0 rounded-lg px-2.5 text-sm font-medium text-accent-purple hover:bg-accent-soft">
             {t.action.label}
           </button>
         )}
         <button type="button" onClick={() => remove(t.id)} aria-label="Bildirimi kapat"
-                className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg text-text-secondary hover:bg-surface-muted">
+                className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg text-text-secondary hover:bg-surface-hover">
           <X size={16} />
         </button>
       </div>

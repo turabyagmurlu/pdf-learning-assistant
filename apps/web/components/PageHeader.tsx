@@ -22,9 +22,10 @@ export default function PageHeader({ eyebrow, title, subtitle, hero, right }: {
         </>
       )}
       <div className={hero ? "relative px-4 py-7 md:px-6 md:py-9" : ""}>
-        {eyebrow && <p className="mb-2 text-[11px] uppercase tracking-[0.28em] text-text-secondary">{eyebrow}</p>}
+        {eyebrow && <p className="mb-2 text-2xs uppercase tracking-[0.28em] text-text-secondary">{eyebrow}</p>}
         <div className="flex flex-wrap items-end justify-between gap-3">
-          <h1 className="font-heading text-[34px] leading-[1.05] tracking-tight md:text-[40px]">{title}</h1>
+          {/* Sayfa h1 = display olcegi (32/36, md 40/44) */}
+          <h1 className="font-heading text-display tracking-tight md:text-[40px] md:leading-[44px]">{title}</h1>
           {right}
         </div>
         {subtitle && <p className="mt-2 max-w-2xl text-sm leading-relaxed text-text-secondary">{subtitle}</p>}

@@ -3,6 +3,11 @@
 - GET  /collections/{cid}/draft            -> {draft, draft_rev}   (acik taslak sayfasi tazelemesi icin, hafif)
 - POST /collections/{cid}/draft/blocks     -> mevcut taslagin SONUNA atomik blok ekler (okuyucudan "Taslaga ekle")
 - POST /collections/{cid}/similarity       -> yapay zeka KULLANMADAN benzerlik (intihal) uyarisi
+- GET  /collections/{cid}/draft/versions   -> onceki surumler [{rev, created_at, block_count, words, preview}]
+- GET  /collections/{cid}/draft/versions/{rev}          -> surumun bloklari (onizleme)
+- POST /collections/{cid}/draft/versions/{rev}/restore  -> o surumu taslak yapar (bugunku de gecmise alinir)
+  Surumler collections.update_collection (PATCH) icinde `snapshot_draft_version` ile birikir:
+  >= 60 sn ya da blok sayisi degistiyse; son 20 tutulur (draft_versions tablosu, main.py migrasyonu).
 
 Taslak bicimi (web DraftEditor.parseDraft ile ayni):
   JSON {"v":1, "blocks":[{id,type:"p"|"h"|"quote"|"answer",...}]}; eski duz metin taslak
@@ -119,6 +124,24 @@ async def append_blocks(cid: str, body: BlocksIn, conn=Depends(db), user=Depends
             text = str(b.get("text") or "").strip()[:8000]
             if text:
                 clean.append({"id": _uid(), "type": t, "text": text})
+        elif t == "answer":
+            # okuyucu / defter sohbetinden "Taslağa ekle": soru + cevap + kaynak listesi (DraftEditor Block "answer")
+            text = str(b.get("text") or "").strip()[:12000]
+            if not text:
+                continue
+            srcs = []
+            for s in (b.get("sources") or [])[:20]:
+                if not isinstance(s, dict):
+                    continue
+                sdid = str(s.get("document_id") or "")
+                pg = s.get("page")
+                try:
+                    pg = int(pg) if pg is not None else None
+                except Exception:  # noqa
+                    pg = None
+                srcs.append({"title": _clean(s.get("title") or titles.get(sdid) or "Kaynak", 300),
+                             "page": pg, "document_id": sdid})
+            clean.append({"id": _uid(), "type": "answer", "q": _clean(b.get("q"), 1000), "text": text, "sources": srcs})
     if not clean:
         raise AppError("Bu metin taslağa eklenemedi; kaynağı yenileyip tekrar dene.")
     async with conn.transaction():
@@ -137,6 +160,121 @@ async def append_blocks(cid: str, body: BlocksIn, conn=Depends(db), user=Depends
             "WHERE id=$2 AND user_id=$3 RETURNING draft_rev",
             serialize_draft(blocks), cid, user["id"])
     return {"ok": True, "added": len(clean), "block_ids": [b["id"] for b in clean], "draft_rev": int(rev)}
+
+
+# ---------------------------------------------------------------- surum gecmisi (TO-3)
+VERSIONS_KEEP = 20
+VERSION_MIN_GAP_S = 60
+
+
+def _preview_of(blocks: list[dict], n: int = 160) -> str:
+    """Listede gosterilecek kisa ozet: ilk dolu blogun metni."""
+    for b in blocks:
+        t = (b.get("text") or "").strip()
+        if b.get("type") == "answer" and not t:
+            t = (b.get("q") or "").strip()
+        if t:
+            t = re.sub(r"\s+", " ", t)
+            return t[:n] + ("…" if len(t) > n else "")
+    return ""
+
+
+async def snapshot_draft_version(conn, cid: str, uid, new_draft: str | None) -> bool:
+    """PATCH oncesi cagrilir: sunucudaki MEVCUT taslagi draft_versions'a yazar.
+    Kosul: mevcut taslak dolu ve yeni gelenden farkli; son saklanan surumden >= 60 sn gecmis
+    ya da blok sayisi degismis. Son 20 surum tutulur. Ayni rev iki kez saklanmaz."""
+    cur = await conn.fetchrow(
+        "SELECT draft, COALESCE(draft_rev,0) AS draft_rev, draft_at FROM collections WHERE id=$1 AND user_id=$2",
+        cid, uid)
+    if not cur or not (cur["draft"] or "").strip():
+        return False
+    if (new_draft or "") == (cur["draft"] or ""):
+        return False
+    blocks = parse_draft(cur["draft"])
+    if not any((b.get("text") or "").strip() or b.get("type") == "answer" for b in blocks):
+        return False
+    last = await conn.fetchrow(
+        "SELECT rev, created_at, jsonb_array_length(blocks) AS n, EXTRACT(EPOCH FROM (now() - created_at)) AS age "
+        "FROM draft_versions WHERE collection_id=$1 ORDER BY created_at DESC, rev DESC LIMIT 1", cid)
+    if last:
+        if int(last["rev"]) == int(cur["draft_rev"]):
+            return False
+        if float(last["age"] or 0) < VERSION_MIN_GAP_S and int(last["n"] or 0) == len(blocks):
+            return False
+    await conn.execute(
+        "INSERT INTO draft_versions (collection_id, rev, blocks, created_at) VALUES ($1,$2,$3::jsonb, COALESCE($4, now()))"
+        " ON CONFLICT (collection_id, rev) DO NOTHING",
+        cid, int(cur["draft_rev"]), blocks, cur["draft_at"])
+    await conn.execute(
+        """DELETE FROM draft_versions WHERE collection_id=$1 AND id NOT IN (
+             SELECT id FROM draft_versions WHERE collection_id=$1 ORDER BY created_at DESC, rev DESC LIMIT $2)""",
+        cid, VERSIONS_KEEP)
+    return True
+
+
+@router.get("/collections/{cid}/draft/versions")
+async def list_versions(cid: str, conn=Depends(db), user=Depends(current_user)):
+    """Onceki taslak surumleri (en yeni once): [{rev, created_at, block_count, words, preview}]."""
+    own = await conn.fetchval("SELECT 1 FROM collections WHERE id=$1 AND user_id=$2", cid, user["id"])
+    if not own:
+        raise NotFound(COL_MISSING)
+    rows = await conn.fetch(
+        "SELECT rev, blocks, created_at FROM draft_versions WHERE collection_id=$1 "
+        "ORDER BY created_at DESC, rev DESC LIMIT $2", cid, VERSIONS_KEEP)
+    out = []
+    for r in rows:
+        blocks = r["blocks"] if isinstance(r["blocks"], list) else (json.loads(r["blocks"]) if r["blocks"] else [])
+        words = sum(len((b.get("text") or "").split()) for b in blocks if isinstance(b, dict))
+        out.append({"rev": int(r["rev"]), "created_at": r["created_at"].isoformat(),
+                    "block_count": len(blocks), "words": words, "preview": _preview_of(blocks)})
+    return out
+
+
+@router.get("/collections/{cid}/draft/versions/{rev}")
+async def get_version(cid: str, rev: int, conn=Depends(db), user=Depends(current_user)):
+    """Bir surumun tam icerigi (onizleme icin)."""
+    own = await conn.fetchval("SELECT 1 FROM collections WHERE id=$1 AND user_id=$2", cid, user["id"])
+    if not own:
+        raise NotFound(COL_MISSING)
+    r = await conn.fetchrow("SELECT rev, blocks, created_at FROM draft_versions WHERE collection_id=$1 AND rev=$2",
+                            cid, int(rev))
+    if not r:
+        raise NotFound("Bu sürüm bulunamadı; silinmiş olabilir.")
+    blocks = r["blocks"] if isinstance(r["blocks"], list) else (json.loads(r["blocks"]) if r["blocks"] else [])
+    return {"rev": int(r["rev"]), "created_at": r["created_at"].isoformat(), "blocks": blocks}
+
+
+@router.post("/collections/{cid}/draft/versions/{rev}/restore")
+async def restore_version(cid: str, rev: int, conn=Depends(db), user=Depends(current_user)):
+    """Secilen surumu taslak yapar. Bugunku taslak once gecmise alinir (geri donulebilsin).
+    Yanit: {ok, draft, draft_rev} - DraftEditor bunu yukler."""
+    async with conn.transaction():
+        cur = await conn.fetchrow(
+            "SELECT draft, COALESCE(draft_rev,0) AS draft_rev FROM collections WHERE id=$1 AND user_id=$2 FOR UPDATE",
+            cid, user["id"])
+        if not cur:
+            raise NotFound(COL_MISSING)
+        r = await conn.fetchrow("SELECT blocks FROM draft_versions WHERE collection_id=$1 AND rev=$2", cid, int(rev))
+        if not r:
+            raise NotFound("Bu sürüm bulunamadı; silinmiş olabilir.")
+        blocks = r["blocks"] if isinstance(r["blocks"], list) else (json.loads(r["blocks"]) if r["blocks"] else [])
+        # blok kimlikleri yenilensin (editorde eski kimliklerle karismasin)
+        fresh = [{**b, "id": _uid()} for b in blocks if isinstance(b, dict)]
+        new_draft = serialize_draft(fresh)
+        # mevcut taslagi gecmise al (sure kosulu olmadan; blok sayisi ayni olsa da)
+        if (cur["draft"] or "").strip() and cur["draft"] != new_draft:
+            await conn.execute(
+                "INSERT INTO draft_versions (collection_id, rev, blocks, created_at) VALUES ($1,$2,$3::jsonb, now())"
+                " ON CONFLICT (collection_id, rev) DO NOTHING",
+                cid, int(cur["draft_rev"]), parse_draft(cur["draft"]))
+        new_rev = await conn.fetchval(
+            "UPDATE collections SET draft=$1, draft_at=now(), draft_rev=COALESCE(draft_rev,0)+1 "
+            "WHERE id=$2 AND user_id=$3 RETURNING draft_rev", new_draft, cid, user["id"])
+        await conn.execute(
+            """DELETE FROM draft_versions WHERE collection_id=$1 AND id NOT IN (
+                 SELECT id FROM draft_versions WHERE collection_id=$1 ORDER BY created_at DESC, rev DESC LIMIT $2)""",
+            cid, VERSIONS_KEEP)
+    return {"ok": True, "draft": new_draft, "draft_rev": int(new_rev), "restored_rev": int(rev)}
 
 
 # ---------------------------------------------------------------- benzerlik (yapay zekasiz)

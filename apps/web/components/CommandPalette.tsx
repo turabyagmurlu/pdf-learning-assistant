@@ -110,8 +110,8 @@ export default function CommandPalette() {
                  else if (e.key === "Enter") { e.preventDefault(); items[sel]?.run(); }
                }}
                placeholder="Defter, kaynak ya da sayfa adı yaz"
-               className="h-12 w-full border-0 bg-transparent text-[15px] outline-none" />
-        <kbd className="hidden rounded border px-1.5 py-0.5 font-mono text-[11px] text-text-secondary sm:block">Esc</kbd>
+               className="h-12 w-full border-0 bg-transparent text-base outline-none md:text-sm" />
+        <kbd className="hidden rounded border px-1.5 py-0.5 font-mono text-2xs text-text-secondary sm:block">Esc</kbd>
       </div>
       <div ref={listRef} id={listId} role="listbox" aria-label="Sonuçlar" className="max-h-[55vh] overflow-y-auto p-1.5">
         {loading ? (
@@ -126,7 +126,7 @@ export default function CommandPalette() {
               {head && <p className="px-3 pb-1 pt-2.5 text-xs font-medium text-text-secondary" role="presentation">{head}</p>}
               <div id={optId(i)} data-i={i} role="option" aria-selected={i === sel} tabIndex={-1}
                    onMouseEnter={() => setSel(i)} onClick={it.run}
-                   className={"flex min-h-[44px] w-full cursor-pointer items-center gap-2.5 rounded-lg px-3 py-2 text-left text-sm " + (i === sel ? "bg-accent-purple/10 text-accent-purple" : "")}>
+                   className={"flex min-h-[44px] w-full cursor-pointer items-center gap-2.5 rounded-lg px-3 py-2 text-left text-sm " + (i === sel ? "bg-accent-soft text-accent-purple" : "")}>
                 <span className="shrink-0" aria-hidden="true">{it.icon}</span>
                 <span className="min-w-0 flex-1 truncate">{it.label}</span>
                 {it.hint && <span className="shrink-0 text-xs text-text-secondary">{it.hint}</span>}

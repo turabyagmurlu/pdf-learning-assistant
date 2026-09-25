@@ -6,7 +6,7 @@ from app.config import settings
 from app.core.errors import AppError
 from app.db.session import close_pool
 from app.storage.object_store import ensure_bucket
-from app.api import auth, documents, chat, notes, study, collections, research, drafts
+from app.api import auth, documents, chat, notes, study, collections, research, drafts, exports
 from app.deps import current_user
 
 
@@ -134,6 +134,14 @@ async def lifespan(app: FastAPI):
                 "SELECT day::text AS day, user_id, requests FROM ai_user_usage WHERE day >= current_date - 1"))
     except Exception:  # noqa
         pass
+    # Okuma konumu (cihazlar arasi) ve taslak surum gecmisi
+    try:
+        from app.db.session import get_pool
+        pool = await get_pool()
+        async with pool.acquire() as conn:
+            await _migrate_reading_and_versions(conn)
+    except Exception as e:  # noqa
+        print("okuma/surum migrasyonu basarisiz:", repr(e))
     # Kaynak <-> defter coka-cok iliskisi (bir kaynak birden cok defterde olabilir)
     try:
         from app.db.session import get_pool
@@ -160,6 +168,8 @@ async def lifespan(app: FastAPI):
         pass
     flusher = _asyncio.create_task(_flush_usage_loop())
     backuper = _asyncio.create_task(_backup_loop())
+    # Eski kaynaklarda file_hash bos: bir kez arka planda doldur (kopya yuklemeyi yakalamak icin)
+    hasher = _asyncio.create_task(_backfill_hashes_once())
     # Yarim kalmis belgeleri kaldigi yerden isle (sunucu uyuyup uyandiginda sart)
     try:
         from app.workers.tasks import resume_unfinished
@@ -169,6 +179,7 @@ async def lifespan(app: FastAPI):
     yield
     flusher.cancel()
     backuper.cancel()
+    hasher.cancel()
     try:
         await _flush_usage()
     except Exception:  # noqa
@@ -215,6 +226,47 @@ async def _migrate_document_collections(conn):
                ON CONFLICT (document_id, collection_id) DO NOTHING""")
         await conn.execute(
             "INSERT INTO typdf_migrations (name) VALUES ('document_collections_backfill') ON CONFLICT (name) DO NOTHING")
+
+
+async def _migrate_reading_and_versions(conn):
+    """Idempotent. documents: okuma konumu sutunlari (TO-1); draft_versions: taslak surum gecmisi (TO-3)."""
+    await conn.execute("ALTER TABLE documents ADD COLUMN IF NOT EXISTS last_page int")
+    await conn.execute("ALTER TABLE documents ADD COLUMN IF NOT EXISTS num_pages int")
+    await conn.execute("ALTER TABLE documents ADD COLUMN IF NOT EXISTS progress_pct int")
+    await conn.execute("ALTER TABLE documents ADD COLUMN IF NOT EXISTS reading_at timestamptz")
+    await conn.execute("ALTER TABLE documents ADD COLUMN IF NOT EXISTS media_pos real")
+    await conn.execute("ALTER TABLE documents ADD COLUMN IF NOT EXISTS reading_device text")
+    await conn.execute(
+        "CREATE TABLE IF NOT EXISTS draft_versions ("
+        " id bigserial PRIMARY KEY,"
+        " collection_id uuid NOT NULL REFERENCES collections(id) ON DELETE CASCADE,"
+        " rev int NOT NULL,"
+        " blocks jsonb NOT NULL,"
+        " created_at timestamptz NOT NULL DEFAULT now(),"
+        " UNIQUE (collection_id, rev))")
+    await conn.execute(
+        "CREATE INDEX IF NOT EXISTS draft_versions_col_idx ON draft_versions (collection_id, created_at DESC)")
+
+
+async def _backfill_hashes_once():
+    """Acilistan kisa sure sonra, file_hash bos kaynaklarin sha1'ini bir kez hesaplar (TK-6).
+    typdf_migrations isareti ile yalniz bir kez calisir; hata olursa bir sonraki acilista yeniden dener."""
+    import asyncio as _asyncio
+    await _asyncio.sleep(90)
+    try:
+        from app.db.session import get_pool
+        from app.api.documents import backfill_file_hashes
+        pool = await get_pool()
+        async with pool.acquire() as conn:
+            done = await conn.fetchval("SELECT 1 FROM typdf_migrations WHERE name='file_hash_backfill'")
+            if done:
+                return
+            res = await backfill_file_hashes(conn, user_id=None, limit=500)
+            if not res.get("remaining"):
+                await conn.execute(
+                    "INSERT INTO typdf_migrations (name) VALUES ('file_hash_backfill') ON CONFLICT (name) DO NOTHING")
+    except Exception as e:  # noqa
+        print("file_hash doldurma basarisiz:", repr(e))
 
 
 async def _flush_usage():
@@ -335,10 +387,15 @@ async def usage_status(user=Depends(current_user)):
     owner = bool(user.get("is_owner"))
     me = {"used": usage.user_used(str(user["id"])), "limit": usage.user_limit(),
           "owner": owner, "reset_local": usage.reset_local()}
-    # Servis (saglayici) ozeti: model adi vermeden aktif | yogun | doldu
-    sts = [usage.status(m) for m in pool_models()]
-    service = ("doldu" if all(s in ("gunluk_doldu", "yok") for s in sts)
-               else "yogun" if not any(s == "aktif" for s in sts) else "aktif")
+    # Servis (saglayici) ozeti: model adi vermeden aktif | yogun | doldu.
+    # TK ajani usage.service_state() yaziyorsa (ek: kac dk sonra acilir) onu kullan; yoksa yerel hesap.
+    service: object
+    try:
+        service = usage.service_state()  # type: ignore[attr-defined]
+    except Exception:  # noqa - fonksiyon yoksa ya da hata verirse
+        sts = [usage.status(m) for m in pool_models()]
+        service = ("doldu" if all(s in ("gunluk_doldu", "yok") for s in sts)
+                   else "yogun" if not any(s == "aktif" for s in sts) else "aktif")
     if not owner:
         return {
             "day": snap["day"],
@@ -383,3 +440,4 @@ app.include_router(study.router)
 app.include_router(collections.router)
 app.include_router(research.router)
 app.include_router(drafts.router)
+app.include_router(exports.router)

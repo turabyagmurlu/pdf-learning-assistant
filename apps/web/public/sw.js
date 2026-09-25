@@ -10,14 +10,20 @@
  * - Next RSC istekleri ele alınmaz: çevrimdışıyken Next tam sayfa yüklemeye düşer,
  *   o da yukarıdaki çevrimdışı yanıtına gelir.
  *
+ * - Web Share Target (Android): manifest `share_target` POST /share'i buraya getirir;
+ *   form verisi (başlık, metin, link, dosyalar) "typdf-share" önbelleğine yazılır ve
+ *   /share?received=1 sayfasına yönlendirilir; sayfa bunları okuyup kaynak olarak ekler.
+ *   iOS Safari paylaşım hedefini desteklemez (orada "Panodan yapıştır" kullanılır).
+ *
  * Yeni sürümde VERSION'ı artır: eski kabuk/statik önbellekleri activate'te silinir.
  * "typdf-audio" (defterdeki sesli özet önbelleği) ASLA silinmez.
  */
-const VERSION = "v3";
+const VERSION = "v4";
 const STATIC = `typdf-static-${VERSION}`;
 const PAGES = `typdf-pages-${VERSION}`;
 const CDN = "typdf-cdn-v1";            // sürümlü üçüncü taraf dosyalar (pdf.js worker)
-const KEEP = new Set([STATIC, PAGES, CDN, "typdf-audio"]);
+const SHARE = "typdf-share";           // paylaşım hedefinden gelen geçici veri
+const KEEP = new Set([STATIC, PAGES, CDN, SHARE, "typdf-audio"]);
 const SHELL = ["/notebooks", "/library", "/search"];
 const PAGE_LIMIT = 40;
 
@@ -114,10 +120,36 @@ async function staleWhileRevalidate(req) {
   return hit || (await net) || Response.error();
 }
 
+/* Paylaşım hedefi: POST /share (multipart) -> önbelleğe yaz -> 303 /share?received=1 */
+async function handleShare(req) {
+  try {
+    const fd = await req.formData();
+    const c = await caches.open(SHARE);
+    // eski paylaşım kalıntılarını temizle
+    for (const k of await c.keys()) await c.delete(k);
+    const meta = { title: String(fd.get("title") || ""), text: String(fd.get("text") || ""),
+                   url: String(fd.get("url") || ""), files: [], at: Date.now() };
+    const files = fd.getAll("files");
+    for (let i = 0; i < files.length; i++) {
+      const f = files[i];
+      if (!f || typeof f === "string" || !f.size) continue;
+      const key = `/share/file/${i}`;
+      await c.put(key, new Response(f, { headers: { "Content-Type": f.type || "application/octet-stream" } }));
+      meta.files.push({ key, name: f.name || `paylasim-${i + 1}`, type: f.type || "", size: f.size });
+    }
+    await c.put("/share/meta", new Response(JSON.stringify(meta), { headers: { "Content-Type": "application/json" } }));
+  } catch (_) { /* okunamadıysa sayfa boş açılır, kullanıcı elle ekler */ }
+  return Response.redirect("/share?received=1", 303);
+}
+
 self.addEventListener("fetch", (e) => {
   const req = e.request;
-  if (req.method !== "GET") return;
   const url = new URL(req.url);
+  if (req.method === "POST" && url.origin === self.location.origin && url.pathname === "/share") {
+    e.respondWith(handleShare(req));
+    return;
+  }
+  if (req.method !== "GET") return;
 
   // pdf.js worker (ve ayni paketteki cmap/font dosyalari): surumlu adres, degismez
   if (url.origin === "https://unpkg.com" && url.pathname.startsWith("/pdfjs-dist@")) {

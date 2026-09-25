@@ -2,6 +2,7 @@ import "../styles/globals.css";
 import type { Metadata, Viewport } from "next";
 import { Fraunces, Inter } from "next/font/google";
 import PwaRegister from "@/components/PwaRegister";
+import VisualViewportVars from "@/components/VisualViewportVars";
 import { THEME_BOOT_SCRIPT } from "@/lib/theme-boot";
 
 // Baslik: modern, yuksek kontrastli serif. Govde: temiz sans.
@@ -33,6 +34,8 @@ export const metadata: Metadata = {
 // Durum cubugu rengi sistem temasina gore; kullanici temayi elle degistirirse
 // ThemeToggle.applyTheme tum theme-color etiketlerini gunceller.
 // Yakinlastirma engellenmez (maximumScale / userScalable verilmez; WCAG 1.4.4).
+// interactiveWidget: klavye acilinca duzen kuculsun (Android/Chrome); iOS icin
+// hooks/useVisualViewport --vvh / --kb degiskenlerini verir.
 export const viewport: Viewport = {
   themeColor: [
     { media: "(prefers-color-scheme: light)", color: "#f6b45c" },
@@ -42,6 +45,7 @@ export const viewport: Viewport = {
   width: "device-width",
   initialScale: 1,
   viewportFit: "cover",
+  interactiveWidget: "resizes-content",
 };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
@@ -52,6 +56,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
       </head>
       <body>
         {children}
+        <VisualViewportVars />
         <PwaRegister />
       </body>
     </html>

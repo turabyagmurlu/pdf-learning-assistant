@@ -30,9 +30,10 @@ class Settings(BaseSettings):
     # Auth
     jwt_secret: str = "dev-secret-change-me"
     jwt_expire_minutes: int = 10080
-    reset_secret: str = ""          # KULLANILMIYOR (eski ortak kurtarma kodu kaldirildi)
 
-    # E-posta (sifre sifirlama baglantisi) — Resend HTTP API
+    # E-posta (sifre sifirlama baglantisi) — Resend HTTP API. Ucu de bos ise e-posta kapali:
+    # /auth/config mail_enabled=false doner, web "Sifremi unuttum"da sahip kurtarma komutunu anlatir
+    # (python -m app.scripts.set_owner_password).
     resend_api_key: str = ""
     mail_from: str = ""             # ör. "TY PDF <noreply@alanadin.com>" (Resend'de dogrulanmis alan)
     web_url: str = ""               # ör. "https://typdf.vercel.app" (sifirlama baglantisinin koku)

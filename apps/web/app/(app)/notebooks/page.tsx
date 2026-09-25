@@ -6,8 +6,10 @@ import PageHeader from "@/components/PageHeader";
 import { CardSkeleton } from "@/components/Skeleton";
 import { useRefreshOn } from "@/components/Wake";
 import { toast } from "@/components/Toast";
+import Button from "@/components/ui/Button";
+import { topicColor } from "@/lib/palette";
 import {
-  Notebook, Plus, FileText, Highlighter, PenLine, Check, BookMarked, Share2, Clock, X, Loader2, Sparkles, MessageSquare, Upload,
+  Notebook, Plus, FileText, Highlighter, PenLine, Check, BookMarked, Share2, Clock, X, Loader2, Sparkles, MessageSquare, Upload, HelpCircle,
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 
@@ -18,14 +20,12 @@ type NB = {
   topics?: { label: string; n: number }[]; types?: [string, number][];
   last_chat?: string | null; last_chat_at?: string | null; chat_count?: number;
 };
-const TOPIC_BAR = ["bg-violet-500", "bg-emerald-500", "bg-orange-500", "bg-sky-500", "bg-pink-500", "bg-amber-500", "bg-stone-400"];
-const TYPE_BAR: Record<string, string> = {
-  pdf: "bg-violet-500", youtube: "bg-red-500", audio: "bg-purple-400", docx: "bg-blue-500", xlsx: "bg-emerald-500", csv: "bg-emerald-500",
-  pptx: "bg-orange-500", web: "bg-sky-500", html: "bg-sky-500", text: "bg-amber-500", md: "bg-amber-500", txt: "bg-amber-500", rtf: "bg-amber-500", epub: "bg-fuchsia-500",
-};
 const cx = (...a: (string | false | null | undefined)[]) => a.filter(Boolean).join(" ");
 
+/** Eski surumden kalan anahtar; artik okunmuyor (TK-4: defter varsa kart zaten gizli). */
 const WELCOME_KEY = "typdf.welcome.dismissed";
+/** Menuden "Nasıl çalışır?" icin: window.dispatchEvent(new Event("typdf:how-it-works")) ya da /notebooks?help=1 */
+const HOW_IT_WORKS_EVENT = "typdf:how-it-works";
 /** Ornek defter: herkese acik, kisa, Turkce bir Vikipedi maddesi */
 const SAMPLE = { title: "Örnek: Uyku ve öğrenme", url: "https://tr.wikipedia.org/wiki/Uyku" };
 
@@ -65,12 +65,16 @@ export default function NotebooksPage() {
   useRefreshOn(load);
 
   useEffect(() => {
-    try { setWelcome(localStorage.getItem(WELCOME_KEY) !== "1"); } catch { setWelcome(true); }
+    const q = new URLSearchParams(window.location.search);
     // Hizli gecis paletinden "Yeni defter": /notebooks?new=1
-    if (new URLSearchParams(window.location.search).get("new") === "1") setCreating(true);
+    if (q.get("new") === "1") setCreating(true);
+    // Menuden "Nasıl çalışır?": /notebooks?help=1
+    if (q.get("help") === "1") setWelcome(true);
     const onNew = () => { setCreateErr(""); setCreating(true); };
+    const onHelp = () => setWelcome(true);
     window.addEventListener("typdf:new-notebook", onNew);
-    return () => window.removeEventListener("typdf:new-notebook", onNew);
+    window.addEventListener(HOW_IT_WORKS_EVENT, onHelp);
+    return () => { window.removeEventListener("typdf:new-notebook", onNew); window.removeEventListener(HOW_IT_WORKS_EVENT, onHelp); };
   }, []);
 
   function dismissWelcome() {
@@ -127,16 +131,14 @@ export default function NotebooksPage() {
                placeholder="Defter adı (ör. Osmanlı ekonomisi)" disabled={busy}
                aria-invalid={!!createErr} aria-describedby={createErr ? fid + "-err" : undefined}
                className={cx("min-w-0 rounded-xl border bg-surface px-3 py-2 text-sm outline-none focus:border-accent-purple", center ? "flex-1" : "w-56")} />
-        <button type="submit" disabled={busy} aria-label="Defteri oluştur"
-                className="flex h-10 min-w-[40px] items-center justify-center gap-1 rounded-xl bg-accent-purple px-3 text-sm text-on-accent disabled:opacity-60">
+        <Button type="submit" variant="primary" disabled={busy} aria-label="Defteri oluştur" icon={!center} className={center ? "px-3" : ""}>
           {busy ? <Loader2 size={16} className="animate-spin" aria-hidden="true" /> : <Check size={16} aria-hidden="true" />}
           {center && <span>Oluştur</span>}
-        </button>
+        </Button>
         {!center && (
-          <button type="button" onClick={() => { setCreating(false); setCreateErr(""); }} disabled={busy} aria-label="Vazgeç"
-                  className="flex h-10 w-10 items-center justify-center rounded-xl border text-text-secondary hover:bg-surface-muted">
+          <Button variant="secondary" icon onClick={() => { setCreating(false); setCreateErr(""); }} disabled={busy} aria-label="Vazgeç">
             <X size={16} />
-          </button>
+          </Button>
         )}
       </div>
       {createErr && <p id={fid + "-err"} role="alert" className="text-sm text-danger">{createErr}</p>}
@@ -144,6 +146,7 @@ export default function NotebooksPage() {
   );
 
   const empty = list !== null && list.length === 0 && !loadErr;
+  // TK-4: defter varsa karsilama karti gizli; yalniz "Nasıl çalışır?" ile acilir.
   const showWelcome = list !== null && !loadErr && (empty || welcome);
 
   return (
@@ -152,33 +155,38 @@ export default function NotebooksPage() {
                   subtitle="Her defter bir araştırma: kaynaklar, kaynaklı sohbet, notlar ve taslağın bir arada."
                   right={
                     empty ? undefined : creating ? createForm(false) : (
-                      <button type="button" onClick={startCreate}
-                              className="flex min-h-[40px] items-center gap-1.5 rounded-xl bg-accent-purple px-4 text-sm text-on-accent">
-                        <Plus size={16} aria-hidden="true" /> Yeni defter
-                      </button>
+                      <div className="flex items-center gap-1">
+                        {!welcome && (
+                          <Button variant="ghost" size="sm" onClick={() => setWelcome(true)} aria-expanded={false}>
+                            <HelpCircle size={15} aria-hidden="true" /> Nasıl çalışır?
+                          </Button>
+                        )}
+                        <Button variant="primary" onClick={startCreate}>
+                          <Plus size={16} aria-hidden="true" /> Yeni defter
+                        </Button>
+                      </div>
                     )
                   } />
 
       {loadErr && (
         <div role="alert" className="mb-4 flex flex-wrap items-center justify-between gap-2 rounded-xl border border-warning/40 bg-warning/10 px-4 py-3 text-sm">
           <span>Defterlerin silinmedi, sadece yüklenemedi. {loadErr}</span>
-          <button type="button" onClick={load} className="min-h-[40px] rounded-lg bg-accent-purple px-3 text-on-accent">Tekrar dene</button>
+          <Button variant="secondary" size="sm" onClick={load}>Tekrar dene</Button>
         </div>
       )}
 
       {showWelcome && (
         <section aria-labelledby={fid + "-w"} className="relative mb-6 rounded-2xl border bg-surface p-5 md:p-6">
           {!empty && (
-            <button type="button" onClick={dismissWelcome} aria-label="Nasıl çalışır kartını kapat"
-                    className="absolute right-2 top-2 flex h-10 w-10 items-center justify-center rounded-lg text-text-secondary hover:bg-surface-muted">
+            <Button variant="ghost" icon onClick={dismissWelcome} aria-label="Nasıl çalışır kartını kapat" className="absolute right-2 top-2">
               <X size={16} />
-            </button>
+            </Button>
           )}
-          <h2 id={fid + "-w"} className="font-heading text-xl">Nasıl çalışır?</h2>
+          <h2 id={fid + "-w"} className="font-heading text-title">Nasıl çalışır?</h2>
           <ol className="mt-4 grid gap-3 sm:grid-cols-3">
             {STEPS.map(({ Icon, t, d }, i) => (
-              <li key={t} className="flex gap-3 rounded-xl bg-surface-muted/60 p-3">
-                <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-accent-purple/10 text-sm font-medium text-accent-purple" aria-hidden="true">{i + 1}</span>
+              <li key={t} className="flex gap-3 rounded-lg bg-surface-muted/60 p-3">
+                <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-accent-soft text-sm font-medium text-accent-purple" aria-hidden="true">{i + 1}</span>
                 <span className="min-w-0">
                   <span className="flex items-center gap-1.5 text-sm font-medium"><Icon size={15} aria-hidden="true" className="text-accent-purple" /> {t}</span>
                   <span className="mt-0.5 block text-xs leading-relaxed text-text-secondary">{d}</span>
@@ -187,20 +195,18 @@ export default function NotebooksPage() {
             ))}
           </ol>
           <p className="mt-3 text-xs leading-relaxed text-text-secondary">
-            Soru sormak gibi yapay zekâ işleri <b className="font-medium text-text-primary">⚡1</b> rozetiyle gösterilir ve günlük kullanımından düşer; okuma, arama ve kayıtlı cevaplar ücretsizdir.
+            Soru sormak gibi yapay zekâ işleri <b className="font-medium text-text-primary">⚡1</b> rozetiyle gösterilir (1 Gemini çağrısı); okuma, arama ve kayıtlı cevaplar Gemini&apos;ye gitmez.
           </p>
           <div className="mt-4 flex flex-wrap items-center gap-2">
             {!empty && (
-              <button type="button" onClick={startCreate}
-                      className="flex min-h-[44px] items-center gap-1.5 rounded-xl bg-accent-purple px-4 text-sm text-on-accent">
+              <Button variant="secondary" size="lg" onClick={startCreate}>
                 <Plus size={16} aria-hidden="true" /> Yeni defter aç
-              </button>
+              </Button>
             )}
-            <button type="button" onClick={trySample} disabled={sampleBusy}
-                    className="flex min-h-[44px] items-center gap-1.5 rounded-xl border px-4 text-sm hover:border-accent-purple/50 hover:text-accent-purple disabled:opacity-60">
+            <Button variant={empty ? "primary" : "secondary"} size="lg" onClick={trySample} disabled={sampleBusy}>
               {sampleBusy ? <Loader2 size={16} className="animate-spin" aria-hidden="true" /> : <Sparkles size={16} aria-hidden="true" />}
               Örnek defterle dene
-            </button>
+            </Button>
             <span className="text-xs text-text-secondary">“Uyku” Vikipedi maddesiyle hazır bir defter açar.</span>
           </div>
         </section>
@@ -225,11 +231,12 @@ export default function NotebooksPage() {
             <button type="button" key={nb.id} onClick={() => router.push("/collections/" + nb.id)}
                     aria-label={`${nb.title} defterini aç: ${nb.doc_count} kaynak`}
                     className="lift group flex flex-col rounded-2xl border bg-surface p-5 text-left hover:border-accent-purple/40">
-              <h3 className="line-clamp-2 font-heading text-[22px] leading-tight">{nb.title}</h3>
+              <h3 className="line-clamp-2 font-heading text-title leading-tight">{nb.title}</h3>
               {(() => {
+                // TS-6: renk yalniz konuyu gosterir; konu yoksa cubuk notr (tur rengi kullanilmaz).
                 const segs = nb.topics?.length
-                  ? nb.topics.map((t, i) => ({ k: t.label, n: t.n, c: TOPIC_BAR[i % TOPIC_BAR.length] }))
-                  : (nb.types || []).map(([k, n]) => ({ k, n, c: TYPE_BAR[k] || "bg-violet-500" }));
+                  ? nb.topics.map((t, i) => ({ k: t.label, n: t.n, c: topicColor(i).bar }))
+                  : [];
                 return segs.length ? (
                   <div className="mt-3 flex h-1.5 w-full gap-0.5" aria-hidden="true" title={nb.topics?.length ? nb.topics.map((t) => `${t.label} (${t.n})`).join(" · ") : ""}>
                     {segs.map((g) => <div key={g.k} className={cx("h-full rounded-full", g.c)} style={{ flexGrow: g.n }} />)}
@@ -255,7 +262,7 @@ export default function NotebooksPage() {
                 <span className="ml-auto flex shrink-0 gap-1">
                   {([["Sözlük", nb.has_glossary, BookMarked], ["Kavram haritası", nb.has_concept_map, Share2], ["Zaman çizelgesi", nb.has_timeline, Clock]] as [string, boolean, LucideIcon][]).map(([label, ok, Icon]) => (
                     <span key={label} title={label + (ok ? " hazır" : " henüz oluşturulmadı")}
-                          className={cx("rounded-full p-1", ok ? "bg-green-500/10 text-green-800 dark:text-green-300" : "text-text-secondary/50")}>
+                          className={cx("rounded-full p-1", ok ? "bg-success-bg text-success" : "text-text-secondary")}>
                       <Icon size={11} aria-hidden="true" />
                       <span className="sr-only">{label + (ok ? " hazır" : " henüz oluşturulmadı")}</span>
                     </span>

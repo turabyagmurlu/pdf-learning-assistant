@@ -1,13 +1,14 @@
-/** Desteklenen kaynak turleri (yukleme ve gosterim icin tek yer). */
-export const ACCEPT =
-  ".pdf,.docx,.xlsx,.xlsm,.csv,.tsv,.pptx,.md,.markdown,.txt,.rtf,.epub,.html,.htm," +
-  ".jpg,.jpeg,.png,.webp,.tif,.tiff,.mp3,.m4a,.wav,.ogg,.opus,.aac,.flac,.webm," +
-  "application/pdf,text/plain,text/markdown,text/csv,image/*,audio/*";
-
-const EXT = ["pdf", "docx", "xlsx", "xlsm", "csv", "tsv", "pptx", "md", "markdown", "txt", "rtf", "epub", "html", "htm",
-  "jpg", "jpeg", "png", "webp", "tif", "tiff", "bmp", "gif",
-  "mp3", "m4a", "wav", "ogg", "oga", "opus", "aac", "flac", "webm", "amr", "3gp"];
+/**
+ * Desteklenen kaynak turleri (yukleme ve gosterim icin tek yer).
+ * Uzanti listeleri tek kaynaktan turetilir; ACCEPT (input accept=) ve rejectReason ayni listeyi kullanir.
+ */
+const DOC_EXT = ["pdf", "docx", "xlsx", "xlsm", "csv", "tsv", "pptx", "md", "markdown", "txt", "rtf", "epub", "html", "htm"];
+const IMAGE_EXT = ["jpg", "jpeg", "png", "webp", "tif", "tiff", "bmp", "gif"];
 const AUDIO_EXT = ["mp3", "m4a", "wav", "ogg", "oga", "opus", "aac", "flac", "webm", "amr", "3gp"];
+const EXT = [...DOC_EXT, ...IMAGE_EXT, ...AUDIO_EXT];
+
+export const ACCEPT =
+  EXT.map((e) => "." + e).join(",") + ",application/pdf,text/plain,text/markdown,text/csv,image/*,audio/*";
 const OLD: Record<string, string> = {
   doc: "Word .doc eski biçim; Word'de 'Farklı kaydet → .docx' yapıp yükle.",
   xls: "Excel .xls eski biçim; '.xlsx' olarak kaydedip yükle.",
@@ -18,7 +19,7 @@ const OLD: Record<string, string> = {
 export const MAX_MB = 50;
 export const AUDIO_MAX_MB = 100;
 
-export function fileExt(name: string) {
+function fileExt(name: string) {
   const i = (name || "").lastIndexOf(".");
   return i >= 0 ? name.slice(i + 1).toLowerCase() : "";
 }
@@ -39,7 +40,6 @@ export function rejectReason(f: File): string | null {
 export const KIND_LABEL: Record<string, string> = {
   pdf: "PDF", youtube: "Video", docx: "Word", xlsx: "Excel", csv: "Tablo", pptx: "Sunum",
   md: "Markdown", txt: "Metin", rtf: "Metin", epub: "E-kitap", html: "Web", web: "Web",
-  // "Not" okuyucudaki notlarla karisiyordu; yapistirilan metin kaynagi:
   text: "Yapıştırılan metin", audio: "Ses kaydı", image: "Görsel",
 };
 

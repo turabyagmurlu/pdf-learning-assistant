@@ -6,10 +6,16 @@
 import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { Loader2, Send, Plus, X, Trash2, Sparkles, RefreshCw, PenLine, Scale, Copy, Check, MessageSquare, RotateCcw } from "lucide-react";
-import { api } from "@/lib/api";
+import { api, API, getToken, errorMessage } from "@/lib/api";
+import { docHref } from "@/lib/links";
+import { mdToPlain } from "@/lib/markdown";
 import CitedText, { citeLoc } from "@/components/CitedText";
 import SourceIcon, { sourceTint } from "@/components/SourceIcon";
 import { Cost, costTitle, ErrNote, Err, toErr } from "@/components/CostBadge";
+import { toast } from "@/components/Toast";
+
+/** Sohbet silme 10 sn ertelenir ("Geri al" icin); sekmeden cikilsa da zamanlayici calisir. */
+const UNDO_MS = 10000;
 
 export type SGroup = { kind: string; label: string; questions: { q: string; why: string }[] };
 export type Sugg = { theme: string; groups: SGroup[]; source: string };
@@ -27,11 +33,13 @@ function toThread(msgs: any[]): Turn[] {
 }
 
 export default function ChatTab({ id, colTitle, readyN, active, chatId, setChatUrl, sugg, suggBusy, loadSuggestions,
-  pendingAsk, onPendingDone, onToDraft, onCompare, onAsked }: {
+  pendingAsk, onPendingDone, prefill, onPrefillDone, onToDraft, onCompare, onAsked }: {
   id: string; colTitle: string; readyN: number; active: boolean;
   chatId: string | null; setChatUrl: (cid: string | null) => void;
   sugg: Sugg | null; suggBusy: boolean; loadSuggestions: (refresh?: boolean) => void;
   pendingAsk: string | null; onPendingDone: () => void;
+  /** Soru kutusuna on-dolgu (okuyucudan "Tüm deftere sor", ?q=); sorulmaz, sen gonderirsin */
+  prefill?: string | null; onPrefillDone?: () => void;
   onToDraft: (t: Turn) => void; onCompare: (q: string) => void; onAsked: () => void;
 }) {
   const router = useRouter();
@@ -47,29 +55,78 @@ export default function ChatTab({ id, colTitle, readyN, active, chatId, setChatU
   const [announce, setAnnounce] = useState("");
   const current = useRef<string | null>(null);     // ekranda acik olan sohbet
   const inited = useRef(false);
+  const inputRef = useRef<HTMLInputElement>(null);
+  // H-6: silinmesi bekleyen sohbetler (10 sn "Geri al"); listeden hemen gizlenir, sunucuya sonra gider
+  const pendingDel = useRef(new Map<string, ReturnType<typeof setTimeout>>());
+  const [hidden, setHidden] = useState<Set<string>>(new Set());
 
   async function loadChats(openLatest = false) {
     try {
       const list = await api(`/collections/${id}/chats`, {}, 1);
       setChats(list);
       if (openLatest && list.length && current.current === null) await openChat(list[0].id);
-    } catch { setChats([]); }
+    } catch (e) {
+      if (chats === null) setChats([]);
+      toast.error(errorMessage(e, "Sohbet listesi alınamadı; bağlantını kontrol edip tekrar dene."));
+    }
   }
   async function openChat(cid: string) {
     try {
       const r = await api(`/collections/${id}/chats/${cid}`, {}, 1);
       setThread(toThread(r.messages)); current.current = cid; setChatUrl(cid);
       setChatsOpen(false); setSuggOpen(false); setAskErr(null);
-    } catch { if (current.current === cid) current.current = null; }
+    } catch (e) {
+      if (current.current === cid) current.current = null;
+      toast.error(errorMessage(e, "Sohbet açılamadı; bağlantını kontrol edip tekrar dene."));
+    }
   }
   function newChat() {
     setThread([]); current.current = null; setChatUrl(null); setChatsOpen(false); setSuggOpen(true); setAskErr(null);
   }
-  async function deleteChat(cid: string) {
-    try { await api(`/collections/${id}/chats/${cid}`, { method: "DELETE" }, 1); } catch {}
-    if (cid === current.current) newChat();
+  async function commitDelete(cid: string) {
+    pendingDel.current.delete(cid);
+    try {
+      await api(`/collections/${id}/chats/${cid}`, { method: "DELETE" }, 1);
+    } catch (e) {
+      // Silinemedi: sohbet listeye geri gelir, sebep bildirilir
+      setHidden((h) => { const n = new Set(h); n.delete(cid); return n; });
+      toast.error(errorMessage(e, "Sohbet silinemedi; bağlantını kontrol edip tekrar dene."));
+      return;
+    }
     loadChats();
   }
+  function deleteChat(cid: string) {
+    if (pendingDel.current.has(cid)) return;
+    const title = chats?.find((c) => c.id === cid)?.title || "Sohbet";
+    const wasCurrent = cid === current.current;
+    setHidden((h) => new Set(h).add(cid));
+    if (wasCurrent) newChat();
+    pendingDel.current.set(cid, setTimeout(() => commitDelete(cid), UNDO_MS));
+    toast(`“${title.slice(0, 40)}” silindi`, {
+      ms: UNDO_MS,
+      action: { label: "Geri al", run: () => {
+        const t = pendingDel.current.get(cid);
+        if (!t) return;                       // sure dolmus, sunucuya gitmis
+        clearTimeout(t); pendingDel.current.delete(cid);
+        setHidden((h) => { const n = new Set(h); n.delete(cid); return n; });
+        if (wasCurrent) openChat(cid);
+        toast("Sohbet geri alındı");
+      } },
+    });
+  }
+  // Sayfadan ayrilirken bekleyen silmeler hemen gonderilir (keepalive); bilesen kalkinca da
+  useEffect(() => {
+    const flush = () => {
+      pendingDel.current.forEach((t, cid) => {
+        clearTimeout(t);
+        try { fetch(`${API}/collections/${id}/chats/${cid}`, { method: "DELETE", keepalive: true, headers: { Authorization: "Bearer " + (getToken() || "") } }); } catch {}
+      });
+      pendingDel.current.clear();
+    };
+    window.addEventListener("pagehide", flush);
+    return () => { window.removeEventListener("pagehide", flush); flush(); };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [id]);
 
   // Ilk acilis: adreste sohbet varsa onu, yoksa son sohbeti ac (bekleyen ilk soru varsa bos sohbette kal)
   useEffect(() => {
@@ -94,6 +151,14 @@ export default function ChatTab({ id, colTitle, readyN, active, chatId, setChatU
     ask(text);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [active, pendingAsk]);
+
+  // Okuyucudan tasinan soru: kutuya yazilir, odaklanir; gondermek sana kalir
+  useEffect(() => {
+    if (!active || !prefill) return;
+    setQ(prefill); onPrefillDone?.();
+    setTimeout(() => inputRef.current?.focus(), 50);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [active, prefill]);
 
   useEffect(() => {
     if (!chatsOpen) return;
@@ -141,7 +206,7 @@ export default function ChatTab({ id, colTitle, readyN, active, chatId, setChatU
                 className="flex min-h-[40px] min-w-0 items-center gap-1.5 rounded-lg border bg-surface px-3 text-sm hover:border-accent-purple/40">
           <MessageSquare size={14} className="shrink-0 text-accent-purple" />
           <span className="truncate">{current_title}</span>
-          <span className="shrink-0 text-xs text-text-secondary">· {chats?.length || 0} kayıtlı</span>
+          <span className="shrink-0 text-xs text-text-secondary">· {(chats || []).filter((c) => !hidden.has(c.id)).length} kayıtlı</span>
         </button>
         {thread.length > 0 && (
           <button onClick={newChat} className="flex min-h-[40px] shrink-0 items-center gap-1 rounded-lg px-2.5 text-sm text-accent-purple hover:bg-accent-purple/10">
@@ -152,7 +217,7 @@ export default function ChatTab({ id, colTitle, readyN, active, chatId, setChatU
           <div className="absolute left-0 top-full z-20 mt-1 max-h-80 w-full max-w-md overflow-y-auto rounded-xl border bg-surface p-1.5 shadow-lg">
             {!chats?.length ? (
               <p className="p-3 text-sm text-text-secondary">Henüz kayıtlı sohbet yok. Sorduğun her şey burada saklanacak.</p>
-            ) : chats.map((c) => (
+            ) : chats.filter((c) => !hidden.has(c.id)).map((c) => (
               <div key={c.id} className={cx("group flex items-center gap-2 rounded-lg px-2.5 py-1 text-sm hover:bg-surface-muted",
                                               c.id === current.current && "bg-accent-purple/10")}>
                 <button onClick={() => openChat(c.id)} className="min-h-[40px] min-w-0 flex-1 text-left">
@@ -250,8 +315,8 @@ export default function ChatTab({ id, colTitle, readyN, active, chatId, setChatU
                 </div>
               )}
               <CitedText text={t.answer} sources={t.sources}
-                         className="whitespace-pre-wrap font-heading text-[15.5px] leading-7"
-                         onCite={(_n, s) => { if (s?.document_id) router.push("/documents/" + s.document_id + (s.page ? "?page=" + s.page : "")); }} />
+                         className="font-reading"
+                         onCite={(_n, s) => { if (s?.document_id) router.push(docHref(s.document_id, { page: s.page, from: id })); }} />
               <div className="mt-3 flex flex-wrap items-center gap-1.5 border-t pt-3">
                 {(() => {
                   const uniq = Array.from(new Map(t.sources.map((s: any) => [s.document_id, s])).values()) as any[];
@@ -276,7 +341,7 @@ export default function ChatTab({ id, colTitle, readyN, active, chatId, setChatU
                       {open && (
                         <div className="mt-2 flex flex-wrap gap-1.5">
                           {t.sources.map((s: any, j: number) => (
-                            <button key={j} onClick={() => router.push("/documents/" + s.document_id + (s.page ? "?page=" + s.page : ""))}
+                            <button key={j} onClick={() => router.push(docHref(s.document_id, { page: s.page, from: id }))}
                                     title={s.snippet || s.title}
                                     className="min-h-[36px] rounded-full border bg-surface px-2.5 py-1 text-xs text-text-secondary hover:border-accent-purple/50 hover:text-accent-purple">
                               K{j + 1} · {(s.title || "").slice(0, 40)} · {citeLoc(s)}
@@ -298,7 +363,7 @@ export default function ChatTab({ id, colTitle, readyN, active, chatId, setChatU
                       <Scale size={12} /> Karşılaştır
                     </button>
                   )}
-                  <button onClick={async () => { try { await navigator.clipboard.writeText(t.answer.replace(/\[K[\d,;\s K]+\]/g, "").trim()); setCopiedIdx(i); setTimeout(() => setCopiedIdx(null), 1500); } catch {} }}
+                  <button onClick={async () => { try { await navigator.clipboard.writeText(mdToPlain(t.answer, () => "").replace(/[ \t]+([.,;:!?])/g, "$1").trim()); setCopiedIdx(i); setTimeout(() => setCopiedIdx(null), 1500); } catch { toast.error("Panoya kopyalanamadı; metni seçip kopyalayabilirsin."); } }}
                           className="flex min-h-[36px] items-center gap-1 rounded-full border px-3 text-xs text-text-secondary hover:border-accent-purple/40 hover:text-accent-purple">
                     {copiedIdx === i ? <Check size={12} /> : <Copy size={12} />} {copiedIdx === i ? "Kopyalandı" : "Kopyala"}
                   </button>
@@ -342,11 +407,11 @@ export default function ChatTab({ id, colTitle, readyN, active, chatId, setChatU
             <Sparkles size={16} />
           </button>
         )}
-        <input value={q} onChange={(e) => setQ(e.target.value)}
+        <input ref={inputRef} value={q} onChange={(e) => setQ(e.target.value)}
                onKeyDown={(e) => { if (e.key === "Enter") ask(); }}
-               aria-label="Kaynaklarına soru sor"
+               aria-label="Kaynaklarına soru sor" enterKeyHint="send"
                placeholder={thread.length ? "Devam et ya da yeni bir soru sor…" : firstQ ? `Örn: ${firstQ}` : "Kaynaklarına bir soru sor…"}
-               className="min-h-[44px] min-w-0 flex-1 rounded-xl border bg-surface px-3 py-2.5 text-sm shadow-sm outline-none focus:border-accent-purple" />
+               className="min-h-[44px] min-w-0 flex-1 rounded-xl border bg-surface px-3 py-2.5 text-base shadow-sm outline-none focus:border-accent-purple md:text-sm" />
         <button onClick={() => ask()} disabled={asking} title={costTitle(1) + " (kayıtlı cevaplar ücretsiz)"}
                 className="flex min-h-[44px] items-center gap-1.5 rounded-xl bg-accent-purple px-4 text-sm font-medium text-white disabled:opacity-60">
           {asking ? <Loader2 size={15} className="animate-spin" /> : <Send size={15} />} Sor <Cost n={1} className="bg-white/20" />

@@ -10,6 +10,12 @@ const MIN_PW = 8;
 const WAKE_AFTER_MS = 4000;
 const WAKE_MSG = "Sunucu uyanıyor, ilk açılış ~30 sn sürebilir…";
 
+/**
+ * Giris ekrani. Tek kullanicili kurulumda (GET /auth/config -> registration_open=false)
+ * yalniz e-posta, sifre ve "Giris" cizilir; kayit modu, kayit metinleri ve
+ * "kayitlar kapali" satiri hic render edilmez. Kayit acilirsa (ALLOW_REGISTRATION=true)
+ * ayni sayfa kayit modunu da sunar.
+ */
 export default function LoginPage() {
   const router = useRouter();
   const { dark } = useTheme();
@@ -24,11 +30,16 @@ export default function LoginPage() {
   const [slowSubmit, setSlowSubmit] = useState(false);
   const slowTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [regOpen, setRegOpen] = useState(false);
+  const [mailOn, setMailOn] = useState(false);
 
   useEffect(() => {
     const q = new URLSearchParams(window.location.search);
     fetch(`${API}/auth/config`, { cache: "no-store" }).then((r) => r.json())
-      .then((c) => { setRegOpen(!!c?.registration_open); if (c?.registration_open && q.get("mode") === "register") setMode("register"); })
+      .then((c) => {
+        setRegOpen(!!c?.registration_open);
+        setMailOn(!!c?.mail_enabled);
+        if (c?.registration_open && q.get("mode") === "register") setMode("register");
+      })
       .catch(() => {});
     if (q.get("expired")) setInfo("Oturumun kapandı; kaldığın yere dönmek için tekrar giriş yap.");
     if (q.get("reset")) setInfo("Şifren güncellendi. Yeni şifrenle giriş yapabilirsin.");
@@ -44,6 +55,7 @@ export default function LoginPage() {
   }, []);
 
   function switchMode(m: "login" | "register") {
+    if (m === "register" && !regOpen) return;
     setMode(m); setErr(""); setInfo("");
     const url = new URL(window.location.href);
     if (m === "register") url.searchParams.set("mode", "register"); else url.searchParams.delete("mode");
@@ -55,17 +67,18 @@ export default function LoginPage() {
     if (busy) return;
     setErr(""); setInfo("");
     const cleanEmail = email.trim().toLowerCase();
-    if (mode === "register" && password.length < MIN_PW) {
+    const registering = mode === "register" && regOpen;
+    if (registering && password.length < MIN_PW) {
       setErr(`Şifre en az ${MIN_PW} karakter olmalı.`);
       return;
     }
     setBusy(true);
     slowTimer.current = setTimeout(() => setSlowSubmit(true), WAKE_AFTER_MS);
     try {
-      const body = mode === "register"
+      const body = registering
         ? { name: name.trim(), email: cleanEmail, password }
         : { email: cleanEmail, password };
-      const r = await api(`/auth/${mode}`, { method: "POST", body: JSON.stringify(body) });
+      const r = await api(`/auth/${registering ? "register" : "login"}`, { method: "POST", body: JSON.stringify(body) });
       setToken(r.token);
       // oturum dolup buraya yönlendirildiysek kalınan sayfaya geri dön
       const next = new URLSearchParams(window.location.search).get("next") || "";
@@ -82,6 +95,7 @@ export default function LoginPage() {
   const field = "w-full border-0 border-b bg-transparent px-0 py-3 text-[15px] outline-none placeholder:text-text-secondary/70 focus:border-text-primary transition-colors";
   const label = "text-xs font-medium text-text-secondary";
   const showWake = waking || slowSubmit;
+  const registering = mode === "register" && regOpen;
 
   return (
     <div className="min-h-screen flex flex-col md:flex-row">
@@ -112,13 +126,13 @@ export default function LoginPage() {
         <div className="w-full max-w-sm">
           <h1 className="font-heading text-3xl tracking-[0.18em]">TY PDF</h1>
           <p className="mt-2 text-sm text-text-secondary">
-            {mode === "login" ? "Hoş geldin. Devam etmek için giriş yap." : "Ücretsiz hesabını oluştur."}
+            {registering ? "Hesabını oluştur." : "Hoş geldin. Devam etmek için giriş yap."}
           </p>
 
           {info && <p role="status" className="mt-6 rounded-md bg-surface-muted px-3 py-2 text-sm text-text-primary">{info}</p>}
 
           <form onSubmit={submit} className="mt-8 space-y-6">
-            {mode === "register" && (
+            {registering && (
               <label className="block">
                 <span className={label}>Ad</span>
                 <input className={field} placeholder="Adın" value={name} autoComplete="name"
@@ -134,13 +148,13 @@ export default function LoginPage() {
             <label className="block">
               <span className={label}>Şifre</span>
               <input className={field} placeholder="••••••••" type="password"
-                     autoComplete={mode === "login" ? "current-password" : "new-password"}
-                     minLength={mode === "register" ? MIN_PW : undefined}
-                     aria-describedby={mode === "register" ? "pw-hint" : undefined}
+                     autoComplete={registering ? "new-password" : "current-password"}
+                     minLength={registering ? MIN_PW : undefined}
+                     aria-describedby={registering ? "pw-hint" : undefined}
                      value={password} onChange={(e) => setPassword(e.target.value)} required />
-              {mode === "register" && (
+              {registering && (
                 <span id="pw-hint" className="mt-1.5 block text-xs text-text-secondary">
-                  En az {MIN_PW} karakter. Unutursan e-postana gelen bağlantıyla yenileyebilirsin.
+                  En az {MIN_PW} karakter.{mailOn ? " Unutursan e-postana gelen bağlantıyla yenileyebilirsin." : ""}
                 </span>
               )}
             </label>
@@ -149,7 +163,7 @@ export default function LoginPage() {
 
             <button type="submit" disabled={busy} aria-busy={busy}
                     className="group flex min-h-[48px] w-full items-center justify-between rounded-md bg-text-primary px-5 py-3.5 text-sm font-medium text-background disabled:opacity-60">
-              <span>{mode === "login" ? "Giriş yap" : "Kayıt ol"}</span>
+              <span>{registering ? "Kayıt ol" : "Giriş yap"}</span>
               {busy ? <Loader2 size={16} className="animate-spin" aria-hidden="true" /> : <ArrowRight size={16} className="transition-transform group-hover:translate-x-1" aria-hidden="true" />}
             </button>
 
@@ -157,7 +171,7 @@ export default function LoginPage() {
               <p role="status" className="text-xs text-text-secondary">{WAKE_MSG}</p>
             )}
 
-            {mode === "register" && (
+            {registering && (
               <p className="text-xs leading-relaxed text-text-secondary">
                 Sorularını ve kaynak metinlerini yanıt üretmek için Google Gemini&apos;ye gönderiyoruz.
                 Ücretsiz katmanda Google bu içeriği hizmetlerini geliştirmek için kullanabilir; gizli/kişisel belge yükleme.{" "}
@@ -167,25 +181,23 @@ export default function LoginPage() {
           </form>
 
           <div className="mt-6 flex flex-wrap items-center justify-between gap-x-4 text-sm">
-            {mode === "login" ? (
-              <>
-                <a href="/forgot" className="inline-flex min-h-[44px] items-center text-text-secondary hover:text-text-primary">Şifremi unuttum</a>
-                {regOpen ? (
-                  <button type="button" onClick={() => switchMode("register")}
-                          className="inline-flex min-h-[44px] items-center text-text-secondary hover:text-text-primary">
-                    Hesabın yok mu?&nbsp;<span className="font-medium text-text-primary underline underline-offset-2">Ücretsiz kayıt ol</span>
-                  </button>
-                ) : (
-                  <span className="inline-flex min-h-[44px] items-center text-text-secondary">Yeni kayıtlar şu an kapalı</span>
-                )}
-              </>
-            ) : (
+            {registering ? (
               <>
                 <a href="/gizlilik" className="inline-flex min-h-[44px] items-center text-text-secondary hover:text-text-primary">Gizlilik</a>
                 <button type="button" onClick={() => switchMode("login")}
                         className="inline-flex min-h-[44px] items-center text-text-secondary hover:text-text-primary">
                   Hesabın var mı?&nbsp;<span className="font-medium text-text-primary underline underline-offset-2">Giriş yap</span>
                 </button>
+              </>
+            ) : (
+              <>
+                <a href="/forgot" className="inline-flex min-h-[44px] items-center text-text-secondary hover:text-text-primary">Şifremi unuttum</a>
+                {regOpen && (
+                  <button type="button" onClick={() => switchMode("register")}
+                          className="inline-flex min-h-[44px] items-center text-text-secondary hover:text-text-primary">
+                    Hesabın yok mu?&nbsp;<span className="font-medium text-text-primary underline underline-offset-2">Kayıt ol</span>
+                  </button>
+                )}
               </>
             )}
           </div>

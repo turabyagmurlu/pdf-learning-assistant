@@ -61,7 +61,7 @@ export default function ConnectionsPanel({
                   className="w-full rounded-xl border bg-surface p-3 text-left transition hover:border-accent-purple/50 hover:shadow-sm">
             <div className="flex items-center justify-between gap-2">
               <span className="truncate text-sm font-medium">{c.title}</span>
-              <span className="shrink-0 rounded-full bg-accent-purple/10 px-2 py-0.5 text-xs text-accent-purple">
+              <span className="shrink-0 rounded-full bg-surface-muted px-2 py-0.5 text-xs text-text-secondary">
                 s.{c.page}
               </span>
             </div>

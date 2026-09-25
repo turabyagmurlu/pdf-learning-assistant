@@ -12,11 +12,16 @@
  */
 import { ReactNode, useEffect, useState } from "react";
 import Link from "next/link";
-import { ArrowLeft, ChevronRight } from "lucide-react";
+import { ArrowLeft, ChevronRight, X } from "lucide-react";
 import { api } from "@/lib/api";
 import { useGoBack } from "@/components/BackButton";
 
 export type NotebookCtx = { id: string | null; title: string | null };
+
+/** Kaynağın bağlı olduğu defter kimlikleri (`collection_ids`; eski API'de `collection_id`). */
+export function notebookIdsOf(doc: any): string[] {
+  return idsOf(doc);
+}
 
 function idsOf(doc: any): string[] {
   const raw = doc?.collection_ids;
@@ -81,13 +86,25 @@ export function notebookHref(ctx: NotebookCtx): string {
   return ctx.id ? `/collections/${ctx.id}` : "/library";
 }
 
-export default function ReaderHeader({ doc, ctx, children, className }: {
+const DEVICE_LABEL: Record<string, string> = { phone: "Telefonda", mobile: "Telefonda", tablet: "Tablette", desktop: "Bilgisayarda", web: "Bilgisayarda" };
+
+export default function ReaderHeader({ doc, ctx, children, className, serverPage, serverDevice, currentPage, onGoServerPage }: {
   doc: any; ctx: NotebookCtx; children?: ReactNode; className?: string;
+  /** TO-1: başka cihazda bırakılan sayfa (GET /documents/{id} → reading.page / reading.device). Farklıysa çip gösterilir. */
+  serverPage?: number | null;
+  serverDevice?: string | null;
+  /** Şu an açık sayfa; serverPage ile aynıysa çip çıkmaz */
+  currentPage?: number;
+  /** "Oraya git" — sayfa değiştirme sayfaya (documents/[id]/page.tsx) ait */
+  onGoServerPage?: (page: number) => void;
 }) {
   const goBack = useGoBack(notebookHref(ctx));
   const parentLabel = ctx.id ? (ctx.title || "Defter") : "Kütüphane";
+  const [chipDismissed, setChipDismissed] = useState(false);
+  const showChip = !chipDismissed && !!serverPage && serverPage > 0 && serverPage !== currentPage && !!onGoServerPage;
+  const dev = DEVICE_LABEL[(serverDevice || "").toLowerCase()] || "Başka cihazda";
   return (
-    <header className={"flex shrink-0 items-center gap-1 border-b bg-surface px-1.5 sm:px-2 " + (className || "")}
+    <header className={"flex shrink-0 flex-wrap items-center gap-1 border-b bg-surface px-1.5 sm:px-2 " + (className || "")}
             style={{ paddingTop: "env(safe-area-inset-top)" }}>
       <button type="button" onClick={goBack} aria-label="Geri" title="Geri"
               className="flex h-11 min-w-[44px] shrink-0 items-center justify-center gap-1.5 rounded-lg px-2 text-sm font-medium text-text-primary hover:bg-surface-muted">
@@ -111,6 +128,16 @@ export default function ReaderHeader({ doc, ctx, children, className }: {
         </ol>
       </nav>
       {children}
+      {showChip && (
+        <div role="status" className="order-last flex w-full items-center gap-1 px-1 pb-1.5 pt-0.5 sm:w-auto sm:pb-0 sm:pt-0 lg:order-none lg:w-auto">
+          <button type="button" onClick={() => { onGoServerPage?.(serverPage as number); setChipDismissed(true); }}
+                  className="flex min-h-[36px] items-center gap-1.5 rounded-full border border-accent-purple/40 bg-accent-purple/10 px-3 text-xs font-medium text-text-primary hover:bg-accent-purple/20">
+            {dev} s.{serverPage}&apos;deydin · <span className="text-accent-purple">Oraya git</span>
+          </button>
+          <button type="button" onClick={() => setChipDismissed(true)} aria-label="Bu öneriyi kapat"
+                  className="flex h-9 w-9 items-center justify-center rounded-full text-text-secondary hover:bg-surface-muted"><X size={14} /></button>
+        </div>
+      )}
     </header>
   );
 }

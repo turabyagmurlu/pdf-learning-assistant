@@ -11,6 +11,9 @@ import { Download, Share, X } from "lucide-react";
  */
 const APP_PATHS = /^\/(notebooks|library|search|collections)(\/|$)/;
 
+/** Chrome/Edge'in kurulum olayi (standart tipte yok). */
+type InstallPromptEvent = Event & { prompt: () => Promise<void>; userChoice: Promise<{ outcome: string }> };
+
 function isIosSafari(): boolean {
   const ua = navigator.userAgent || "";
   const ios = /iP(hone|ad|od)/.test(ua) || (navigator.platform === "MacIntel" && (navigator.maxTouchPoints || 0) > 1);
@@ -20,7 +23,7 @@ function isIosSafari(): boolean {
 }
 
 export default function PwaRegister() {
-  const [prompt, setPrompt] = useState<any>(null);
+  const [prompt, setPrompt] = useState<InstallPromptEvent | null>(null);
   const [mode, setMode] = useState<"none" | "android" | "ios">("none");
 
   useEffect(() => {
@@ -29,7 +32,8 @@ export default function PwaRegister() {
       navigator.serviceWorker.register("/sw.js").catch(() => {});
     }
     const standalone =
-      window.matchMedia?.("(display-mode: standalone)").matches || (navigator as any).standalone === true;
+      window.matchMedia?.("(display-mode: standalone)").matches
+      || (navigator as Navigator & { standalone?: boolean }).standalone === true;
     if (standalone) return;
     let dismissed = false;
     try { dismissed = localStorage.getItem("pwa.dismissed") === "1"; } catch {}
@@ -45,9 +49,9 @@ export default function PwaRegister() {
       }
     } catch {}
 
-    const onPrompt = (e: any) => {
+    const onPrompt = (e: Event) => {
       e.preventDefault();
-      setPrompt(e);
+      setPrompt(e as InstallPromptEvent);
       if (!dismissed) setMode("android");
     };
     const onInstalled = () => { setMode("none"); try { localStorage.setItem("pwa.dismissed", "1"); } catch {} };
@@ -100,7 +104,7 @@ export default function PwaRegister() {
       </div>
       {mode === "android" && (
         <button type="button"
-          onClick={async () => { try { prompt.prompt(); await prompt.userChoice; } catch {} setMode("none"); }}
+          onClick={async () => { try { await prompt?.prompt(); await prompt?.userChoice; } catch {} setMode("none"); }}
           className="flex min-h-[44px] items-center gap-1.5 rounded-lg bg-accent-purple px-3 text-sm text-white">
           <Download size={14} aria-hidden /> Yükle
         </button>

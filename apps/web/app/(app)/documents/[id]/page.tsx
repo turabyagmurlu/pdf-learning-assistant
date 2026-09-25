@@ -7,15 +7,22 @@ import { stageInfo } from "@/lib/docstage";
 import { useAnnotations } from "@/hooks/useAnnotations";
 import { usePoll } from "@/hooks/usePoll";
 import ReaderToolbar, { ReaderMoreMenu, ReaderBottomBar, Theme, Tool } from "@/components/reader/ReaderToolbar";
-import ReaderHeader, { useNotebookContext, notebookHref } from "@/components/reader/ReaderHeader";
+import ReaderHeader, { useNotebookContext, notebookHref, useMedia } from "@/components/reader/ReaderHeader";
 import { useAddToDraft } from "@/components/reader/useAddToDraft";
 import NotesPanel from "@/components/reader/NotesPanel";
 import ExplainPanel from "@/components/reader/ExplainPanel";
 import ConnectionsPanel from "@/components/reader/ConnectionsPanel";
 import { ChatPanel } from "@/components/chat/ChatPanel";
 import Modal from "@/components/Modal";
+import { toast as notify } from "@/components/Toast";
 import { useRouter } from "next/navigation";
-import { X, Sparkles, StickyNote, Volume2, Link2 } from "lucide-react";
+import { X, Sparkles, StickyNote, Volume2, Link2, Pin, PinOff, AlignLeft, FileText } from "lucide-react";
+// Telefon paketi (Ajan T): klavye/gorunur alan degiskenleri (--vvh, --kb), pinch/cift dokunus, metin gorunumu
+import { useVisualViewport } from "@/hooks/useVisualViewport";
+import PinchZoom from "@/components/reader/PinchZoom";
+import TextView from "@/components/reader/TextView";
+// Okuma paketi (Ajan TO): okuma konumunu sunucuya yazar, baska cihazdaki konumu dondurur
+import { useReadingSync } from "@/hooks/useReadingSync";
 
 // react-pdf yalniz istemcide (SSR yok); PDF disi okuyucular da ayri parca olarak yuklenir
 const PdfReader = dynamic(() => import("@/components/reader/PdfReader"), { ssr: false });
@@ -29,7 +36,20 @@ const RIGHT_TABS: { key: RightTab; label: string; hint: string; Icon: typeof Spa
   { key: "links", label: "Bağlantılar", hint: "Bu sayfayla bağlantılı diğer kaynaklar", Icon: Link2 },
   { key: "notes", label: "Notlar", hint: "Notlar ve vurgular", Icon: StickyNote },
 ];
+/**
+ * Okuyucu duzeni (TB-2):
+ *  - < 768        telefon: paneller alttan acilan tabaka (Modal), alt cubuk.
+ *  - 768-1023     dikey tablet: sohbet sagdan acilan KARARTMASIZ 380 px yan tabaka (PDF kaydirilabilir kalir),
+ *                 "Sabitle" ile akisa girer; Icindekiler ustten tabaka; alt cubuk.
+ *  - >= 1024      yan paneller. Dokunmatik tablette (yatay iPad) ilk acilista sol kapali, sohbet 368 px acik;
+ *                 Icindekiler ustten tabaka (sol panel yerine).
+ */
 const LG = "(min-width: 1024px)";
+const MD = "(min-width: 768px)";
+const TOUCH = "(hover: none) and (pointer: coarse)";
+const SIDE_W = 380;          // dikey tablette yan tabaka genisligi
+const TOUCH_RIGHT_W = 368;   // yatay dokunmatik tablette sohbetin ilk genisligi (360-380)
+type ViewMode = "page" | "text";
 
 function toArr(v: any): any[] {
   if (Array.isArray(v)) return v;
@@ -66,10 +86,28 @@ export default function DocumentPage({ params }: { params: { id: string } }) {
   const [rightW, setRightW] = useState(420);
   const [leftW, setLeftW] = useState(288);
   const [prefill, setPrefill] = useState<{ text: string; key: number } | null>(null);
+  // dikey tablet (768-1023): sag yan tabaka sabitlenince akisa girer (PDF daralir)
+  const [pinned, setPinned] = useState(false);
+  // "Sayfa | Metin": telefonda kucuk kalan PDF metnini yeniden akisli gosterir (T-5)
+  const [viewMode, setViewMode] = useState<ViewMode>("page");
+
+  const isMd = useMedia(MD);
+  const isTouch = useMedia(TOUCH);
+  // dikey tablet: sag panel yan tabaka; Icindekiler ustten tabaka
+  const sideSheet = isMd && !isLg;
+  // yatay dokunmatik tablet: sol panel yerine Icindekiler ustten tabaka
+  const leftAsSheet = isMd && (!isLg || isTouch);
+
+  // klavye acilinca --vvh / --kb degiskenleri (sohbet tabakasi ve alt cubuk bunlara gore yerlesir)
+  useVisualViewport();
 
   const ctx = useNotebookContext(doc);
   const { addToDraft, picker: draftPicker } = useAddToDraft(doc, ctx);
   const { annotations, add, patch, remove } = useAnnotations(id);
+  // okuma konumu cihazlar arasi: 3 sn gecikmeli yazma, baska cihazdaki konum basliktaki cipte
+  const { serverPage, serverDevice } = useReadingSync(id, {
+    page, numPages, pct: numPages ? Math.round((page / numPages) * 100) : 0,
+  });
   // icindekiler: tiklaninca maddenin gectigi sayfayi bul (ucretsiz), sonucu hatirla
   const [tocPages, setTocPages] = useState<Record<number, number>>({});
   useEffect(() => { try { setTocPages(JSON.parse(localStorage.getItem("reader.toc." + id) || "{}")); } catch {} }, [id]);
@@ -81,7 +119,7 @@ export default function DocumentPage({ params }: { params: { id: string } }) {
       setTocPages(next);
       try { localStorage.setItem("reader.toc." + id, JSON.stringify(next)); } catch {}
     }
-    if (pg) { setPage(pg); if (!isLg) setLeftOpen(false); } else say("Bu başlığın sayfası bulunamadı");
+    if (pg) { setPage(pg); if (!isLg || leftAsSheet) setLeftOpen(false); } else say("Bu başlığın sayfası bulunamadı");
   }
 
   // geri al / yinele (vurgu ve not ekleme-silme; ustune vurgulamada degistirme tek adim)
@@ -155,25 +193,38 @@ export default function DocumentPage({ params }: { params: { id: string } }) {
       if (sp) setSpread(sp === "1");
       const rw = parseInt(localStorage.getItem("reader.rightW") || "", 10); if (!isNaN(rw)) setRightW(Math.min(760, Math.max(320, rw)));
       const lw = parseInt(localStorage.getItem("reader.leftW") || "", 10); if (!isNaN(lw)) setLeftW(Math.min(460, Math.max(220, lw)));
+      setPinned(localStorage.getItem("reader.pinRight") === "1");
+      const vm = localStorage.getItem("reader.mode");
+      if (vm === "page" || vm === "text") setViewMode(vm);
     } catch {}
   }, []);
   useEffect(() => { try { localStorage.setItem("reader.theme", theme); } catch {} }, [theme]);
   useEffect(() => { try { localStorage.setItem("reader.spread", spread ? "1" : "0"); } catch {} }, [spread]);
   useEffect(() => { try { localStorage.setItem("reader.rightW", String(rightW)); } catch {} }, [rightW]);
   useEffect(() => { try { localStorage.setItem("reader.leftW", String(leftW)); } catch {} }, [leftW]);
+  useEffect(() => { try { localStorage.setItem("reader.pinRight", pinned ? "1" : "0"); } catch {} }, [pinned]);
+  useEffect(() => { try { localStorage.setItem("reader.mode", viewMode); } catch {} }, [viewMode]);
 
-  // ekran genisligi: >=1024 yan paneller, altinda alttan acilan tabaka
+  // ekran genisligi: >=1024 yan paneller, altinda tabaka (dikey tablette yan tabaka)
   useEffect(() => {
     const mq = window.matchMedia(LG);
     const apply = () => {
       const lg = mq.matches;
+      const touch = window.matchMedia(TOUCH).matches;
       setIsLg(lg);
       if (lg) {
         let saved: { l?: boolean; r?: boolean } | null = null;
         try { saved = JSON.parse(localStorage.getItem("reader.panels") || "null"); } catch {}
         if (saved && typeof saved === "object") { setLeftOpen(!!saved.l); setRightOpen(!!saved.r); }
-        else {
-          // ilk kez: PDF'e en az ~480 px kalmiyorsa sag panel kapali baslasin
+        else if (touch) {
+          // yatay dokunmatik tablet (1024-1194): ilk acilista PDF + sohbet yan yana, Icindekiler tabaka
+          let rwSaved = NaN;
+          try { rwSaved = parseInt(localStorage.getItem("reader.rightW") || "", 10); } catch {}
+          if (isNaN(rwSaved)) setRightW(TOUCH_RIGHT_W);
+          setLeftOpen(false);
+          setRightOpen(true);
+        } else {
+          // ilk kez (fare): PDF'e en az ~480 px kalmiyorsa sag panel kapali baslasin
           let lw = 288, rw = 420;
           try {
             lw = parseInt(localStorage.getItem("reader.leftW") || "288", 10) || 288;
@@ -183,7 +234,10 @@ export default function DocumentPage({ params }: { params: { id: string } }) {
           setRightOpen(window.innerWidth - lw - rw >= 480);
         }
       } else {
-        setLeftOpen(false); setRightOpen(false); setFocus(false);
+        // dikey tablette sabitlenmis sohbet acik gelir; diger dar ekranlarda PDF once gorunsun
+        let pin = false;
+        try { pin = window.matchMedia(MD).matches && localStorage.getItem("reader.pinRight") === "1"; } catch {}
+        setLeftOpen(false); setRightOpen(pin); setFocus(false);
       }
       setPanelsReady(true);
     };
@@ -191,16 +245,18 @@ export default function DocumentPage({ params }: { params: { id: string } }) {
     mq.addEventListener?.("change", apply);
     return () => mq.removeEventListener?.("change", apply);
   }, []);
-  // panel tercihini yalniz genis ekranda sakla
+  // panel tercihini yalniz genis ekranda sakla (Icindekiler tabakaysa "acik" kaydedilmez)
   useEffect(() => {
     if (!panelsReady || !isLg) return;
-    try { localStorage.setItem("reader.panels", JSON.stringify({ l: leftOpen, r: rightOpen })); } catch {}
-  }, [leftOpen, rightOpen, isLg, panelsReady]);
+    try { localStorage.setItem("reader.panels", JSON.stringify({ l: leftAsSheet ? false : leftOpen, r: rightOpen })); } catch {}
+  }, [leftOpen, rightOpen, isLg, panelsReady, leftAsSheet]);
 
-  // dar ekranda ayni anda tek tabaka
-  function openLeft(v: boolean) { setLeftOpen(v); if (v && !isLg) setRightOpen(false); }
+  // dar ekranda ayni anda tek tabaka (dikey tablette sabitlenmis sohbet acik kalabilir)
+  function openLeft(v: boolean) { setLeftOpen(v); if (v && !isLg && !(sideSheet && pinned)) setRightOpen(false); }
   function openRight(v: boolean) { setRightOpen(v); if (v && !isLg) setLeftOpen(false); }
-  function showNotes() { setRightTab("notes"); if (isLg) setRightOpen(true); }
+  function showNotes() { setRightTab("notes"); if (isLg || sideSheet) setRightOpen(true); }
+  // tabakadan sayfaya atlayinca tabaka kapansin (yan panel ve sabitlenmis yan tabaka acik kalir)
+  function closeAfterJump() { if (!isLg && !(sideSheet && pinned)) setRightOpen(false); }
 
   // belge + dosya adresi
   async function load() {
@@ -241,16 +297,21 @@ export default function DocumentPage({ params }: { params: { id: string } }) {
       if (mod && e.key.toLowerCase() === "z" && !e.shiftKey) { e.preventDefault(); undo(); return; }
       if (mod && ((e.key.toLowerCase() === "z" && e.shiftKey) || e.key.toLowerCase() === "y")) { e.preventDefault(); redo(); return; }
       if (mod || e.altKey) return;
+      if (e.key === "Escape" && !t?.closest?.('[role="dialog"], [role="menu"]')) {
+        // odak modundan cik; dikey tablette sabitlenmemis yan tabakayi kapat (odak icindeyken de)
+        setFocus(false);
+        if (sideSheet && !pinned) setRightOpen(false);
+        return;
+      }
       if (t?.closest?.('aside, [role="dialog"], [role="menu"], [role="tablist"], [role="separator"]')) return;
       if (e.key === "ArrowRight" || e.key === "PageDown") { e.preventDefault(); setPage((p) => Math.min(numPages || p, p + 1)); }
       else if (e.key === "ArrowLeft" || e.key === "PageUp") { e.preventDefault(); setPage((p) => Math.max(1, p - 1)); }
       else if (e.key === "f" && isLg) setFocus((f) => !f);
-      else if (e.key === "Escape") { setFocus(false); }
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [numPages, annotations, isLg]);
+  }, [numPages, annotations, isLg, sideSheet, pinned]);
 
   // kaldigin yerden devam: PDF acilinca kayitli sayfaya don
   useEffect(() => {
@@ -359,16 +420,29 @@ export default function DocumentPage({ params }: { params: { id: string } }) {
   if (doc.source_type === "youtube" || doc.source_type === "audio") return <VideoReader id={id} doc={doc} />;
   if (doc.source_type && doc.source_type !== "pdf") return <TextReader id={id} doc={doc} />;
 
-  function startResize(side: "left" | "right", e: React.MouseEvent) {
+  // Panel ayraci (TB-3): fare, parmak ve kalem ayni yoldan (pointer olaylari + setPointerCapture).
+  // Gorunen cizgi 6 px; gorunmez dokunma alani ~22 px (before:); ortada tutamak cizgisi.
+  function applyResize(side: "left" | "right", clientX: number) {
+    if (side === "right") setRightW(Math.min(760, Math.max(320, window.innerWidth - clientX)));
+    else setLeftW(Math.min(460, Math.max(220, clientX)));
+  }
+  function onSepPointerDown(side: "left" | "right", e: React.PointerEvent<HTMLDivElement>) {
+    if (e.button !== 0 && e.pointerType === "mouse") return;
     e.preventDefault();
-    const move = (ev: MouseEvent) => {
-      if (side === "right") setRightW(Math.min(760, Math.max(320, window.innerWidth - ev.clientX)));
-      else setLeftW(Math.min(460, Math.max(220, ev.clientX)));
-    };
-    const up = () => { window.removeEventListener("mousemove", move); window.removeEventListener("mouseup", up); document.body.style.userSelect = ""; };
+    e.currentTarget.setPointerCapture(e.pointerId);
+    e.currentTarget.dataset.drag = "1";
     document.body.style.userSelect = "none";
-    window.addEventListener("mousemove", move);
-    window.addEventListener("mouseup", up);
+    applyResize(side, e.clientX);
+  }
+  function onSepPointerMove(side: "left" | "right", e: React.PointerEvent<HTMLDivElement>) {
+    if (e.currentTarget.dataset.drag !== "1") return;
+    applyResize(side, e.clientX);
+  }
+  function onSepPointerUp(e: React.PointerEvent<HTMLDivElement>) {
+    if (e.currentTarget.dataset.drag !== "1") return;
+    delete e.currentTarget.dataset.drag;
+    try { e.currentTarget.releasePointerCapture(e.pointerId); } catch {}
+    document.body.style.userSelect = "";
   }
   function keyResize(side: "left" | "right", e: React.KeyboardEvent) {
     const d = e.key === "ArrowLeft" ? -24 : e.key === "ArrowRight" ? 24 : 0;
@@ -377,6 +451,12 @@ export default function DocumentPage({ params }: { params: { id: string } }) {
     if (side === "left") setLeftW((w) => Math.min(460, Math.max(220, w + d)));
     else setRightW((w) => Math.min(760, Math.max(320, w - d)));
   }
+  const sepClass = "group relative w-1.5 shrink-0 cursor-col-resize touch-none bg-transparent transition " +
+    "before:absolute before:inset-y-0 before:-left-2 before:-right-2 before:content-[''] " +
+    "hover:bg-accent-purple/40 focus-visible:bg-accent-purple/40 data-[drag=1]:bg-accent-purple/40";
+  const sepHandle = (
+    <span aria-hidden className="pointer-events-none absolute left-1/2 top-1/2 h-10 w-1 -translate-x-1/2 -translate-y-1/2 rounded-full bg-border-strong/70 group-hover:bg-accent-purple" />
+  );
 
   const tb = {
     page, numPages, setPage, scale, setScale, spread, setSpread, tool, setTool, theme, setTheme,
@@ -388,7 +468,7 @@ export default function DocumentPage({ params }: { params: { id: string } }) {
 
   const leftContent = (
     <>
-      {isLg && <h2 className="mb-1 font-heading text-lg leading-tight">{doc.title}</h2>}
+      {isLg && !leftAsSheet && <h2 className="mb-1 font-heading text-lg leading-tight">{doc.title}</h2>}
       {doc.status !== "ready" ? (
         <p className="text-sm text-text-secondary" role="status">
           {doc.status === "failed" ? `⚠️ ${doc.error_message || "Bu kaynak işlenemedi."}` : `Hazırlanıyor · ${st.label}${st.pct !== null ? ` (%${st.pct})` : ""}`}
@@ -424,11 +504,19 @@ export default function DocumentPage({ params }: { params: { id: string } }) {
             <div className="mt-5">
               <h3 className="mb-1.5 text-xs font-semibold uppercase tracking-wide text-text-secondary">Anahtar kavramlar</h3>
               <div className="flex flex-wrap gap-1.5">
-                {toArr(doc.key_concepts).map((k, i) => (
-                  <span key={i} title={k?.definition || ""} className="rounded-full bg-accent-amber/15 px-2.5 py-0.5 text-xs text-amber-800 dark:text-amber-300">
-                    {typeof k === "string" ? k : (k?.term || "")}
-                  </span>
-                ))}
+                {toArr(doc.key_concepts).map((k, i) => {
+                  const term = typeof k === "string" ? k : (k?.term || "");
+                  const def = typeof k === "string" ? "" : (k?.definition || "");
+                  // aciklama yalniz hover'da (title) kalmasin: dokununca kisa bildirimde gosterilir (TB-4)
+                  return def ? (
+                    <button key={i} type="button" title={def} onClick={() => notify.info(`${term}: ${def}`)}
+                            className="min-h-[32px] rounded-full bg-accent-amber/15 px-2.5 py-0.5 text-xs text-amber-800 hover:bg-accent-amber/25 dark:text-amber-300">
+                      {term}
+                    </button>
+                  ) : (
+                    <span key={i} className="rounded-full bg-accent-amber/15 px-2.5 py-0.5 text-xs text-amber-800 dark:text-amber-300">{term}</span>
+                  );
+                })}
               </div>
             </div>
           )}
@@ -476,7 +564,7 @@ export default function DocumentPage({ params }: { params: { id: string } }) {
     <div id="rpanel" role="tabpanel" aria-labelledby={`rtab-${rightTab}`} className="min-h-0 flex-1">
       {rightTab === "ai" ? (
         <ChatPanel documentId={id} prefill={prefill} notebookHref={ctx.id ? notebookHref(ctx) : null}
-                   onGoPage={(pg) => { setPage(Math.max(1, Math.min(numPages || pg, pg))); if (!isLg) setRightOpen(false); }} />
+                   onGoPage={(pg) => { setPage(Math.max(1, Math.min(numPages || pg, pg))); closeAfterJump(); }} />
       ) : rightTab === "explain" ? (
         <ExplainPanel documentId={id} page={page} getPageText={getPageText} />
       ) : rightTab === "links" ? (
@@ -484,22 +572,84 @@ export default function DocumentPage({ params }: { params: { id: string } }) {
                           onOpen={(docId, pg) => router.push(`/documents/${docId}${pg ? `?page=${pg}` : ""}`)} />
       ) : (
         <NotesPanel docTitle={doc?.title} annotations={annotations}
-                    onJump={(a) => { setPage(a.page_number); if (!isLg) setRightOpen(false); }}
+                    onJump={(a) => { setPage(a.page_number); closeAfterJump(); }}
                     onDelete={removeTracked}
                     onEditNote={(a) => setEditing(a)} />
       )}
     </div>
   );
 
+  // "Sayfa | Metin" anahtari: md ve ustunde iki etiketli dugme, telefonda tek ikon (44 px)
+  const viewSwitch = (
+    <>
+      <div role="group" aria-label="Görünüm" className="hidden shrink-0 items-center rounded-lg border p-0.5 text-xs md:flex">
+        {([["page", "Sayfa", FileText], ["text", "Metin", AlignLeft]] as const).map(([k, label, Icon]) => (
+          <button key={k} type="button" aria-pressed={viewMode === k} onClick={() => setViewMode(k)}
+                  className={`flex h-9 min-w-[60px] items-center justify-center gap-1 rounded-md px-2 ${viewMode === k ? "bg-accent-purple/10 font-medium text-accent-purple" : "text-text-secondary hover:bg-surface-muted"}`}>
+            <Icon size={14} aria-hidden /> {label}
+          </button>
+        ))}
+      </div>
+      <button type="button" aria-pressed={viewMode === "text"} onClick={() => setViewMode(viewMode === "text" ? "page" : "text")}
+              aria-label={viewMode === "text" ? "Metin görünümü açık. Sayfa görünümüne geç" : "Metin görünümüne geç"}
+              title={viewMode === "text" ? "Sayfa görünümü" : "Metin görünümü"}
+              className={`flex h-11 w-11 shrink-0 items-center justify-center rounded-lg md:hidden ${viewMode === "text" ? "bg-accent-purple/10 text-accent-purple" : "hover:bg-surface-muted"}`}>
+        {viewMode === "text" ? <FileText size={19} aria-hidden /> : <AlignLeft size={19} aria-hidden />}
+      </button>
+    </>
+  );
+
+  // Dikey tablet: sag yan tabaka basligi (sekmeler + Sabitle + Kapat)
+  const sheetHead = (
+    <div className="flex shrink-0 items-stretch border-b">
+      {rightTabs}
+      <button type="button" onClick={() => setPinned((p) => !p)} aria-pressed={pinned}
+              aria-label={pinned ? "Sabitlemeyi kaldır: panel PDF'in üstünde dursun" : "Sabitle: panel yanda kalsın, PDF daralsın"}
+              title={pinned ? "Sabitlemeyi kaldır" : "Sabitle"}
+              className={`flex w-11 shrink-0 items-center justify-center ${pinned ? "text-accent-purple" : "text-text-secondary hover:bg-surface-muted"}`}>
+        {pinned ? <PinOff size={18} aria-hidden /> : <Pin size={18} aria-hidden />}
+      </button>
+      <button type="button" onClick={() => setRightOpen(false)} aria-label="Paneli kapat"
+              className="flex w-11 shrink-0 items-center justify-center text-text-secondary hover:bg-surface-muted">
+        <X size={20} aria-hidden />
+      </button>
+    </div>
+  );
+
+  const pdfView = fileUrl ? (
+    viewMode === "text" ? (
+      <TextView fileUrl={fileUrl} page={page} onPageChange={setPage} onAsk={onAsk}
+                onAddToDraft={(text: string, pg: number) => addToDraft(text, pg)} theme={theme} />
+    ) : (
+      <PinchZoom scale={scale} onScaleChange={(s: number) => setScale(() => s)} fitLabel="Sığdır">
+        <PdfReader
+          fileUrl={fileUrl} page={page} scale={scale} spread={isLg && spread} tool={tool}
+          annotations={annotations}
+          onNumPages={setNumPages} onVisiblePage={setPage}
+          onCreateHighlight={onCreateHighlight} onCreateSticky={onCreateSticky}
+          onSelectAnnotation={(a) => { setEditing(a); showNotes(); }}
+          onAsk={onAsk}
+          onAddToDraft={(text, pg) => addToDraft(text, pg)}
+        />
+      </PinchZoom>
+    )
+  ) : (
+    <div className="reader-surround flex h-full items-center justify-center p-6 text-center text-sm" style={{ color: "var(--r-ink-2)" }} role="status">
+      {doc.status === "failed" ? "Bu PDF açılamadı." : "PDF hazırlanıyor…"}
+    </div>
+  );
+
   return (
     <div className="reader-root flex h-dvh flex-col" data-theme={theme}>
-      <ReaderHeader doc={doc} ctx={ctx}>
+      <ReaderHeader doc={doc} ctx={ctx} serverPage={serverPage} serverDevice={serverDevice} currentPage={page}
+                    onGoServerPage={(n: number) => setPage(Math.max(1, Math.min(numPages || n, n)))}>
+        {viewSwitch}
         {isLg ? <ReaderToolbar {...tb} /> : <ReaderMoreMenu {...tb} variant="narrow" />}
       </ReaderHeader>
 
       <div className="relative flex min-h-0 flex-1 overflow-hidden">
         {/* odak modu: kenar tutamaklari (uzerine gelince / tiklayinca panel belirir) */}
-        {isLg && focus && leftOpen && !showLeft && (
+        {isLg && !leftAsSheet && focus && leftOpen && !showLeft && (
           <button type="button" onMouseEnter={() => setPeek("left")} onClick={() => setPeek("left")}
                   aria-label="Sol paneli göster"
                   className="absolute left-0 top-1/2 z-20 h-32 w-4 -translate-y-1/2 rounded-r-full bg-accent-purple/25 transition hover:bg-accent-purple/60" />
@@ -509,38 +659,28 @@ export default function DocumentPage({ params }: { params: { id: string } }) {
                   aria-label="Sağ paneli göster"
                   className="absolute right-0 top-1/2 z-20 h-32 w-4 -translate-y-1/2 rounded-l-full bg-accent-purple/25 transition hover:bg-accent-purple/60" />
         )}
-        {/* SOL panel (genis ekran) */}
-        {isLg && showLeft && (
+        {/* SOL panel (genis ekran, fare) — dokunmatik tablette Icindekiler ustten tabaka (asagida) */}
+        {isLg && !leftAsSheet && showLeft && (
           <aside style={{ width: leftW }} aria-label="İçindekiler ve özet"
                  className={`shrink-0 overflow-auto border-r bg-surface p-4 ${focus ? "absolute left-0 top-0 z-30 h-full shadow-2xl" : ""}`}>
             {leftContent}
           </aside>
         )}
-        {isLg && showLeft && !focus && (
-          <div onMouseDown={(e) => startResize("left", e)} onKeyDown={(e) => keyResize("left", e)} tabIndex={0}
-               className="w-1.5 shrink-0 cursor-col-resize bg-transparent transition hover:bg-accent-purple/40 focus-visible:bg-accent-purple/40"
+        {isLg && !leftAsSheet && showLeft && !focus && (
+          <div onPointerDown={(e) => onSepPointerDown("left", e)} onPointerMove={(e) => onSepPointerMove("left", e)}
+               onPointerUp={onSepPointerUp} onPointerCancel={onSepPointerUp}
+               onKeyDown={(e) => keyResize("left", e)} tabIndex={0}
+               className={sepClass}
                role="separator" aria-orientation="vertical" aria-valuenow={leftW} aria-valuemin={220} aria-valuemax={460}
-               aria-label="Sol paneli yeniden boyutlandır (ok tuşları)" title="Sürükleyerek boyutlandır" />
+               aria-label="Sol paneli yeniden boyutlandır (ok tuşları)" title="Sürükleyerek boyutlandır">
+            {sepHandle}
+          </div>
         )}
 
         {/* ORTA: PDF */}
         <section aria-label="PDF" className="relative min-w-0 flex-1 overflow-hidden"
               onPointerDown={() => { if (focus && peek) setPeek(null); }}>
-          {fileUrl ? (
-            <PdfReader
-              fileUrl={fileUrl} page={page} scale={scale} spread={isLg && spread} tool={tool}
-              annotations={annotations}
-              onNumPages={setNumPages} onVisiblePage={setPage}
-              onCreateHighlight={onCreateHighlight} onCreateSticky={onCreateSticky}
-              onSelectAnnotation={(a) => { setEditing(a); showNotes(); }}
-              onAsk={onAsk}
-              onAddToDraft={(text, pg) => addToDraft(text, pg)}
-            />
-          ) : (
-            <div className="reader-surround flex h-full items-center justify-center p-6 text-center text-sm" style={{ color: "var(--r-ink-2)" }} role="status">
-              {doc.status === "failed" ? "Bu PDF açılamadı." : "PDF hazırlanıyor…"}
-            </div>
-          )}
+          {pdfView}
           {/* okuma ilerlemesi */}
           <div aria-hidden className="pointer-events-none absolute bottom-0 left-0 h-1 bg-accent-purple/70 transition-all" style={{ width: `${progress}%` }} />
           {numPages > 0 && (
@@ -559,10 +699,14 @@ export default function DocumentPage({ params }: { params: { id: string } }) {
 
         {/* SAG panel (genis ekran) */}
         {isLg && showRight && !focus && (
-          <div onMouseDown={(e) => startResize("right", e)} onKeyDown={(e) => keyResize("right", e)} tabIndex={0}
-               className="w-1.5 shrink-0 cursor-col-resize bg-transparent transition hover:bg-accent-purple/40 focus-visible:bg-accent-purple/40"
+          <div onPointerDown={(e) => onSepPointerDown("right", e)} onPointerMove={(e) => onSepPointerMove("right", e)}
+               onPointerUp={onSepPointerUp} onPointerCancel={onSepPointerUp}
+               onKeyDown={(e) => keyResize("right", e)} tabIndex={0}
+               className={sepClass}
                role="separator" aria-orientation="vertical" aria-valuenow={rightW} aria-valuemin={320} aria-valuemax={760}
-               aria-label="Sağ paneli yeniden boyutlandır (ok tuşları)" title="Sürükleyerek boyutlandır" />
+               aria-label="Sağ paneli yeniden boyutlandır (ok tuşları)" title="Sürükleyerek boyutlandır">
+            {sepHandle}
+          </div>
         )}
         {isLg && showRight && (
           <aside style={{ width: rightW }} aria-label="Sohbet, anlatım ve notlar"
@@ -571,30 +715,46 @@ export default function DocumentPage({ params }: { params: { id: string } }) {
             {rightBody}
           </aside>
         )}
+
+        {/* DIKEY TABLET (768-1023): sagdan acilan karartmasiz yan tabaka; "Sabitle" ile akisa girer (TB-2) */}
+        {sideSheet && rightOpen && (
+          <aside aria-label="Sohbet, anlatım ve notlar"
+                 style={{ width: SIDE_W, maxWidth: "85vw" }}
+                 className={`flex shrink-0 flex-col border-l bg-surface ${pinned ? "" : "fade-in absolute inset-y-0 right-0 z-30 shadow-2xl"}`}>
+            {sheetHead}
+            {rightBody}
+          </aside>
+        )}
       </div>
 
-      {/* DAR EKRAN: alt cubuk + alttan acilan tabakalar */}
+      {/* DAR EKRAN: alt cubuk + tabakalar */}
       {!isLg && (
         <ReaderBottomBar page={page} numPages={numPages} setPage={setPage}
                          leftOpen={leftOpen} rightOpen={rightOpen}
                          onLeft={() => openLeft(!leftOpen)} onRight={() => openRight(!rightOpen)} />
       )}
-      {!isLg && (
-        <Modal open={leftOpen} onClose={() => setLeftOpen(false)} title={doc.title || "İçindekiler ve özet"} size="lg">
+      {/* Icindekiler: telefonda alttan, tablette (dikey ve dokunmatik yatay) ustten tabaka */}
+      {(!isLg || leftAsSheet) && (
+        <Modal open={leftOpen} onClose={() => setLeftOpen(false)} title={doc.title || "İçindekiler ve özet"} size="lg"
+               align={leftAsSheet ? "top" : "center"}>
           {leftContent}
         </Modal>
       )}
-      {!isLg && (
+      {/* Telefon: sohbet alttan acilan tabaka; klavye acilinca --vvh / --kb'ye gore kucultulur (T-2) */}
+      {!isMd && (
         <Modal open={rightOpen} onClose={() => setRightOpen(false)} ariaLabel="Sohbet, anlatım ve notlar" size="lg"
-               className="h-[85dvh] p-0">
-          <div className="flex shrink-0 items-stretch border-b">
-            {rightTabs}
-            <button type="button" onClick={() => setRightOpen(false)} aria-label="Paneli kapat"
-                    className="flex w-12 shrink-0 items-center justify-center text-text-secondary hover:bg-surface-muted">
-              <X size={20} aria-hidden />
-            </button>
+               className="p-0">
+          <div className="flex min-h-0 flex-col"
+               style={{ height: "min(85dvh, calc(var(--vvh, 100dvh) - 12px))", marginBottom: "var(--kb, 0px)" }}>
+            <div className="flex shrink-0 items-stretch border-b">
+              {rightTabs}
+              <button type="button" onClick={() => setRightOpen(false)} aria-label="Paneli kapat"
+                      className="flex w-12 shrink-0 items-center justify-center text-text-secondary hover:bg-surface-muted">
+                <X size={20} aria-hidden />
+              </button>
+            </div>
+            <div className="flex min-h-0 flex-1 flex-col">{rightBody}</div>
           </div>
-          <div className="flex min-h-0 flex-1 flex-col">{rightBody}</div>
         </Modal>
       )}
 

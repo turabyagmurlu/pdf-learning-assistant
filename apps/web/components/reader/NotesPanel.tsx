@@ -49,13 +49,13 @@ export default function NotesPanel({ annotations, docTitle, onJump, onDelete, on
               </span>
               <span className="-my-1 flex items-center">
                 {a.selected_text && (
-                  <button type="button" className="flex h-10 min-w-[40px] items-center justify-center rounded-lg text-text-secondary hover:bg-surface-muted hover:text-accent-purple"
+                  <button type="button" className="flex h-10 min-w-[40px] items-center justify-center rounded-lg text-text-secondary hover:bg-surface-hover hover:text-accent-purple"
                           aria-label="Alıntıyı kaynak ve sayfayla kopyala"
                           title="Alıntıyı kaynak ve sayfayla kopyala" onClick={() => copyCite(a)}>
                     {copied === a.id ? <span className="px-1 text-xs text-accent-purple" role="status">kopyalandı</span> : <Quote size={14} aria-hidden />}
                   </button>
                 )}
-                <button type="button" className="flex h-10 w-10 items-center justify-center rounded-lg text-text-secondary hover:bg-surface-muted hover:text-danger"
+                <button type="button" className="flex h-10 w-10 items-center justify-center rounded-lg text-text-secondary hover:bg-surface-hover hover:text-danger"
                         aria-label={`Sayfa ${a.page_number} ${a.anchor.type === "sticky" ? "kenar notunu" : "vurgusunu"} sil`}
                         onClick={() => onDelete(a.id)}><Trash2 size={15} aria-hidden /></button>
               </span>

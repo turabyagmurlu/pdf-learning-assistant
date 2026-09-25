@@ -1,11 +1,15 @@
 "use client";
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
-import { ApiError, api, clearToken, errorMessage } from "@/lib/api";
+import { API, ApiError, api, clearToken, errorMessage } from "@/lib/api";
 import { Loader2 } from "lucide-react";
 
 const MIN_PW = 8;
 
+/**
+ * E-postadaki baglantiyla acilan "yeni sifre" sayfasi. E-posta sifirlama kapaliysa
+ * (GET /auth/config -> mail_enabled=false) form yerine "etkin degil" ve /forgot'a yol.
+ */
 export default function ResetPage() {
   const router = useRouter();
   const [token, setTokenValue] = useState<string | null>(null);
@@ -14,8 +18,12 @@ export default function ResetPage() {
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState("");
   const [invalid, setInvalid] = useState(false);
+  const [mailOff, setMailOff] = useState(false);
 
   useEffect(() => {
+    fetch(`${API}/auth/config`, { cache: "no-store" }).then((r) => r.json())
+      .then((c) => { if (c && c.mail_enabled === false) setMailOff(true); })
+      .catch(() => {});
     const t = new URLSearchParams(window.location.search).get("token") || "";
     if (t) {
       setTokenValue(t);
@@ -55,7 +63,14 @@ export default function ResetPage() {
       <div className="w-full max-w-sm">
         <h1 className="mb-1 font-heading text-2xl">Yeni şifre belirle</h1>
 
-        {noToken || invalid ? (
+        {mailOff ? (
+          <div role="status" className="mt-4 space-y-3 text-sm leading-relaxed">
+            <p>Bu kurulumda e-postayla şifre sıfırlama etkin değil.</p>
+            <a href="/forgot" className="inline-flex min-h-[44px] items-center font-medium text-accent-purple hover:underline">
+              Şifreni nasıl yenileyeceğini gör
+            </a>
+          </div>
+        ) : noToken || invalid ? (
           <div role="alert" className="mt-4 space-y-3 text-sm leading-relaxed">
             <p>
               {noToken

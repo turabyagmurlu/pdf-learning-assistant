@@ -210,7 +210,7 @@ export default function ExplainPanel({
         onClick={explain}
         disabled={busy}
         title="Yapay zekâ kullanımından 1 düşer"
-        className="flex min-h-[44px] w-full items-center justify-center gap-2 rounded-xl bg-accent-purple px-4 py-2.5 text-sm font-medium text-white disabled:opacity-60"
+        className="flex min-h-[44px] w-full items-center justify-center gap-2 rounded-xl bg-accent-purple px-4 py-2.5 text-sm font-medium text-on-accent disabled:opacity-60"
       >
         {busy ? <Loader2 size={16} className="animate-spin" aria-hidden /> : <Sparkles size={16} aria-hidden />}
         {busy ? "Hazırlanıyor…" : `Bu sayfayı anlat (s.${page})`}
@@ -233,7 +233,7 @@ export default function ExplainPanel({
               onClick={toggle}
               disabled={audioBusy}
               title={playing || paused ? undefined : `Yapay zekâ kullanımından ${cost} düşer (daha önce seslendirildiyse ücretsiz)`}
-              className="flex min-h-[44px] items-center gap-1.5 rounded-lg border px-3 text-sm hover:bg-black/5 disabled:opacity-60"
+              className="flex min-h-[44px] items-center gap-1.5 rounded-lg border px-3 text-sm hover:bg-surface-hover disabled:opacity-60"
             >
               {audioBusy ? <Loader2 size={15} className="animate-spin" aria-hidden />
                 : playing && !paused ? <Pause size={15} aria-hidden /> : <Play size={15} aria-hidden />}
@@ -247,13 +247,13 @@ export default function ExplainPanel({
               )}
             </button>
             {(playing || paused) && (
-              <button type="button" onClick={stopAudio} className="flex min-h-[44px] items-center gap-1.5 rounded-lg border px-3 text-sm hover:bg-black/5">
+              <button type="button" onClick={stopAudio} className="flex min-h-[44px] items-center gap-1.5 rounded-lg border px-3 text-sm hover:bg-surface-hover">
                 <Square size={14} aria-hidden /> Durdur
               </button>
             )}
             {canDevice && !audioBusy && !playing && !paused && !deviceVoice && (
               <button type="button" onClick={() => { stopAudio(); setDeviceVoice(true); }}
-                      className="flex min-h-[44px] items-center gap-1.5 rounded-lg px-3 text-sm text-text-secondary hover:bg-black/5"
+                      className="flex min-h-[44px] items-center gap-1.5 rounded-lg px-3 text-sm text-text-secondary hover:bg-surface-hover"
                       title="Tarayıcının kendi sesiyle, ücretsiz">
                 <Volume2 size={15} aria-hidden /> Cihaz sesiyle dinle
               </button>
@@ -267,7 +267,7 @@ export default function ExplainPanel({
           </div>
 
           {audioErr && (
-            <div role="alert" className="mt-2 rounded-xl border border-amber-500/40 bg-amber-500/10 p-3 text-sm text-amber-900 dark:text-amber-200">
+            <div role="alert" className="mt-2 rounded-xl border border-warning/40 bg-warning-bg p-3 text-sm text-warning">
               <p>{audioErr}</p>
               <div className="mt-2 flex flex-wrap gap-2">
                 <button type="button" onClick={speak}
@@ -276,7 +276,7 @@ export default function ExplainPanel({
                 </button>
                 {canDevice && (
                   <button type="button" onClick={() => { setAudioErr(""); setDeviceVoice(true); }}
-                          className="flex min-h-[40px] items-center gap-1.5 rounded-lg bg-accent-purple px-3 text-sm text-white">
+                          className="flex min-h-[40px] items-center gap-1.5 rounded-lg bg-accent-purple px-3 text-sm text-on-accent">
                     <Volume2 size={14} aria-hidden /> Cihaz sesiyle dinle
                   </button>
                 )}
@@ -319,7 +319,7 @@ export default function ExplainPanel({
               type="button"
               onClick={speak}
               disabled={audioBusy || !text}
-              className="mt-1 min-h-[40px] w-full rounded-lg border px-2 text-xs text-text-secondary hover:bg-black/5 disabled:opacity-50"
+              className="mt-1 min-h-[40px] w-full rounded-lg border px-2 text-xs text-text-secondary hover:bg-surface-hover disabled:opacity-50"
             >
               Bu sesle yeniden oku
             </button>

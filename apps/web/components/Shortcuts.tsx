@@ -63,16 +63,25 @@ export default function Shortcuts() {
     try { localStorage.setItem(SINGLE_KEY, v ? "1" : "0"); } catch {}
   }
 
+  // Liste gercek kisayollarla eslesir; bir kisayol eklenip kaldirilinca burasi da guncellenir:
+  //  Genel: CommandPalette.tsx (Ctrl K), bu dosya (G+harf, /, T, ?), Modal.tsx (Esc)
+  //  Okuyucu: app/(app)/documents/[id]/page.tsx (ok tuslari, PgUp/PgDn, F, Esc, Ctrl Z / Ctrl Shift Z / Ctrl Y)
+  //  Sohbet/not/taslak: ChatTab.tsx, chat/ChatPanel.tsx, documents/[id]/page.tsx (not), DraftEditor.tsx
+  //  Sesli ders: PodcastPlayer.tsx (ok tuslari 10 sn, bosluk)
   const groups: [string, [string, string][]][] = [
     ["Genel", [
       ["Ctrl K", "Hızlı geçiş ve arama"], ["G  D", "Defterler"], ["G  K", "Kütüphane"], ["G  A", "Araştır"],
       ["/", "Aramaya odaklan"], ["T", "Tema (açık / koyu / sistem)"], ["?", "Bu pencere"], ["Esc", "Pencereyi kapat"],
     ]],
     ["Okuyucu (PDF)", [
-      ["← →", "Sayfa değiştir"], ["F", "Odak modu (geniş ekranda)"], ["Ctrl Z", "Vurguyu geri al"], ["Ctrl Shift Z", "Yinele"],
+      ["← →", "Önceki / sonraki sayfa (PgUp / PgDn de olur)"], ["F", "Odak modu (geniş ekranda)"], ["Esc", "Odak modundan çık"],
+      ["Ctrl Z", "Son vurguyu geri al"], ["Ctrl Shift Z", "Yinele (Ctrl Y de olur)"],
     ]],
-    ["Sohbet ve not", [
-      ["Enter", "Soruyu gönder"], ["Shift Enter", "Yeni satır"], ["Ctrl Enter", "Notu kaydet"],
+    ["Sohbet, not ve taslak", [
+      ["Enter", "Soruyu gönder"], ["Shift Enter", "Yeni satır (okuyucu sohbeti)"], ["Ctrl Enter", "Notu kaydet · taslakta yeni paragraf"],
+    ]],
+    ["Sesli ders", [
+      ["← →", "10 saniye geri / ileri"], ["Boşluk", "Oynat / duraklat"],
     ]],
   ];
   return (

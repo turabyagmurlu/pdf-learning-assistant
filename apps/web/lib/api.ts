@@ -20,13 +20,39 @@ export class ApiError extends Error {
   status: number;
   network: boolean;
   code: string;
-  constructor(msg: string, status = 0, network = false, code?: string) {
+  /** AI_BUSY: Gemini'nin tahmini yeniden acilma suresi (dk); sunucu bilmiyorsa null. */
+  retryMin: number | null;
+  constructor(msg: string, status = 0, network = false, code?: string, retryMin: number | null = null) {
     super(msg);
     this.name = "ApiError";
     this.status = status;
     this.network = network;
     this.code = code || (network ? "NETWORK" : status ? `HTTP_${status}` : "UNKNOWN");
+    this.retryMin = retryMin;
   }
+}
+
+/**
+ * Tek kullanicili kurulumda sinir sahibin degil Gemini'nin: servis yogun/doluyken
+ * her yerde ayni kisa cumle. `retryMin` sunucudan (error.retry_min) gelir.
+ */
+export function aiBusyMessage(retryMin?: number | null): string {
+  if (retryMin && retryMin > 0) {
+    if (retryMin >= 90) return `Gemini bugünlük doldu; yaklaşık ${Math.round(retryMin / 60)} saat sonra tekrar dene.`;
+    return `Gemini şu an yoğun; ~${retryMin} dk sonra tekrar dene.`;
+  }
+  return "Gemini şu an yoğun; birkaç dakika sonra tekrar dene.";
+}
+
+/** Kisisel gunluk sinir (yalniz sahip disindaki hesaplarda tetiklenir). */
+export const USAGE_LIMIT_MSG = "Bugünkü yapay zekâ kullanımın doldu; yarın yenilenir.";
+
+/** Sunucunun `error` govdesinden kullaniciya gosterilecek metni secer (kod bazli sadelestirme). */
+function messageFor(code: string | undefined, userMsg: string | undefined, retryMin: number | null, fallback: string): string {
+  // Sure biliniyorsa tek tip kisa cumle; bilinmiyorsa sunucunun (gunluk/dakikalik ayrimli) metni.
+  if (code === "AI_BUSY") return retryMin ? aiBusyMessage(retryMin) : (userMsg || aiBusyMessage());
+  if (code === "USAGE_LIMIT") return userMsg || USAGE_LIMIT_MSG;
+  return userMsg || fallback;
 }
 
 /** Herhangi bir hatadan kullaniciya gosterilecek metni cikarir (bilesenlerde `catch (e)` icin). */
@@ -108,17 +134,18 @@ export async function api(path: string, opts: RequestInit = {}, retries = 3) {
     if (!res.ok) {
       let body: unknown = null;
       try { body = await res.json(); } catch { /* govde JSON degil */ }
-      const errObj = (body as { error?: { code?: unknown; user_message?: unknown } } | null)?.error;
+      const errObj = (body as { error?: { code?: unknown; user_message?: unknown; retry_min?: unknown } } | null)?.error;
       const code = typeof errObj?.code === "string" ? errObj.code : undefined;
       const userMsg = typeof errObj?.user_message === "string" ? errObj.user_message : undefined;
+      const retryMin = typeof errObj?.retry_min === "number" && errObj.retry_min > 0 ? Math.round(errObj.retry_min) : null;
       // Kodsuz 502/503/504: uygulama degil barindirma katmani cevap verdi (sunucu yeniden basliyor/uyaniyor).
       if (!code && (res.status === 502 || res.status === 503 || res.status === 504)) {
         lastErr = new ApiError(WAKING_MSG, res.status, true, "SERVER_WAKING");
         continue;
       }
       const detail = (body as { detail?: unknown } | null)?.detail;
-      const msg = userMsg || (looksLikeUserText(detail) ? detail : statusMessage(res.status));
-      throw new ApiError(msg, res.status, false, code);
+      const msg = messageFor(code, userMsg, retryMin, looksLikeUserText(detail) ? detail : statusMessage(res.status));
+      throw new ApiError(msg, res.status, false, code, retryMin);
     }
     return res.status === 204 ? null : res.json();
   }

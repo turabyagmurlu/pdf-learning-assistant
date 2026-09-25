@@ -87,10 +87,10 @@ export async function deleteAnnotation(id: string): Promise<boolean> {
 }
 
 export function exportMarkdown(title: string, anns: Annotation[]): string {
-  const lines = [`# ${title} — Notlar & Highlight'lar\n`];
+  const lines = [`# ${title} — Notlar ve vurgular\n`];
   const byPage = [...anns].sort((a, b) => a.page_number - b.page_number);
   for (const a of byPage) {
-    const kind = a.anchor.type === "sticky" ? "Not" : "Highlight";
+    const kind = a.anchor.type === "sticky" ? "Not" : "Vurgu";
     lines.push(`## Sayfa ${a.page_number} · ${kind}`);
     if (a.selected_text) lines.push(`> ${a.selected_text}`);
     if (a.note_content) lines.push(`\n${a.note_content}`);

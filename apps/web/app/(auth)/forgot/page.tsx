@@ -1,21 +1,33 @@
 "use client";
-import { useState } from "react";
-import { ApiError, api, errorMessage } from "@/lib/api";
+import { useEffect, useState } from "react";
+import { API, ApiError, api, errorMessage } from "@/lib/api";
 import { Loader2 } from "lucide-react";
 
-const CONTACT = "turab7123@gmail.com";
+const CMD = "python -m app.scripts.set_owner_password --email SENIN_ADRESIN --password YENI_SIFRE";
 
+/**
+ * Sifremi unuttum.
+ * - E-posta ile sifirlama etkinse (GET /auth/config -> mail_enabled) adres formu.
+ * - Kapaliysa (tek kullanicili kurulum): form yok; sahibe sunucu kabugunda calisacak
+ *   kurtarma komutu anlatilir (apps/api/app/scripts/set_owner_password.py).
+ */
 export default function ForgotPage() {
+  const [mailOn, setMailOn] = useState<boolean | null>(null);   // null: henüz bilinmiyor
   const [email, setEmail] = useState("");
   const [busy, setBusy] = useState(false);
   const [sent, setSent] = useState(false);
-  const [notConfigured, setNotConfigured] = useState(false);
   const [err, setErr] = useState("");
+
+  useEffect(() => {
+    fetch(`${API}/auth/config`, { cache: "no-store" }).then((r) => r.json())
+      .then((c) => setMailOn(!!c?.mail_enabled))
+      .catch(() => setMailOn(false));
+  }, []);
 
   async function submit(e: React.FormEvent) {
     e.preventDefault();
     if (busy) return;
-    setErr(""); setNotConfigured(false);
+    setErr("");
     setBusy(true);
     try {
       await api("/auth/forgot", {
@@ -24,7 +36,7 @@ export default function ForgotPage() {
       });
       setSent(true);
     } catch (e: unknown) {
-      if (e instanceof ApiError && e.code === "MAIL_NOT_CONFIGURED") setNotConfigured(true);
+      if (e instanceof ApiError && e.code === "MAIL_NOT_CONFIGURED") setMailOn(false);
       else setErr(errorMessage(e));
     } finally {
       setBusy(false);
@@ -38,7 +50,25 @@ export default function ForgotPage() {
       <div className="w-full max-w-sm">
         <h1 className="mb-1 font-heading text-2xl">Şifremi unuttum</h1>
 
-        {sent ? (
+        {mailOn === null ? (
+          <p role="status" className="mt-4 flex items-center gap-2 text-sm text-text-secondary">
+            <Loader2 size={16} className="animate-spin" aria-hidden="true" /> Yükleniyor…
+          </p>
+        ) : !mailOn ? (
+          <div className="mt-4 space-y-3 text-sm leading-relaxed">
+            <p>
+              Bu kurulumda e-postayla şifre sıfırlama kapalı. Şifreni, uygulamanın çalıştığı sunucunun
+              kabuğunda (Render → Shell) şu komutla yenileyebilirsin:
+            </p>
+            <pre className="overflow-x-auto rounded-lg border border-border bg-surface-muted px-3 py-2 text-xs leading-relaxed">
+              <code>{CMD}</code>
+            </pre>
+            <p className="text-text-secondary">
+              Komut yeni şifreyi kaydeder ve açık olan diğer oturumları kapatır; sonra buradan yeni şifrenle giriş yaparsın.
+              Adımlar depodaki README&apos;nin &quot;Şifremi unuttum (sahip)&quot; bölümünde de yazıyor.
+            </p>
+          </div>
+        ) : sent ? (
           <div role="status" className="mt-4 space-y-3 text-sm leading-relaxed">
             <p>
               <strong>{email.trim().toLowerCase()}</strong> adresine ait bir hesap varsa, şifre sıfırlama bağlantısını
@@ -69,16 +99,6 @@ export default function ForgotPage() {
               </button>
             </form>
             {err && <p role="alert" className="mt-4 text-sm text-danger">{err}</p>}
-            {notConfigured && (
-              <div role="status" className="mt-4 rounded-lg border border-border bg-surface-muted px-3 py-3 text-sm leading-relaxed">
-                <p className="font-medium">Şifre sıfırlama e-postası henüz etkin değil.</p>
-                <p className="mt-1 text-text-secondary">
-                  Şimdilik şifreni yenilemek için kayıtlı e-posta adresinden{" "}
-                  <a className="text-accent-purple underline" href={`mailto:${CONTACT}?subject=${encodeURIComponent("TY PDF şifre sıfırlama")}`}>{CONTACT}</a>{" "}
-                  adresine yaz; en kısa sürede yardımcı olalım.
-                </p>
-              </div>
-            )}
           </>
         )}
 

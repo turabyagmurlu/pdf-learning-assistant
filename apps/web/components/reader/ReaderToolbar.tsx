@@ -47,8 +47,7 @@ function PageInput({ page, numPages, setPage, tall }: { page: number; numPages: 
       <input aria-label={`Sayfa numarası, toplam ${numPages || 0} sayfa`} inputMode="numeric" value={v}
              onChange={(e) => setV(e.target.value.replace(/[^0-9]/g, ""))}
              onBlur={commit} onKeyDown={(e) => { if (e.key === "Enter") { commit(); (e.target as HTMLInputElement).blur(); } }}
-             className={`${tall ? "h-10" : "h-9"} w-11 rounded-md border border-black/10 bg-white/70 px-1 text-center text-[16px] sm:text-sm`}
-             style={{ color: "#1F1D1A" }} />
+             className={`${tall ? "h-10" : "h-9"} w-11 rounded-md border bg-surface px-1 text-center text-[16px] text-text-primary sm:text-sm`} />
       <span style={{ color: "var(--r-ink-2)" }} aria-hidden>/ {numPages || "–"}</span>
     </div>
   );
@@ -56,8 +55,9 @@ function PageInput({ page, numPages, setPage, tall }: { page: number; numPages: 
 
 /** Genis ekran arac cubugu (baslik satirinin sagi). */
 export default function ReaderToolbar(p: ToolbarProps) {
-  const btn = "flex h-10 w-10 items-center justify-center rounded-lg hover:bg-black/5 disabled:opacity-40";
-  const active = "bg-[#6D5DF6]/12 text-[#5B4BD6]";
+  // H-9: secili arac uygulama moruyla (acik/koyu temada >= 4.5:1), hover zemini token
+  const btn = "flex h-10 w-10 items-center justify-center rounded-lg hover:bg-surface-hover disabled:opacity-40";
+  const active = "bg-accent-purple/10 text-accent-purple";
   return (
     <div className="reader-toolbar flex shrink-0 items-center gap-0.5 rounded-xl px-1 py-0.5" role="toolbar" aria-label="Okuyucu araçları">
       {!p.focus && (
@@ -72,7 +72,7 @@ export default function ReaderToolbar(p: ToolbarProps) {
               onClick={() => p.setPage(Math.min(p.numPages, p.page + 1))}><ChevronRight size={17} /></button>
       <Sep />
       <button className={btn} aria-label="Uzaklaştır" title="Uzaklaştır" onClick={() => p.setScale(zoomOut)}><Minus size={17} /></button>
-      <button className="h-10 min-w-[52px] rounded-lg px-1 text-xs hover:bg-black/5"
+      <button className="h-10 min-w-[52px] rounded-lg px-1 text-xs hover:bg-surface-hover"
               aria-label={`Yakınlaştırma yüzde ${Math.round(p.scale * 100)}. Sayfaya sığdırmak için bas`}
               title="Yakınlaştırmayı sıfırla (sayfaya sığdır)"
               onClick={() => p.setScale(() => 1)}>{Math.round(p.scale * 100)}%</button>
@@ -157,7 +157,7 @@ export function ReaderMoreMenu(p: ToolbarProps & { variant: "wide" | "narrow" })
     <div ref={wrap} className="relative">
       <button ref={btnRef} type="button" aria-haspopup="menu" aria-expanded={open} aria-label="Diğer okuyucu araçları"
               title="Diğer araçlar" onClick={() => setOpen((v) => !v)}
-              className={`flex ${size} items-center justify-center rounded-lg hover:bg-black/5`}>
+              className={`flex ${size} items-center justify-center rounded-lg hover:bg-surface-hover`}>
         <MoreHorizontal size={19} />
       </button>
       {open && (
@@ -185,13 +185,13 @@ export function ReaderBottomBar({ page, numPages, setPage, onLeft, onRight, left
   page: number; numPages: number; setPage: (n: number) => void;
   onLeft: () => void; onRight: () => void; leftOpen: boolean; rightOpen: boolean;
 }) {
-  const nav = "flex h-11 w-11 items-center justify-center rounded-lg hover:bg-black/5 disabled:opacity-40";
+  const nav = "flex h-11 w-11 items-center justify-center rounded-lg hover:bg-surface-hover disabled:opacity-40";
   // ikon ustte, metin altta: 375 px'e iki etiket + sayfa gezinme sigsin
-  const lab = "flex h-12 min-w-[56px] flex-col items-center justify-center gap-0.5 rounded-lg px-1.5 text-xs hover:bg-black/5";
+  const lab = "flex h-12 min-w-[56px] flex-col items-center justify-center gap-0.5 rounded-lg px-1.5 text-xs hover:bg-surface-hover";
   return (
     <div className="reader-toolbar flex shrink-0 items-center justify-between gap-1 border-t px-1.5"
          style={{ paddingBottom: "env(safe-area-inset-bottom)" }} role="toolbar" aria-label="Okuyucu gezinme">
-      <button type="button" className={lab} onClick={onLeft} aria-expanded={leftOpen} aria-haspopup="dialog">
+      <button type="button" className={`${lab} ${leftOpen ? "text-accent-purple" : ""}`} onClick={onLeft} aria-expanded={leftOpen} aria-haspopup="dialog">
         <ListTree size={18} aria-hidden /><span>İçindekiler</span>
       </button>
       <div className="flex items-center">
@@ -201,7 +201,7 @@ export function ReaderBottomBar({ page, numPages, setPage, onLeft, onRight, left
         <button type="button" className={nav} aria-label="Sonraki sayfa" disabled={page >= numPages}
                 onClick={() => setPage(Math.min(numPages, page + 1))}><ChevronRight size={18} /></button>
       </div>
-      <button type="button" className={lab} onClick={onRight} aria-expanded={rightOpen} aria-haspopup="dialog">
+      <button type="button" className={`${lab} ${rightOpen ? "text-accent-purple" : ""}`} onClick={onRight} aria-expanded={rightOpen} aria-haspopup="dialog">
         <MessageSquare size={18} aria-hidden /><span>Sohbet</span>
       </button>
     </div>

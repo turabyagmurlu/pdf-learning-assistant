@@ -1,5 +1,5 @@
 "use client";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { Document, Page, pdfjs } from "react-pdf";
 import "react-pdf/dist/Page/TextLayer.css";
 import "react-pdf/dist/Page/AnnotationLayer.css";
@@ -7,12 +7,35 @@ import "@/styles/reader.css";
 import { Annotation, Rect, HIGHLIGHT_COLORS } from "@/lib/reader";
 import { StickyNote, MessageSquare, PenLine } from "lucide-react";
 
-// Worker unpkg'den gelir; service worker (public/sw.js) bu dosyayi onbellege alir,
-// ikinci acilista ag gerekmez.
-pdfjs.GlobalWorkerOptions.workerSrc = `https://unpkg.com/pdfjs-dist@${pdfjs.version}/build/pdf.worker.min.mjs`;
+// Worker paketten sunulur (TK-6): scripts/copy-worker.mjs pdfjs-dist worker'ini public/'e kopyalar
+// (package.json postinstall). Service worker (public/sw.js) onbellege alir; ikinci acilista ag gerekmez.
+pdfjs.GlobalWorkerOptions.workerSrc = "/pdf.worker.min.mjs";
 
 type NewHighlight = { page: number; rects: Rect[]; text: string; color: string; openNote?: boolean };
 type NewSticky = { page: number; x: number; y: number };
+
+/** Son kullanilan vurgu rengi (H-5: arac acikken balon acilmadan bu renkle vurgulanir). */
+const LAST_COLOR_KEY = "reader.lastColor";
+function lastColor(): string {
+  try {
+    const v = localStorage.getItem(LAST_COLOR_KEY);
+    if (v && HIGHLIGHT_COLORS.some((c) => c.value === v)) return v;
+  } catch {}
+  return HIGHLIGHT_COLORS[0].value;
+}
+function rememberColor(v: string) { try { localStorage.setItem(LAST_COLOR_KEY, v); } catch {} }
+
+/** Dokunulan noktadaki metin konumu (kalemle secim icin). */
+function caretAt(x: number, y: number): Range | null {
+  const d = document as Document & { caretRangeFromPoint?: (x: number, y: number) => Range | null;
+    caretPositionFromPoint?: (x: number, y: number) => { offsetNode: Node; offset: number } | null };
+  try {
+    if (d.caretRangeFromPoint) return d.caretRangeFromPoint(x, y);
+    const p = d.caretPositionFromPoint?.(x, y);
+    if (p) { const r = document.createRange(); r.setStart(p.offsetNode, p.offset); r.collapse(true); return r; }
+  } catch {}
+  return null;
+}
 
 interface Props {
   fileUrl: string;
@@ -80,18 +103,36 @@ export default function PdfReader(props: Props) {
   const fitBase = cw > 0 ? Math.min(PAGE_MAX, Math.max(200, cw - SIDE_PAD)) : PAGE_MAX;
   const width = Math.max(120, Math.round((fitBase * scale) / (spread ? 2 : 1) - (spread ? 6 : 0)));
 
-  // disaridan sayfa degisince (dugme, icindekiler, atif) o sayfaya kaydir
+  // H-4: yakinlastirinca okunan yer korunur — kaydirma, ekran ortasi sabit kalacak sekilde oransal ayarlanir
+  // (sayfa basina atlamaz). Genislik degisimi sayfa yuksekligini de ayni oranda degistirir.
+  const prevWidth = useRef(width);
+  useLayoutEffect(() => {
+    const c = scrollRef.current;
+    const old = prevWidth.current;
+    prevWidth.current = width;
+    if (!c || !old || old === width) return;
+    const k = width / old;
+    const cy = c.scrollTop + c.clientHeight / 2;
+    const cx = c.scrollLeft + c.clientWidth / 2;
+    c.scrollTop = Math.max(0, cy * k - c.clientHeight / 2);
+    c.scrollLeft = Math.max(0, cx * k - c.clientWidth / 2);
+  }, [width]);
+
+  // disaridan sayfa degisince (dugme, icindekiler, atif) o sayfaya kaydir.
+  // Kaydirmadan gelen sayfa degisimi (onVisiblePage → page) yeniden kaydirmaz.
+  const visibleRef = useRef(1);
   useEffect(() => {
     const c = scrollRef.current;
     const el = c?.querySelector(`[data-page="${page}"]`) as HTMLElement | null;
     if (!el || !c) return;
+    if (page === visibleRef.current && numPages > 0) return;
     const top = el.offsetTop - 16;
     if (Math.abs(c.scrollTop - top) <= 12) return;
     const reduce = window.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
     const far = Math.abs(page - visible) > 3;          // uzak atlamada ara sayfalar cizilmesin
     c.scrollTo({ top, behavior: reduce || far ? "auto" : "smooth" });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [page, width, spread, ratio]);
+  }, [page, spread, ratio, numPages]);
 
   // en gorunur sayfayi izle (rAF ile seyreltilmis)
   useEffect(() => {
@@ -108,6 +149,7 @@ export default function PdfReader(props: Props) {
         const d = Math.abs(center - mid);
         if (d < bestDist) { bestDist = d; best = Number(p.dataset.page); }
       }
+      visibleRef.current = best;
       setVisible(best);
       props.onVisiblePage(best);
     };
@@ -117,8 +159,9 @@ export default function PdfReader(props: Props) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [numPages, props.onVisiblePage]);
 
-  // metin secimi -> sayfaya gore oransal dikdortgenler (fare, dokunmatik ve klavye)
-  const readSelection = useCallback(() => {
+  // metin secimi -> sayfaya gore oransal dikdortgenler (fare, dokunmatik ve klavye).
+  // autoCommit (H-5): vurgu araci acikken secim birakildigi anda balon acilmadan son renkle vurgula.
+  const readSelection = useCallback((autoCommit = false) => {
     const c = scrollRef.current;
     const s = window.getSelection();
     if (!c || !s || s.isCollapsed || !s.rangeCount) {
@@ -142,6 +185,11 @@ export default function PdfReader(props: Props) {
       h: r.height / pr.height,
     })).filter((rc) => rc.y >= -0.05 && rc.y + rc.h <= 1.05);
     if (!rects.length) { setSel(null); return; }
+    if (autoCommit && tool === "highlight") {
+      props.onCreateHighlight({ page: pageNum, rects, text: s.toString(), color: lastColor() });
+      s.removeAllRanges(); setSel(null);
+      return;
+    }
     const cRect = c.getBoundingClientRect();
     const first = clientRects[0];
     const last = clientRects[clientRects.length - 1];
@@ -153,18 +201,60 @@ export default function PdfReader(props: Props) {
     const rawLeft = first.left - cRect.left + Math.min(first.width, 120) - 40;
     const left = Math.max(8, Math.min(rawLeft, c.clientWidth - BW - 8));
     setSel({ page: pageNum, rects, text: s.toString(), top: Math.max(c.scrollTop + 4, top), left });
-  }, [props.onAsk, props.onAddToDraft]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [props.onAsk, props.onAddToDraft, props.onCreateHighlight, tool]);
 
   useEffect(() => {
     let t: ReturnType<typeof setTimeout> | null = null;
-    const onChange = () => { if (t) clearTimeout(t); t = setTimeout(readSelection, 250); };
+    // Arac acikken secim degisimi balon acmaz (birakinca dogrudan vurgulanir)
+    const onChange = () => { if (tool === "highlight") return; if (t) clearTimeout(t); t = setTimeout(() => readSelection(false), 250); };
     document.addEventListener("selectionchange", onChange);
     return () => { document.removeEventListener("selectionchange", onChange); if (t) clearTimeout(t); };
-  }, [readSelection]);
+  }, [readSelection, tool]);
+
+  // TB-6: vurgu araci acikken KALEM (pointerType === "pen") surukleyince sayfa kaymaz, metin secilir,
+  // birakinca son renkle vurgulanir. Parmak ve fare eskisi gibi (parmak kaydirir).
+  const pen = useRef<{ id: number; start: Range } | null>(null);
+  const onPenDown = (e: React.PointerEvent) => {
+    if (tool !== "highlight" || e.pointerType !== "pen") return;
+    const start = caretAt(e.clientX, e.clientY);
+    if (!start) return;
+    const c = scrollRef.current;
+    if (c) c.style.touchAction = "none";
+    pen.current = { id: e.pointerId, start };
+    try { (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId); } catch {}
+    e.preventDefault();
+  };
+  const onPenMove = (e: React.PointerEvent) => {
+    if (!pen.current || e.pointerId !== pen.current.id) return;
+    e.preventDefault();
+    const end = caretAt(e.clientX, e.clientY);
+    if (!end) return;
+    const s = window.getSelection();
+    if (!s) return;
+    const r = document.createRange();
+    const a = pen.current.start;
+    const before = a.compareBoundaryPoints(Range.START_TO_START, end) <= 0;
+    r.setStart(before ? a.startContainer : end.startContainer, before ? a.startOffset : end.startOffset);
+    r.setEnd(before ? end.startContainer : a.startContainer, before ? end.startOffset : a.startOffset);
+    s.removeAllRanges(); s.addRange(r);
+  };
+  const onPenUp = (e: React.PointerEvent) => {
+    const c = scrollRef.current;
+    if (pen.current && e.pointerId === pen.current.id) {
+      pen.current = null;
+      if (c) c.style.touchAction = "";
+      try { (e.currentTarget as HTMLElement).releasePointerCapture(e.pointerId); } catch {}
+      readSelection(true);
+      return;
+    }
+    readSelection(tool === "highlight");
+  };
 
   const clearSel = () => { window.getSelection()?.removeAllRanges(); setSel(null); };
   const commitHighlight = (color: string, openNote = false) => {
     if (!sel) return;
+    rememberColor(color);
     props.onCreateHighlight({ page: sel.page, rects: sel.rects, text: sel.text, color, openNote });
     clearSel();
   };
@@ -207,8 +297,10 @@ export default function PdfReader(props: Props) {
 
   return (
     <div ref={scrollRef} className="reader-surround h-full w-full overflow-auto overscroll-contain"
-         onPointerUp={readSelection} onKeyUp={(e) => { if (e.shiftKey) readSelection(); }}
-         style={{ cursor: tool === "note" ? "crosshair" : "auto" }}>
+         onPointerDown={onPenDown} onPointerMove={onPenMove} onPointerUp={onPenUp} onPointerCancel={onPenUp}
+         onKeyUp={(e) => { if (e.shiftKey) readSelection(tool === "highlight"); }}
+         style={{ cursor: tool === "note" ? "crosshair" : tool === "highlight" ? "text" : "auto" }}>
+      {/* H-4: Document "w-max min-w-full" — sayfa kaptan genisleyince kap da genisler, sol kenar kaydirilabilir */}
       <Document
         file={fileUrl}
         onLoadSuccess={onLoad}
@@ -225,7 +317,7 @@ export default function PdfReader(props: Props) {
             </button>
           </Centered>
         }
-        className="flex flex-col items-center gap-7 px-3 py-4 lg:gap-8 lg:py-8"
+        className="flex w-max min-w-full flex-col items-center gap-7 px-3 py-4 lg:gap-8 lg:py-8"
       >
         {spread
           ? chunk(pages, 2).map((pair, i) => (
@@ -236,29 +328,29 @@ export default function PdfReader(props: Props) {
 
       {sel && (
         <div role="toolbar" aria-label="Seçili metin"
-             className="absolute z-30 flex max-w-[calc(100%-16px)] flex-wrap items-center gap-0.5 rounded-xl border bg-white/95 px-1 py-0.5 shadow-lg"
-             style={{ top: sel.top, left: sel.left, color: "#1F1D1A" }}
+             className="absolute z-30 flex max-w-[calc(100%-16px)] flex-wrap items-center gap-0.5 rounded-xl border bg-surface px-1 py-0.5 text-text-primary shadow-lg"
+             style={{ top: sel.top, left: sel.left }}
              onPointerDown={() => { bubbleDownAt.current = Date.now(); }}
              onMouseDown={(e) => e.preventDefault()}>
           {HIGHLIGHT_COLORS.map((c) => (
             <button key={c.key} type="button" title={`${c.label} ile vurgula`} aria-label={`${c.label} ile vurgula`}
                     onClick={() => commitHighlight(c.value)}
-                    className="flex h-10 w-10 items-center justify-center rounded-lg hover:bg-black/5">
+                    className="flex h-10 w-10 items-center justify-center rounded-lg hover:bg-surface-hover">
               <span className="h-6 w-6 rounded-full border border-black/15" style={{ background: c.value }} />
             </button>
           ))}
-          <button type="button" onClick={() => commitHighlight(HIGHLIGHT_COLORS[0].value, true)}
-                  className="h-10 rounded-lg px-2 text-sm hover:bg-black/5" aria-label="Vurgula ve not ekle">+ Not</button>
+          <button type="button" onClick={() => commitHighlight(lastColor(), true)}
+                  className="h-10 rounded-lg px-2 text-sm hover:bg-surface-hover" aria-label="Vurgula ve not ekle">+ Not</button>
           {props.onAsk && (
             <button type="button" onClick={ask}
-                    className="ml-0.5 flex h-10 items-center gap-1 rounded-lg bg-[#6D5DF6]/12 px-2.5 text-sm font-medium text-[#4A3BC4] hover:bg-[#6D5DF6]/20"
+                    className="ml-0.5 flex h-10 items-center gap-1 rounded-lg bg-accent-purple/10 px-2.5 text-sm font-medium text-accent-purple hover:bg-accent-purple/20"
                     aria-label="Seçili metni sohbette sor" title="Seçili metni sağdaki sohbete soru olarak hazırlar">
               <MessageSquare size={15} aria-hidden /> Sor
             </button>
           )}
           {props.onAddToDraft && (
             <button type="button" onClick={toDraft}
-                    className="ml-0.5 flex h-10 items-center gap-1 whitespace-nowrap rounded-lg px-2.5 text-sm font-medium hover:bg-black/5"
+                    className="ml-0.5 flex h-10 items-center gap-1 whitespace-nowrap rounded-lg px-2.5 text-sm font-medium hover:bg-surface-hover"
                     aria-label="Taslağa ekle" title="Seçili metni kaynak ve sayfa numarasıyla defterin taslağına alıntı olarak ekler (ücretsiz)">
               <PenLine size={15} aria-hidden /> Taslağa ekle
             </button>
@@ -305,7 +397,7 @@ function PageBlock({ n, width, live, ratio, onRatio, annotations, onClick, onSel
                      left: `${r.x * 100}%`, top: `${r.y * 100}%`,
                      width: `${r.w * 100}%`, height: `${r.h * 100}%`,
                      background: a.highlight_color ?? "#FFE78A",
-                     outline: a.note_content ? "1.5px solid rgba(109,93,246,0.55)" : "none",
+                     outline: a.note_content ? "1.5px solid var(--r-accent)" : "none",
                    }}
                    title={a.note_content || a.selected_text || ""}
                    onClick={(e) => { e.stopPropagation(); onSelectAnnotation(a); }} />

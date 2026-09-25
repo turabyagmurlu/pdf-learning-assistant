@@ -192,7 +192,7 @@ export default function VideoReader({ id, doc }: { id: string; doc: any }) {
                 <h3 className="mb-1.5 text-xs font-semibold uppercase tracking-wide text-text-secondary">Anahtar kavramlar</h3>
                 <div className="flex flex-wrap gap-1.5">
                   {toArr(doc.key_concepts).map((k, i) => (
-                    <span key={i} title={k?.definition || ""} className="rounded-full bg-accent-amber/15 px-2.5 py-0.5 text-xs text-amber-800 dark:text-amber-300">
+                    <span key={i} title={k?.definition || ""} className="rounded-full bg-surface-muted px-2.5 py-0.5 text-xs text-text-secondary">
                       {typeof k === "string" ? k : (k?.term || "")}
                     </span>
                   ))}
@@ -209,7 +209,7 @@ export default function VideoReader({ id, doc }: { id: string; doc: any }) {
     <ReaderHeader doc={doc} ctx={ctx}>
       {!isXl && (
         <button type="button" onClick={() => setInfoOpen(true)} aria-haspopup="dialog"
-                className="flex h-11 shrink-0 items-center gap-1.5 rounded-lg px-2.5 text-sm text-text-secondary hover:bg-surface-muted">
+                className="flex h-11 shrink-0 items-center gap-1.5 rounded-lg px-2.5 text-sm text-text-secondary hover:bg-surface-hover">
           <Info size={18} aria-hidden /> <span className="hidden sm:inline">Özet</span><span className="sr-only sm:hidden">Özet ve kavramlar</span>
         </button>
       )}
@@ -261,16 +261,16 @@ export default function VideoReader({ id, doc }: { id: string; doc: any }) {
             <p className="p-6 text-sm text-text-secondary">{needle ? "Eşleşme yok. Farklı bir kelime dene." : "Bu kaynaktan döküm çıkarılamadı. Kaynağı Kütüphane'den yeniden işlemeyi dene."}</p>
           ) : view.map(({ s, i, lines }) => (
             <section key={s.page} data-sec={i}
-                     className={"mb-3 rounded-xl border p-3 transition " + (i === active ? "border-red-400/60 bg-red-500/5" : "bg-surface")}>
+                     className={"mb-3 rounded-xl border p-3 transition " + (i === active ? "border-accent-purple/40 bg-accent-soft" : "bg-surface")}>
               <button type="button" onClick={() => seek(s.start)} aria-label={`Bölüm ${s.page}: ${fmt(s.start)} ile ${fmt(s.end)} arası, buradan oynat`}
-                      className="mb-1 min-h-[36px] text-xs font-semibold uppercase tracking-wide text-text-secondary hover:text-red-700">
+                      className="mb-1 min-h-[36px] text-xs font-semibold uppercase tracking-wide text-text-secondary hover:text-accent-purple">
                 ▶ {fmt(s.start)} – {fmt(s.end)} · bölüm {s.page}
               </button>
               <p className="text-sm leading-relaxed">
                 {lines.map((l, k) => (
                   <span key={k} onClick={() => seek(l.t)} title={fmt(l.t) + " — buradan oynat"}
-                        className={"cursor-pointer rounded px-0.5 hover:bg-red-500/10 " +
-                          (now >= l.t && (k + 1 >= lines.length || now < lines[k + 1].t) && i === active ? "bg-red-500/15" : "")}>
+                        className={"cursor-pointer rounded px-0.5 hover:bg-surface-hover " +
+                          (now >= l.t && (k + 1 >= lines.length || now < lines[k + 1].t) && i === active ? "bg-accent-purple/15" : "")}>
                     {l.x}{" "}
                   </span>
                 ))}
@@ -279,7 +279,7 @@ export default function VideoReader({ id, doc }: { id: string; doc: any }) {
           ))}
           {!follow && active >= 0 && !q && (
             <button type="button" onClick={() => setFollow(true)}
-                    className="sticky bottom-2 left-full min-h-[40px] rounded-full bg-red-700 px-4 text-sm text-white shadow">
+                    className="sticky bottom-2 left-full min-h-[40px] rounded-full border border-border-strong/60 bg-surface px-4 text-sm text-text-primary shadow-medium hover:bg-surface-hover">
               Oynayan yere dön
             </button>
           )}
@@ -300,7 +300,7 @@ export default function VideoReader({ id, doc }: { id: string; doc: any }) {
     {!isLg && (
       <div className="shrink-0 border-t bg-surface px-3 pt-2" style={{ paddingBottom: "max(0.5rem, env(safe-area-inset-bottom))" }}>
         <button type="button" onClick={() => setChatOpen(true)} aria-haspopup="dialog"
-                className="flex min-h-[48px] w-full items-center justify-center gap-2 rounded-xl bg-accent-purple px-4 text-sm font-medium text-white">
+                className="flex min-h-[48px] w-full items-center justify-center gap-2 rounded-xl bg-accent-purple px-4 text-sm font-medium text-on-accent">
           <MessageSquare size={17} aria-hidden /> Bu kaynağa sor
         </button>
       </div>

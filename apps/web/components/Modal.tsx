@@ -156,7 +156,7 @@ export default function Modal({
             <h2 id={titleId} className="font-heading text-lg leading-snug">{title}</h2>
             {!hideClose && (
               <button type="button" onClick={onClose} aria-label="Kapat" data-modal-close=""
-                      className="-mr-1.5 -mt-1.5 flex h-10 w-10 shrink-0 items-center justify-center rounded-lg text-text-secondary hover:bg-surface-muted">
+                      className="-mr-1.5 -mt-1.5 flex h-10 w-10 shrink-0 items-center justify-center rounded-lg text-text-secondary hover:bg-surface-hover">
                 <X size={18} />
               </button>
             )}

@@ -27,16 +27,16 @@ function Para({ text, needle }: { text: string; needle: string }) {
     if (!needle) return s;
     const i = s.toLowerCase().indexOf(needle);
     if (i < 0) return s;
-    return <>{s.slice(0, i)}<mark className="rounded bg-amber-300/60 px-0.5">{s.slice(i, i + needle.length)}</mark>{s.slice(i + needle.length)}</>;
+    return <>{s.slice(0, i)}<mark className="rounded bg-warning-bg px-0.5 text-text-primary">{s.slice(i, i + needle.length)}</mark>{s.slice(i + needle.length)}</>;
   };
   return (
-    <div className="space-y-2 text-[15px] leading-relaxed">
+    <div className="font-reading space-y-2">
       {lines.map((l, i) => {
         const t = l.trim();
         if (!t) return null;
         if (/^[-*•]\s+/.test(t)) return <p key={i} className="pl-4 before:-ml-3 before:mr-1.5 before:content-['•']">{mark(t.replace(/^[-*•]\s+/, ""))}</p>;
         if (t.startsWith("[Konuşmacı notu]")) return <p key={i} className="rounded-lg bg-surface-muted px-3 py-2 text-sm italic text-text-secondary">{mark(t)}</p>;
-        if (t.includes(" | ")) return <p key={i} className="font-mono text-[13px] text-text-secondary">{mark(t)}</p>;
+        if (t.includes(" | ")) return <p key={i} className="font-mono text-small text-text-secondary">{mark(t)}</p>;
         return <p key={i}>{mark(t)}</p>;
       })}
     </div>
@@ -132,7 +132,7 @@ export default function TextReader({ id, doc }: { id: string; doc: any }) {
         <button key={p.page_number} type="button" onClick={() => { go(p.page_number); setTocOpen(false); }}
                 aria-current={p.page_number === active ? "location" : undefined}
                 className={"flex min-h-[40px] w-full items-start gap-2 rounded-lg px-2 py-1.5 text-left text-sm " +
-                  (p.page_number === active ? "bg-accent-purple/10 font-medium text-text-primary" : "text-text-secondary hover:bg-surface-muted")}>
+                  (p.page_number === active ? "bg-accent-soft font-medium text-text-primary" : "text-text-secondary hover:bg-surface-hover")}>
           <span className="w-6 shrink-0 text-right text-xs opacity-80">{p.page_number}</span>
           <span className="line-clamp-2">{p.title || p.text.slice(0, 60)}</span>
         </button>
@@ -146,7 +146,7 @@ export default function TextReader({ id, doc }: { id: string; doc: any }) {
     <ReaderHeader doc={doc} ctx={ctx}>
       {!isXl && (
         <button type="button" onClick={() => setTocOpen(true)} aria-haspopup="dialog"
-                className="flex h-11 shrink-0 items-center gap-1.5 rounded-lg px-2.5 text-sm text-text-secondary hover:bg-surface-muted">
+                className="flex h-11 shrink-0 items-center gap-1.5 rounded-lg px-2.5 text-sm text-text-secondary hover:bg-surface-hover">
           <ListTree size={18} aria-hidden /> <span className="hidden sm:inline">{plural}</span><span className="sr-only sm:hidden">{plural}</span>
         </button>
       )}
@@ -203,7 +203,7 @@ export default function TextReader({ id, doc }: { id: string; doc: any }) {
               <button type="button" aria-label="Taslağa ekle"
                       title={`Seçili metni ${unit.toLowerCase()} numarasıyla defterin taslağına alıntı olarak ekler (ücretsiz)`}
                       onClick={() => { addToDraft(sel.text, sel.page); window.getSelection()?.removeAllRanges(); setSel(null); }}
-                      className="flex h-10 items-center gap-1.5 whitespace-nowrap rounded-lg px-3 text-sm font-medium hover:bg-surface-muted">
+                      className="flex h-10 items-center gap-1.5 whitespace-nowrap rounded-lg px-3 text-sm font-medium hover:bg-surface-hover">
                 <PenLine size={15} aria-hidden /> Taslağa ekle
               </button>
             </div>
@@ -211,7 +211,7 @@ export default function TextReader({ id, doc }: { id: string; doc: any }) {
           <div className="mx-auto max-w-3xl px-5 py-6">
             {pages === null ? (
               <div className="flex items-center gap-2 text-sm text-text-secondary">
-                {doc.status === "failed" ? <span className="text-red-700 dark:text-red-300">⚠️ {doc.error_message || "Bu kaynak işlenemedi."}</span>
+                {doc.status === "failed" ? <span className="text-danger">⚠️ {doc.error_message || "Bu kaynak işlenemedi."}</span>
                   : <span role="status" className="flex items-center gap-2"><Loader2 size={16} className="animate-spin" aria-hidden /> Hazırlanıyor · {st.label}</span>}
               </div>
             ) : !view.length ? (
@@ -265,7 +265,7 @@ export default function TextReader({ id, doc }: { id: string; doc: any }) {
     {!isLg && (
       <div className="shrink-0 border-t bg-surface px-3 pt-2" style={{ paddingBottom: "max(0.5rem, env(safe-area-inset-bottom))" }}>
         <button type="button" onClick={() => setChatOpen(true)} aria-haspopup="dialog"
-                className="flex min-h-[48px] w-full items-center justify-center gap-2 rounded-xl bg-accent-purple px-4 text-sm font-medium text-white">
+                className="flex min-h-[48px] w-full items-center justify-center gap-2 rounded-xl bg-accent-purple px-4 text-sm font-medium text-on-accent">
           <MessageSquare size={17} aria-hidden /> Bu kaynağa sor
         </button>
       </div>

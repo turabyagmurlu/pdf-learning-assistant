@@ -94,3 +94,11 @@ Tümü `.env.example` içinde açıklamalı. En kritik: `GEMINI_API_KEY` (ucrets
 - Hibrit arama (tsvector + RRF) ve cross-encoder re-rank
 - OCR (ocrmypdf) tam entegrasyonu
 - Kavram haritası görselleştirme (node-link UI)
+
+## Şifre kurtarma (tek kullanıcı)
+
+E-postayla sıfırlama kapalı. Şifreni unutursan Render → pdf-api → Shell sekmesinde:
+
+    python -m app.scripts.set_owner_password --email SENIN@EPOSTAN --password YeniSifre123
+
+Eski oturumlar düşer; yeni şifreyle giriş yap.

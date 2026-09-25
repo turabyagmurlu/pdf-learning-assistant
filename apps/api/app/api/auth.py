@@ -39,8 +39,8 @@ class RateLimited(AppError):
 
 class MailNotConfigured(AppError):
     code, status = "MAIL_NOT_CONFIGURED", 503
-    user_message = ("Şifre sıfırlama e-postası henüz etkin değil. "
-                    "Yardım için turab7123@gmail.com adresine yaz.")
+    user_message = ("E-postayla şifre sıfırlama bu kurulumda kapalı. Şifreni sunucu kabuğunda "
+                    "`python -m app.scripts.set_owner_password --email ... --password ...` ile yenileyebilirsin.")
 
 
 class ResetInvalid(AppError):
@@ -209,9 +209,11 @@ class DeleteMeIn(BaseModel):
 # ---------------------------------------------------------------- uclar
 @router.get("/config")
 async def auth_config():
-    """Giris ekrani icin: yeni kayit acik mi?"""
+    """Giris ekrani icin: yeni kayit acik mi, e-postayla sifre sifirlama etkin mi?
+    Ikisi de kapaliyken (tek kullanicili kurulum) web kayit ve e-posta satirlarini hic cizmez."""
     from app.config import settings as _s
-    return {"registration_open": bool(_s.allow_registration)}
+    from app.services.mailer import mail_configured
+    return {"registration_open": bool(_s.allow_registration), "mail_enabled": bool(mail_configured())}
 
 
 @router.post("/register")
@@ -260,7 +262,7 @@ async def login(body: LoginIn, request: Request, conn=Depends(db)):
         if verify_password(body.password, r["password_hash"]):
             return {"token": create_token(str(r["id"]), r["token_version"] or 0), "user": _user_out(r)}
     record_attempt("login", request, email)
-    raise Unauthorized("E-posta ya da şifre hatalı. Şifreni unuttuysan \"Şifremi unuttum\" ile yenileyebilirsin.")
+    raise Unauthorized("E-posta ya da şifre hatalı. Şifreni unuttuysan \"Şifremi unuttum\" bağlantısı ne yapacağını anlatır.")
 
 
 @router.get("/me")

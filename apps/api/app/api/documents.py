@@ -209,19 +209,127 @@ async def add_text(body: TextIn, conn=Depends(db), user=Depends(current_user)):
 
 @router.get("/{doc_id}/content")
 async def content(doc_id: str, conn=Depends(db), user=Depends(current_user)):
-    """PDF disi kaynaklarin okunabilir hali: bolumler (baslik, metin, varsa tablo)."""
+    """Kaynagin okunabilir metin hali: bolumler/sayfalar (baslik, metin, varsa tablo).
+    PDF disi kaynaklar `.pages.json`'dan; PDF'ler icin de `.pages.json` (isleme hatti yaziyorsa)
+    ya da OCR'li PDF'lerde `.ocr.json` (sayfa metinleri) okunur - hangisi varsa."""
     import asyncio, json as _json
     from app.storage.object_store import get_object
     row = await conn.fetchrow("SELECT file_path, source_type, source_url, media FROM documents WHERE id=$1 AND user_id=$2",
                               doc_id, user["id"])
     if not row:
         raise NotFound(DOC_MISSING)
-    try:
-        pages = _json.loads((await asyncio.to_thread(get_object, row["file_path"] + ".pages.json")).decode("utf-8"))
-    except Exception:  # noqa - henuz islenmedi
+    pages = None
+    method = None
+    for suffix, m in ((".pages.json", "pages"), (".ocr.json", "ocr")):
+        try:
+            got = _json.loads((await asyncio.to_thread(get_object, row["file_path"] + suffix)).decode("utf-8"))
+        except Exception:  # noqa - dosya yok / henuz islenmedi
+            continue
+        if isinstance(got, list) and got:
+            pages, method = got, m
+            break
+    if pages is None:
         return {"ready": False, "pages": [], "source_type": row["source_type"]}
-    return {"ready": True, "pages": pages, "source_type": row["source_type"],
+    # OCR ciktisinda yalniz page_number + text var; okuyucu bekledigi alanlari tamamla
+    if method == "ocr":
+        pages = [{"page_number": p.get("page_number", i + 1), "title": None, "text": p.get("text") or ""}
+                 for i, p in enumerate(pages) if isinstance(p, dict)]
+    return {"ready": True, "pages": pages, "source_type": row["source_type"], "method": method,
             "source_url": row["source_url"], "media": row["media"]}
+
+
+# ---------------------------------------------------------------- okuma konumu (cihazlar arasi)
+class ReadingIn(BaseModel):
+    page: int | None = None
+    num_pages: int | None = None
+    pct: int | None = None
+    media_pos: float | None = None      # video / ses: saniye
+    device: str | None = None           # Telefon | Tablet | Bilgisayar
+
+
+def _reading_of(r) -> dict | None:
+    """documents satirindan `reading` nesnesi (hic kaydedilmediyse None)."""
+    try:
+        if r["reading_at"] is None and r["last_page"] is None and r["media_pos"] is None:
+            return None
+    except (KeyError, IndexError):
+        return None
+    return {
+        "page": r["last_page"],
+        "num_pages": r["num_pages"],
+        "pct": r["progress_pct"],
+        "media_pos": r["media_pos"],
+        "device": r["reading_device"],
+        "updated_at": r["reading_at"].isoformat() if r["reading_at"] else None,
+    }
+
+
+@router.put("/{doc_id}/reading")
+async def put_reading(doc_id: str, body: ReadingIn, conn=Depends(db), user=Depends(current_user)):
+    """Okuma konumunu kaydeder: sayfa, toplam sayfa, yuzde, (video/ses) konum, cihaz adi.
+    Istemci 3 sn gecikmeyle ve sekme gizlenirken keepalive ile cagirir. Yapay zeka yok."""
+    page = body.page
+    num = body.num_pages
+    pct = body.pct
+    if page is not None:
+        page = max(1, int(page))
+    if num is not None:
+        num = max(0, int(num)) or None
+    if pct is None and page and num:
+        pct = round(page * 100 / num)
+    if pct is not None:
+        pct = max(0, min(100, int(pct)))
+    mpos = float(body.media_pos) if body.media_pos is not None and body.media_pos >= 0 else None
+    device = (body.device or "").strip()[:40] or None
+    row = await conn.fetchrow(
+        """UPDATE documents SET
+             last_page = COALESCE($3, last_page),
+             num_pages = COALESCE($4, num_pages),
+             progress_pct = COALESCE($5, progress_pct),
+             media_pos = COALESCE($6, media_pos),
+             reading_device = COALESCE($7, reading_device),
+             reading_at = now()
+           WHERE id=$1 AND user_id=$2
+           RETURNING last_page, num_pages, progress_pct, media_pos, reading_device, reading_at""",
+        doc_id, user["id"], page, num, pct, mpos, device)
+    if not row:
+        raise NotFound(DOC_MISSING)
+    return {"ok": True, "reading": _reading_of(row)}
+
+
+async def backfill_file_hashes(conn, user_id: str | None, limit: int = 200) -> dict:
+    """file_hash bos olan dosya kaynaklarinin (youtube haric) sha1'ini depodan okuyup yazar.
+    user_id None ise tum kullanicilar (acilis isi). Buyuk dosyalar tek tek okunur; limit ile parcali."""
+    import asyncio
+    from app.storage.object_store import get_object
+    q = ("SELECT id, file_path FROM documents WHERE file_hash IS NULL AND source_type <> 'youtube' "
+         "AND file_path IS NOT NULL")
+    args: list = []
+    if user_id:
+        q += " AND user_id=$1"
+        args.append(user_id)
+    q += f" ORDER BY created_at LIMIT {int(limit) + 1}"
+    rows = await conn.fetch(q, *args)
+    remaining = len(rows) > limit
+    rows = rows[:limit]
+    done, failed = 0, 0
+    for r in rows:
+        try:
+            data = await asyncio.to_thread(get_object, r["file_path"])
+            h = hashlib.sha1(data).hexdigest()
+            await conn.execute("UPDATE documents SET file_hash=$2 WHERE id=$1 AND file_hash IS NULL", r["id"], h)
+            done += 1
+        except Exception:  # noqa - dosya depoda yoksa atla
+            failed += 1
+    return {"done": done, "failed": failed, "remaining": remaining}
+
+
+@router.post("/backfill-hashes")
+async def backfill_hashes(conn=Depends(db), user=Depends(current_user)):
+    """Sahip: eski kaynaklarda bos kalan file_hash'i doldurur (kopya yukleme yakalansin). Bir kerelik temizlik."""
+    if not user.get("is_owner"):
+        raise AppError("Bu işlem yalnız sahip hesabıyla yapılabilir.")
+    return await backfill_file_hashes(conn, str(user["id"]), limit=300)
 
 
 class YoutubeIn(BaseModel):
@@ -300,15 +408,23 @@ def _with_links(r) -> dict:
 @router.get("")
 async def list_docs(conn=Depends(db), user=Depends(current_user)):
     """Kullanicinin tum kaynaklari. collection_ids: bagli oldugu defterler (coka-cok)."""
-    rows = await conn.fetch(
-        f"""SELECT d.id, d.title, d.status, d.processing_stage, d.page_count, d.short_summary,
+    base = """SELECT d.id, d.title, d.status, d.processing_stage, d.page_count, d.short_summary,
                   d.difficulty_level, d.key_concepts, d.category, d.tags, d.is_favorite, d.created_at,
-                  d.progress_done, d.progress_total, d.error_message, d.source_type, d.source_url, d.media,
-                  {_LINKS_SQL}
-           FROM documents d WHERE d.user_id=$1 ORDER BY d.created_at DESC""",
-        user["id"],
-    )
-    return [_with_links(r) for r in rows]
+                  d.progress_done, d.progress_total, d.error_message, d.source_type, d.source_url, d.media"""
+    try:
+        rows = await conn.fetch(
+            f"""{base}, d.progress_pct, d.last_page, d.reading_at, {_LINKS_SQL}
+               FROM documents d WHERE d.user_id=$1 ORDER BY d.created_at DESC""", user["id"])
+    except Exception:  # noqa - okuma sutunlari henuz yoksa (migrasyon basarisiz) eski liste
+        rows = await conn.fetch(
+            f"""{base}, NULL::int AS progress_pct, NULL::int AS last_page, NULL::timestamptz AS reading_at, {_LINKS_SQL}
+               FROM documents d WHERE d.user_id=$1 ORDER BY d.created_at DESC""", user["id"])
+    out = []
+    for r in rows:
+        d = _with_links(r)
+        d["reading_at"] = r["reading_at"].isoformat() if r["reading_at"] else None
+        out.append(d)
+    return out
 
 
 @router.get("/{doc_id}/locate")
@@ -343,6 +459,11 @@ async def get_doc(doc_id: str, conn=Depends(db), user=Depends(current_user)):
         """SELECT c.id, c.title FROM document_collections l JOIN collections c ON c.id = l.collection_id
            WHERE l.document_id=$1 AND c.user_id=$2 ORDER BY l.added_at, c.id""", doc_id, user["id"])
     out["collections"] = [{"id": str(c["id"]), "title": c["title"]} for c in cols]
+    # okuma konumu (cihazlar arasi): {page, num_pages, pct, media_pos, device, updated_at} ya da None
+    out["reading"] = _reading_of(row)
+    for k in ("reading_at",):
+        if out.get(k) is not None and hasattr(out[k], "isoformat"):
+            out[k] = out[k].isoformat()
     return out
 
 

@@ -11,7 +11,7 @@
 import { useEffect, useState } from "react";
 import { API } from "@/lib/api";
 
-export const REFRESH_EVENT = "typdf:refresh";
+const REFRESH_EVENT = "typdf:refresh";
 
 export default function Wake() {
   const [waking, setWaking] = useState(false);
@@ -27,11 +27,10 @@ export default function Wake() {
 
   useEffect(() => {
     let cancelled = false;
-    const t0 = Date.now();
     const slow = setTimeout(() => { if (!cancelled && navigator.onLine !== false) setWaking(true); }, 3000);
     fetch(`${API}/health`, { cache: "no-store" })
       .catch(() => { /* cevrimdisi ya da sunucu kapali: seridi kapat, sayfa kendi hatasini gosterir */ })
-      .finally(() => { cancelled = true; clearTimeout(slow); setWaking(false); void t0; });
+      .finally(() => { cancelled = true; clearTimeout(slow); setWaking(false); });
 
     let last = Date.now();
     const onVis = () => {

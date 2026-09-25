@@ -191,6 +191,12 @@ async def update_collection(cid: str, body: CollectionPatch, conn=Depends(db), u
         await conn.execute("UPDATE collections SET description=$1 WHERE id=$2 AND user_id=$3",
                            body.description, cid, user["id"])
     if body.draft is not None:
+        # TO-3: yazmadan once onceki surumu sakla (>=60 sn gecmisse ya da blok sayisi degistiyse; son 20)
+        try:
+            from app.api.drafts import snapshot_draft_version
+            await snapshot_draft_version(conn, cid, user["id"], body.draft)
+        except Exception:  # noqa - gecmis tutulamazsa kayit yine yapilir
+            pass
         if body.draft_rev is None:
             # eski istemci: kosulsuz yazar (geriye uyum)
             rev = await conn.fetchval(

@@ -4,7 +4,8 @@ export const runtime = "edge";
 export const size = { width: 512, height: 512 };
 export const contentType = "image/png";
 
-/* Ş1: isin huzmeli gun dogumu, kapi gibi acilan sayfalar. Tam kare (maskable). */
+/* Ş1: isin huzmeli gun dogumu, kapi gibi acilan sayfalar. purpose: any (kirpilmaz).
+ * Maskable (Android) icin ayri: app/icon-maskable/route.tsx — harfler guvenli bolgede. */
 export default function Icon() {
   return new ImageResponse(
     (

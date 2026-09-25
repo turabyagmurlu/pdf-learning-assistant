@@ -8,8 +8,10 @@ import { Loader2, Copy, Check, Download, Pencil, RefreshCw } from "lucide-react"
 import { api } from "@/lib/api";
 import SourceIcon from "@/components/SourceIcon";
 import { toast } from "@/components/Toast";
-import { Cost, costTitle, ErrNote, Err, toErr } from "@/components/CostBadge";
+import { costTitle, ErrNote, Err, toErr } from "@/components/CostBadge";
 import Modal from "@/components/Modal";
+import Button from "@/components/ui/Button";
+import Badge from "@/components/ui/Badge";
 
 type Meta = { type: string; authors: string[]; year: string; title: string; container: string; publisher: string;
   volume: string; issue: string; pages: string; doi: string };
@@ -179,19 +181,16 @@ export default function Bibliography({ notebookId }: { notebookId: string }) {
           ))}
         </div>
         <span className="ml-auto flex flex-wrap gap-1.5">
-          <button onClick={async () => { try { await navigator.clipboard.writeText(text); setCopied(true); setTimeout(() => setCopied(false), 1500); } catch {} }}
-                  disabled={!sorted.length}
-                  className="flex min-h-[40px] items-center gap-1.5 rounded-lg border bg-surface px-3 py-1.5 text-sm hover:border-accent-purple/50 disabled:opacity-50">
+          <Button variant="secondary" onClick={async () => { try { await navigator.clipboard.writeText(text); setCopied(true); setTimeout(() => setCopied(false), 1500); } catch {} }}
+                  disabled={!sorted.length}>
             {copied ? <Check size={14} /> : <Copy size={14} />} {copied ? "Kopyalandı" : "Tümünü kopyala"}
-          </button>
-          <button onClick={() => dl("kaynakca.txt", text, "text/plain")} disabled={!sorted.length}
-                  className="flex min-h-[40px] items-center gap-1.5 rounded-lg border bg-surface px-3 py-1.5 text-sm hover:border-accent-purple/50 disabled:opacity-50">
+          </Button>
+          <Button variant="secondary" onClick={() => dl("kaynakca.txt", text, "text/plain")} disabled={!sorted.length}>
             <Download size={14} /> .txt
-          </button>
-          <button onClick={() => dl("kaynakca.bib", bibtex(sorted), "application/x-bibtex")} disabled={!sorted.length}
-                  className="flex min-h-[40px] items-center gap-1.5 rounded-lg border bg-surface px-3 py-1.5 text-sm hover:border-accent-purple/50 disabled:opacity-50">
+          </Button>
+          <Button variant="secondary" onClick={() => dl("kaynakca.bib", bibtex(sorted), "application/x-bibtex")} disabled={!sorted.length}>
             <Download size={14} /> BibTeX
-          </button>
+          </Button>
         </span>
       </div>
       <p className="mt-2 text-xs text-text-secondary">
@@ -199,13 +198,12 @@ export default function Bibliography({ notebookId }: { notebookId: string }) {
         Yazar adına göre sıralı. Sekmeyi açmak ücretsizdir.
       </p>
       {pending > 0 && (
-        <div className="mt-3 flex flex-wrap items-center gap-2 rounded-xl border border-accent-purple/30 bg-accent-purple/5 px-3 py-2.5 text-sm">
+        <div className="mt-3 flex flex-wrap items-center gap-2 rounded-xl border border-info/30 bg-info-bg px-3 py-2.5 text-sm">
           <span className="min-w-0 flex-1">{pending} kaynağın künyesi henüz çıkarılmadı; şimdilik dosya adıyla gösteriliyor.</span>
-          <button onClick={() => extract()} disabled={!!extracting} title={costTitle(calls)}
-                  className="flex min-h-[40px] items-center gap-1.5 rounded-lg bg-accent-purple px-3 py-1.5 text-sm text-white disabled:opacity-60">
+          <Button variant="primary" onClick={() => extract()} disabled={!!extracting} title={costTitle(calls)} cost={calls}>
             {extracting === "all" ? <Loader2 size={14} className="animate-spin" /> : <RefreshCw size={14} />}
-            {extracting === "all" ? "Çıkarılıyor…" : "Künyeleri çıkar"} <Cost n={calls} className="bg-white/20" />
-          </button>
+            {extracting === "all" ? "Çıkarılıyor…" : "Künyeleri çıkar"}
+          </Button>
         </div>
       )}
       <ErrNote err={err} className="mt-3" />
@@ -222,25 +220,24 @@ export default function Bibliography({ notebookId }: { notebookId: string }) {
               <li key={it.document_id} className="group flex items-start gap-3 rounded-xl border bg-surface px-4 py-3">
                 <SourceIcon kind={it.kind} size={16} className="mt-1" />
                 <div className="min-w-0 flex-1">
-                  <p className="font-heading text-[15px] leading-7 [overflow-wrap:anywhere]" style={{ paddingLeft: "1.5em", textIndent: "-1.5em" }}>
+                  <p className="font-reading [overflow-wrap:anywhere]" style={{ paddingLeft: "1.5em", textIndent: "-1.5em" }}>
                     {segs.map((s, i) => s.i ? <i key={i}>{s.t}</i> : <span key={i}>{s.t}</span>)}
-                    {missing && !it.failed && !it.pending && <span className="ml-2 rounded-full bg-amber-100 px-2 py-0.5 align-middle font-body text-[11px] text-amber-900 dark:bg-amber-500/15 dark:text-amber-300">eksik bilgi</span>}
+                    {missing && !it.failed && !it.pending && <Badge tone="warning" className="ml-2 align-middle font-body">eksik bilgi</Badge>}
                   </p>
                   {it.failed && (
-                    <p className="mt-1 flex flex-wrap items-center gap-2 font-body text-xs text-amber-900 dark:text-amber-300">
+                    <p className="mt-1 flex flex-wrap items-center gap-2 font-body text-xs text-warning">
                       <span>Künye otomatik çıkarılamadı.</span>
-                      <button onClick={() => setEdit(it)} className="min-h-[32px] rounded-md border px-2 hover:bg-surface-muted">Düzenle</button>
-                      <button onClick={() => extract(it.document_id)} disabled={!!extracting} title={costTitle(1)}
-                              className="flex min-h-[32px] items-center gap-1 rounded-md border px-2 hover:bg-surface-muted disabled:opacity-60">
-                        {extracting === it.document_id && <Loader2 size={12} className="animate-spin" />} Tekrar dene <Cost n={1} />
-                      </button>
+                      <Button variant="secondary" size="sm" onClick={() => setEdit(it)}>Düzenle</Button>
+                      <Button variant="secondary" size="sm" onClick={() => extract(it.document_id)} disabled={!!extracting} title={costTitle(1)} cost={1}>
+                        {extracting === it.document_id && <Loader2 size={12} className="animate-spin" />} Tekrar dene
+                      </Button>
                     </p>
                   )}
                 </div>
-                <button onClick={() => setEdit(it)} aria-label={`Künyeyi düzenle: ${it.meta.title || it.file_title}`} title="Künyeyi düzenle"
-                        className="flex h-10 w-10 shrink-0 items-center justify-center rounded-md text-text-secondary hover:bg-surface-muted hover:text-accent-purple">
+                <Button variant="ghost" icon onClick={() => setEdit(it)} aria-label={`Künyeyi düzenle: ${it.meta.title || it.file_title}`} title="Künyeyi düzenle"
+                        className="hover:text-accent-purple">
                   <Pencil size={15} />
-                </button>
+                </Button>
               </li>
             );
           })}
@@ -285,9 +282,8 @@ function CiteEditor({ item, onClose, onSave }: { item: Item; onClose: () => void
           {f("doi", "DOI", "10.1000/xyz")}
         </div>
         <div className="mt-4 flex justify-end gap-2">
-          <button onClick={onClose} className="rounded-lg border px-4 py-2 text-sm hover:bg-surface-muted">Vazgeç</button>
-          <button onClick={() => onSave({ ...m, authors: au.split(";").map((x) => x.trim()).filter(Boolean) })}
-                  className="rounded-lg bg-accent-purple px-4 py-2 text-sm text-white">Kaydet</button>
+          <Button variant="secondary" onClick={onClose}>Vazgeç</Button>
+          <Button variant="primary" onClick={() => onSave({ ...m, authors: au.split(";").map((x) => x.trim()).filter(Boolean) })}>Kaydet</Button>
         </div>
       </div>
     </Modal>

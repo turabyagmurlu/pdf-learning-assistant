@@ -11,14 +11,18 @@
  */
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
+import { docHref } from "@/lib/links";
 import { X, ZoomIn, ZoomOut, Maximize2, ExternalLink, Search, Network, List, ArrowLeft } from "lucide-react";
 
 export type CMNode = { id: string; kind: string; definition: string; mentions: { document_id: string; title: string; pages: number[] }[] };
 export type CMEdge = { source: string; target: string; label: string; sentence: string; page: number | null; document_id: string; document_title: string };
 
+/** Madde turu renkleri: konu (veri) paleti token'lari — temaya uyar, mor icermez (mor = secim/odak). */
 const KIND_COLOR: Record<string, string> = {
-  kisi: "#8b7cf0", yer: "#3fa96a", olay: "#e5735b", antlasma: "#e0a233", kurum: "#38a3d1", kavram: "#8a8f9c",
+  kisi: "var(--data-4)", yer: "var(--data-2)", olay: "var(--data-3)", antlasma: "var(--data-6)", kurum: "var(--data-1)", kavram: "var(--border-strong)",
 };
+/** Secili / odaklanmis oge vurgusu */
+const ACCENT = "var(--accent-purple)";
 const KIND_LABEL: Record<string, string> = { kisi: "Kişi", yer: "Yer", olay: "Olay", antlasma: "Antlaşma", kurum: "Kurum", kavram: "Kavram" };
 const STEPS = [12, 20, 35, 60];
 
@@ -26,7 +30,7 @@ type P = { x: number; y: number; vx: number; vy: number; fixed?: boolean };
 const cx = (...a: any[]) => a.filter(Boolean).join(" ");
 const norm = (s: string) => s.toLocaleLowerCase("tr").replace(/[â]/g, "a").replace(/[î]/g, "i").replace(/[û]/g, "u");
 
-export default function ConceptMap({ nodes, edges, height = 560 }: { nodes: CMNode[]; edges: CMEdge[]; height?: number }) {
+export default function ConceptMap({ nodes, edges, height = 560, collectionId }: { nodes: CMNode[]; edges: CMEdge[]; height?: number; collectionId?: string }) {
   const router = useRouter();
   const wrapRef = useRef<HTMLDivElement>(null);
   const [size, setSize] = useState({ w: 900, h: height });
@@ -280,11 +284,11 @@ export default function ConceptMap({ nodes, edges, height = 560 }: { nodes: CMNo
         </div>
         <div className="flex items-center gap-1 rounded-xl border p-0.5">
           <button onClick={() => setView("net")} title="Ağ görünümü"
-                  className={cx("flex items-center gap-1 rounded-lg px-2 py-1 text-xs", view === "net" ? "bg-accent-purple text-white" : "text-text-secondary")}>
+                  className={cx("flex min-h-[32px] items-center gap-1 rounded-lg px-2 py-1 text-xs", view === "net" ? "bg-accent-soft font-medium text-accent-purple" : "text-text-secondary hover:bg-surface-hover")}>
             <Network size={13} /> Ağ
           </button>
           <button onClick={() => setView("list")} title="Liste görünümü"
-                  className={cx("flex items-center gap-1 rounded-lg px-2 py-1 text-xs", view === "list" ? "bg-accent-purple text-white" : "text-text-secondary")}>
+                  className={cx("flex min-h-[32px] items-center gap-1 rounded-lg px-2 py-1 text-xs", view === "list" ? "bg-accent-soft font-medium text-accent-purple" : "text-text-secondary hover:bg-surface-hover")}>
             <List size={13} /> Liste
           </button>
         </div>
@@ -320,13 +324,13 @@ export default function ConceptMap({ nodes, edges, height = 560 }: { nodes: CMNo
           </div>
           {listNodes.map((n) => (
             <button key={n.id} onClick={() => openFocus(n.id)}
-                    className="flex w-full items-start gap-2.5 border-b px-3 py-2.5 text-left last:border-b-0 hover:bg-surface-muted">
+                    className="flex w-full items-start gap-2.5 border-b px-3 py-2.5 text-left last:border-b-0 hover:bg-surface-hover">
               <span className="mt-1.5 h-2.5 w-2.5 shrink-0 rounded-full" style={{ background: KIND_COLOR[n.kind] || KIND_COLOR.kavram }} />
               <span className="min-w-0 flex-1">
                 <span className="block text-sm font-medium">{n.id}</span>
                 {n.definition && <span className="mt-0.5 line-clamp-1 block text-xs text-text-secondary">{n.definition}</span>}
               </span>
-              <span className="shrink-0 rounded-full bg-surface-muted px-2 py-0.5 text-[11px] text-text-secondary">
+              <span className="shrink-0 rounded-full bg-surface-muted px-2 py-0.5 text-2xs text-text-secondary">
                 {degree[n.id] || 0} bağ
               </span>
             </button>
@@ -339,7 +343,7 @@ export default function ConceptMap({ nodes, edges, height = 560 }: { nodes: CMNo
             {focusId ? (
               <>
                 <button onClick={() => { setFocusId(null); setSel(null); }}
-                        className="flex items-center gap-1.5 rounded-full border border-accent-purple/40 bg-accent-purple/10 px-2.5 py-1 text-xs text-accent-purple">
+                        className="flex items-center gap-1.5 rounded-full border border-accent-purple/40 bg-accent-soft px-2.5 py-1 text-xs text-accent-purple">
                   <ArrowLeft size={12} /> Tüm haritaya dön
                 </button>
                 <span className="text-xs text-text-secondary">
@@ -376,9 +380,9 @@ export default function ConceptMap({ nodes, edges, height = 560 }: { nodes: CMNo
               </>
             )}
             <div className="ml-auto flex items-center gap-1">
-              <button onClick={() => setZoom((z) => ({ ...z, k: Math.min(3, z.k * 1.2) }))} aria-label="Yakınlaştır" className="rounded-md border p-1.5 text-text-secondary hover:bg-surface-muted"><ZoomIn size={15} /></button>
-              <button onClick={() => setZoom((z) => ({ ...z, k: Math.max(0.4, z.k / 1.2) }))} aria-label="Uzaklaştır" className="rounded-md border p-1.5 text-text-secondary hover:bg-surface-muted"><ZoomOut size={15} /></button>
-              <button onClick={() => setZoom({ k: 1, x: 0, y: 0 })} aria-label="Sıfırla" className="rounded-md border p-1.5 text-text-secondary hover:bg-surface-muted"><Maximize2 size={15} /></button>
+              <button onClick={() => setZoom((z) => ({ ...z, k: Math.min(3, z.k * 1.2) }))} aria-label="Yakınlaştır" className="rounded-md border p-1.5 text-text-secondary hover:bg-surface-hover"><ZoomIn size={15} /></button>
+              <button onClick={() => setZoom((z) => ({ ...z, k: Math.max(0.4, z.k / 1.2) }))} aria-label="Uzaklaştır" className="rounded-md border p-1.5 text-text-secondary hover:bg-surface-hover"><ZoomOut size={15} /></button>
+              <button onClick={() => setZoom({ k: 1, x: 0, y: 0 })} aria-label="Sıfırla" className="rounded-md border p-1.5 text-text-secondary hover:bg-surface-hover"><Maximize2 size={15} /></button>
             </div>
           </div>
 
@@ -396,7 +400,7 @@ export default function ConceptMap({ nodes, edges, height = 560 }: { nodes: CMNo
                        onPointerEnter={() => setHoverEdge(idx)} onPointerLeave={() => setHoverEdge((h) => (h === idx ? null : h))}
                        className="cursor-pointer">
                       <line x1={a.x} y1={a.y} x2={b.x} y2={b.y} stroke="transparent" strokeWidth={16} />
-                      <line x1={a.x} y1={a.y} x2={b.x} y2={b.y} stroke={on ? "#8b7cf0" : "currentColor"}
+                      <line x1={a.x} y1={a.y} x2={b.x} y2={b.y} stroke={on ? ACCENT : "currentColor"}
                             strokeOpacity={on ? 1 : 0.28} strokeWidth={on ? 2.5 : 1.2} className="text-text-secondary" />
                     </g>
                   );
@@ -411,7 +415,7 @@ export default function ConceptMap({ nodes, edges, height = 560 }: { nodes: CMNo
                        onPointerDown={(e) => { onDownNode(n.id, e); setSel({ type: "node", id: n.id }); }}
                        onDoubleClick={() => openFocus(n.id)} className="cursor-pointer">
                       <circle r={r + (on ? 4 : 0)} fill={KIND_COLOR[n.kind] || KIND_COLOR.kavram}
-                              stroke={isFocus ? "#8b7cf0" : on ? "#fff" : "none"} strokeWidth={isFocus ? 3 : 2} />
+                              stroke={isFocus ? ACCENT : on ? "var(--surface)" : "none"} strokeWidth={isFocus ? 3 : 2} />
                       <text y={r + 13} textAnchor="middle" fontSize={isFocus ? 13 : 11} fontWeight={on || isFocus ? 600 : 400}
                             fill="currentColor" className="text-text-primary"
                             style={{ pointerEvents: "none", paintOrder: "stroke", stroke: "var(--surface)", strokeWidth: 3.5 }}>
@@ -439,10 +443,10 @@ export default function ConceptMap({ nodes, edges, height = 560 }: { nodes: CMNo
                        onPointerDown={(ev) => { ev.stopPropagation(); setSel({ type: "edge", i: l.i }); }}
                        onPointerEnter={() => setHoverEdge(l.i)} onPointerLeave={() => setHoverEdge((v) => (v === l.i ? null : v))}>
                       <rect x={-w / 2} y={-8} width={w} height={16} rx={8}
-                            fill="var(--surface)" stroke={on ? "#8b7cf0" : "currentColor"}
+                            fill="var(--surface)" stroke={on ? ACCENT : "currentColor"}
                             strokeOpacity={on ? 1 : 0.18} className="text-text-secondary" />
                       <text y={4} textAnchor="middle" fontSize={10} fontWeight={on ? 600 : 400}
-                            fill={on ? "#8b7cf0" : "currentColor"} className="text-text-secondary"
+                            fill={on ? ACCENT : "currentColor"} className="text-text-secondary"
                             style={{ pointerEvents: "none" }}>{l.text}</text>
                     </g>
                   );
@@ -459,7 +463,7 @@ export default function ConceptMap({ nodes, edges, height = 560 }: { nodes: CMNo
                   return (
                     <g style={{ pointerEvents: "none" }}>
                       <rect x={x - w / 2} y={y - 11} width={w} height={22} rx={11}
-                            fill="var(--surface)" stroke="#8b7cf0" strokeOpacity={0.5} />
+                            fill="var(--surface)" stroke={ACCENT} strokeOpacity={0.5} />
                       <text x={x} y={y + 4} textAnchor="middle" fontSize={11} fill="currentColor" className="text-text-primary">{t}</text>
                     </g>
                   );
@@ -475,28 +479,28 @@ export default function ConceptMap({ nodes, edges, height = 560 }: { nodes: CMNo
 
             {(selNode || selEdge) && (
               <div className="absolute bottom-3 left-3 right-3 max-w-md rounded-xl border bg-surface/95 p-3 shadow-lg backdrop-blur md:left-auto">
-                <button onClick={() => setSel(null)} aria-label="Kapat" className="absolute right-2 top-2 rounded-md p-1 text-text-secondary hover:bg-surface-muted"><X size={14} /></button>
+                <button onClick={() => setSel(null)} aria-label="Kapat" className="absolute right-2 top-2 rounded-md p-1 text-text-secondary hover:bg-surface-hover"><X size={14} /></button>
                 {selNode && (
                   <>
                     <div className="flex items-center gap-2 pr-6">
                       <span className="h-2.5 w-2.5 rounded-full" style={{ background: KIND_COLOR[selNode.kind] || KIND_COLOR.kavram }} />
                       <h4 className="font-medium">{selNode.id}</h4>
-                      <span className="text-[11px] uppercase tracking-wide text-text-secondary">{KIND_LABEL[selNode.kind] || selNode.kind}</span>
+                      <span className="text-2xs uppercase tracking-wide text-text-secondary">{KIND_LABEL[selNode.kind] || selNode.kind}</span>
                     </div>
                     <p className="mt-1.5 text-sm leading-relaxed text-text-secondary">{selNode.definition}</p>
                     <div className="mt-2 flex flex-wrap gap-1">
                       {selNode.mentions.map((m, j) => (m.pages.length ? m.pages.slice(0, 3) : [0]).map((pg, k) => (
-                        <button key={j + "-" + k} onClick={() => router.push("/documents/" + m.document_id + (pg ? "?page=" + pg : ""))}
-                                className="flex items-center gap-1 rounded-full border bg-surface px-2 py-0.5 text-[11px] text-text-secondary hover:border-accent-purple/50 hover:text-accent-purple">
+                        <button key={j + "-" + k} onClick={() => router.push(docHref(m.document_id, { page: pg || null, from: collectionId }))}
+                                className="flex items-center gap-1 rounded-full border bg-surface px-2 py-0.5 text-2xs text-text-secondary hover:border-accent-purple/50 hover:text-accent-purple">
                           <ExternalLink size={10} /> {m.title}{pg ? " · s." + pg : ""}
                         </button>
                       )))}
                     </div>
                     <div className="mt-2 flex items-center gap-2">
-                      <span className="text-[11px] text-text-secondary">{degree[selNode.id] || 0} bağlantı</span>
+                      <span className="text-2xs text-text-secondary">{degree[selNode.id] || 0} bağlantı</span>
                       {focusId !== selNode.id && (degree[selNode.id] || 0) > 0 && (
                         <button onClick={() => openFocus(selNode.id)}
-                                className="rounded-full border border-accent-purple/40 bg-accent-purple/10 px-2 py-0.5 text-[11px] text-accent-purple">
+                                className="rounded-full border border-accent-purple/40 bg-accent-soft px-2 py-0.5 text-2xs text-accent-purple">
                           Bunu merkeze al
                         </button>
                       )}
@@ -507,8 +511,8 @@ export default function ConceptMap({ nodes, edges, height = 560 }: { nodes: CMNo
                   <>
                     <div className="pr-6 text-sm"><b>{selEdge.source}</b> <span className="text-accent-purple">{selEdge.label}</span> <b>{selEdge.target}</b></div>
                     <p className="mt-1.5 text-sm leading-relaxed text-text-secondary">{selEdge.sentence}</p>
-                    <button onClick={() => router.push("/documents/" + selEdge.document_id + (selEdge.page ? "?page=" + selEdge.page : ""))}
-                            className="mt-2 flex items-center gap-1 rounded-full border bg-surface px-2 py-0.5 text-[11px] text-text-secondary hover:border-accent-purple/50 hover:text-accent-purple">
+                    <button onClick={() => router.push(docHref(selEdge.document_id, { page: selEdge.page, from: collectionId }))}
+                            className="mt-2 flex items-center gap-1 rounded-full border bg-surface px-2 py-0.5 text-2xs text-text-secondary hover:border-accent-purple/50 hover:text-accent-purple">
                       <ExternalLink size={10} /> {selEdge.document_title}{selEdge.page ? " · s." + selEdge.page : ""}
                     </button>
                   </>

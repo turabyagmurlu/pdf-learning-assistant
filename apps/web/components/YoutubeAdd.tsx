@@ -7,6 +7,8 @@
 import { useState } from "react";
 import { Loader2, Link2 } from "lucide-react";
 import { api } from "@/lib/api";
+import Button from "@/components/ui/Button";
+import { typeIconColor } from "@/lib/palette";
 
 export function isYoutubeUrl(s: string) {
   return /(youtube\.com\/(watch|shorts|live|embed)|youtu\.be\/)/i.test(s || "");
@@ -60,8 +62,7 @@ export default function YoutubeAdd({ collectionId, onAdded, compact, autoFocus, 
   return (
     <div>
       <div className="flex items-center gap-2">
-        <div className={"flex h-9 w-9 shrink-0 items-center justify-center rounded-lg " +
-          (isYoutubeUrl(url) ? "bg-red-500/10 text-red-600" : "bg-sky-500/10 text-sky-600")}>
+        <div className={"flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-surface-muted " + typeIconColor(isYoutubeUrl(url) ? "youtube" : "web")}>
           {busy ? <Loader2 size={18} className="animate-spin" /> : isYoutubeUrl(url) ? <YoutubeIcon /> : <Link2 size={18} />}
         </div>
         <input value={url} onChange={(e) => setUrl(e.target.value)}
@@ -69,11 +70,10 @@ export default function YoutubeAdd({ collectionId, onAdded, compact, autoFocus, 
                onPaste={(e) => { const t = e.clipboardData.getData("text"); if (isYoutubeUrl(t)) setMsg(null); }}
                placeholder="Link yapıştır: YouTube, web sayfası ya da PDF linki…" disabled={busy}
                aria-label="Link: YouTube, web sayfası ya da PDF linki" autoFocus={autoFocus} inputMode="url"
-               className="min-w-0 flex-1 rounded-lg border bg-surface px-3 py-2 text-sm outline-none focus:border-sky-500" />
-        <button onClick={add} disabled={busy || !url.trim()}
-                className="min-h-[40px] shrink-0 rounded-lg bg-sky-700 px-3 py-2 text-sm font-medium text-white hover:bg-sky-700 disabled:opacity-50">
+               className="min-w-0 flex-1 rounded-lg border bg-surface px-3 py-2 text-sm outline-none focus:border-accent-purple" />
+        <Button variant="primary" onClick={add} disabled={busy || !url.trim()} className="shrink-0">
           {busy ? "Ekleniyor…" : "Ekle"}
-        </button>
+        </Button>
       </div>
       {!compact && !msg && (
         <p className="mt-1.5 pl-11 text-xs text-text-secondary">
@@ -81,7 +81,7 @@ export default function YoutubeAdd({ collectionId, onAdded, compact, autoFocus, 
         </p>
       )}
       {msg && (
-        <p role={msg.ok ? "status" : "alert"} className={"mt-1.5 pl-11 text-xs " + (msg.ok ? "text-green-700 dark:text-green-300" : "text-red-700 dark:text-red-300")}>{msg.text}</p>
+        <p role={msg.ok ? "status" : "alert"} className={"mt-1.5 pl-11 text-xs " + (msg.ok ? "text-success" : "text-danger")}>{msg.text}</p>
       )}
     </div>
   );

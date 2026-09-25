@@ -17,6 +17,7 @@
 import { useCallback, useId, useRef, useState } from "react";
 import { AlertTriangle, X } from "lucide-react";
 import Modal from "@/components/Modal";
+import Button from "@/components/ui/Button";
 
 export type ConfirmOptions = {
   title: string;
@@ -65,7 +66,7 @@ export function useConfirm() {
         <>
           <div className="flex items-start gap-3">
             <div className={"flex h-9 w-9 shrink-0 items-center justify-center rounded-full " +
-              (opts.danger ? "bg-danger/10 text-danger" : "bg-accent-purple/10 text-accent-purple")}>
+              (opts.danger ? "bg-danger-bg text-danger" : "bg-accent-soft text-accent-purple")}>
               <AlertTriangle size={18} aria-hidden="true" />
             </div>
             <div className="min-w-0 flex-1">
@@ -75,7 +76,7 @@ export function useConfirm() {
               )}
             </div>
             <button type="button" onClick={() => close(false)} aria-label="Kapat" data-modal-close=""
-                    className="-mr-1.5 -mt-1.5 flex h-10 w-10 shrink-0 items-center justify-center rounded-lg text-text-secondary hover:bg-surface-muted">
+                    className="-mr-1.5 -mt-1.5 flex h-10 w-10 shrink-0 items-center justify-center rounded-lg text-text-secondary hover:bg-surface-hover">
               <X size={18} />
             </button>
           </div>
@@ -116,16 +117,14 @@ export function useConfirm() {
           )}
 
           <div className="mt-4 flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
-            <button type="button" onClick={() => close(false)} data-autofocus={opts.danger && !needType ? "" : undefined}
-                    className="min-h-[44px] rounded-xl border px-4 py-2 text-sm hover:bg-surface-muted sm:min-h-[40px]">
+            <Button variant="secondary" size="lg" onClick={() => close(false)} data-autofocus={opts.danger && !needType ? "" : undefined}
+                    className="sm:h-10">
               {opts.cancelLabel || "Vazgeç"}
-            </button>
-            <button type="button" onClick={() => ready && close(true)} disabled={!ready}
-                    data-autofocus={!opts.danger && !needType ? "" : undefined}
-                    className={"min-h-[44px] rounded-xl px-4 py-2 text-sm font-medium text-on-accent disabled:cursor-not-allowed disabled:opacity-40 sm:min-h-[40px] " +
-                      (opts.danger ? "bg-danger" : "bg-accent-purple")}>
+            </Button>
+            <Button variant="primary" size="lg" tone={opts.danger ? "danger" : undefined} onClick={() => ready && close(true)} disabled={!ready}
+                    data-autofocus={!opts.danger && !needType ? "" : undefined} className="sm:h-10 disabled:cursor-not-allowed">
               {opts.confirmLabel || "Devam et"}
-            </button>
+            </Button>
           </div>
         </>
       )}

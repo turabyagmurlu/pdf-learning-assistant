@@ -4,16 +4,19 @@ import Link from "next/link";
 import { api, errorMessage } from "@/lib/api";
 import PageHeader from "@/components/PageHeader";
 import SourceIcon from "@/components/SourceIcon";
+import Button from "@/components/ui/Button";
+import FilterChip from "@/components/ui/FilterChip";
+import Badge from "@/components/ui/Badge";
+import { docHref } from "@/lib/links";
 import { Search, ArrowRight, Compass, Loader2 } from "lucide-react";
 
 type Doc = { id: string; title: string; status: string; source_type?: string | null; collection_ids?: string[] | null; collection_id?: string | null };
 type Col = { id: string; title: string };
 type Hit = { id: string; document_id: string; page_number?: number | null; section_title?: string | null; content: string; score: number; title: string };
 
-const cx = (...a: (string | false | null | undefined)[]) => a.filter(Boolean).join(" ");
 const colIds = (d: Doc) => (Array.isArray(d.collection_ids) ? d.collection_ids : d.collection_id ? [d.collection_id] : []);
 /** Sonuc ilgili sayfada acilsin (video/ses okuyucusu da ?page= ile ilgili bolume gider). */
-const hitHref = (h: Hit) => "/documents/" + h.document_id + (h.page_number ? "?page=" + h.page_number : "");
+const hitHref = (h: Hit) => docHref(h.document_id, { page: h.page_number });
 
 export default function SearchPage() {
   const [docs, setDocs] = useState<Doc[] | null>(null);
@@ -98,11 +101,11 @@ export default function SearchPage() {
         <Search size={18} className="text-text-secondary" aria-hidden="true" />
         <label htmlFor={fid} className="sr-only">Kaynaklarının içinde ara</label>
         <input id={fid} value={q} onChange={(e) => setQ(e.target.value)} placeholder="Ne arıyorsun? Bir soru ya da birkaç kelime yaz"
-               className="w-full border-0 bg-transparent py-3 text-sm outline-none" />
-        <button type="submit" disabled={busy || !q.trim()}
-                className="flex min-h-[40px] shrink-0 items-center gap-1.5 rounded-lg bg-accent-purple px-4 text-sm text-on-accent disabled:opacity-50">
+               type="search" enterKeyHint="search"
+               className="w-full border-0 bg-transparent py-3 text-base outline-none md:text-sm" />
+        <Button type="submit" variant="primary" disabled={busy || !q.trim()} className="shrink-0">
           {busy && <Loader2 size={14} className="animate-spin" aria-hidden="true" />} {busy ? "Aranıyor…" : "Ara"}
-        </button>
+        </Button>
       </form>
 
       {docs && docs.length > 0 && (
@@ -128,11 +131,9 @@ export default function SearchPage() {
               {docs.map((d) => {
                 const on = sel.indexOf(d.id) >= 0;
                 return (
-                  <button type="button" key={d.id} onClick={() => toggle(d.id)} aria-pressed={on}
-                          className={cx("flex min-h-[36px] max-w-[240px] items-center gap-1.5 rounded-full px-3 text-xs",
-                            on ? "bg-accent-purple/15 text-accent-purple" : "border bg-surface text-text-secondary hover:border-accent-purple/50")}>
+                  <FilterChip key={d.id} active={on} onClick={() => toggle(d.id)} className="max-w-[240px]">
                     <SourceIcon kind={d.source_type} size={12} /> <span className="truncate">{d.title}</span>
-                  </button>
+                  </FilterChip>
                 );
               })}
               {!sel.length && <span className="text-xs text-text-secondary">Hiç seçmezsen tüm kaynaklarda aranır.</span>}
@@ -173,7 +174,7 @@ export default function SearchPage() {
                       {h.page_number ? <span className="shrink-0 text-xs text-text-secondary">· s.{h.page_number}</span> : null}
                       {h.section_title ? <span className="hidden truncate text-xs text-text-secondary sm:inline">· {h.section_title}</span> : null}
                     </div>
-                    <span className="shrink-0 rounded-full bg-accent-purple/10 px-2 py-0.5 text-xs text-accent-purple" title="Benzerlik">%{Math.round((h.score || 0) * 100)}</span>
+                    <Badge tone="neutral" title="Benzerlik">%{Math.round((h.score || 0) * 100)}</Badge>
                   </div>
                   <p className="line-clamp-3 text-sm leading-relaxed text-text-secondary">{h.content}</p>
                   <span className="mt-2 inline-flex items-center gap-1 text-xs text-accent-purple opacity-100 transition md:opacity-0 md:group-hover:opacity-100 md:group-focus-within:opacity-100">

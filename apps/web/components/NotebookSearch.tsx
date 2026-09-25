@@ -79,7 +79,7 @@ export default function NotebookSearch({ collectionId, readyCount }: { collectio
                  className="w-full rounded-xl border bg-surface py-2 pl-9 pr-9 text-sm outline-none focus:border-accent-purple" />
           {q && (
             <button onClick={() => { setQ(""); setRes(null); }} aria-label="Aramayı temizle"
-                    className="absolute right-1 top-1/2 flex h-9 w-9 -translate-y-1/2 items-center justify-center rounded-md text-text-secondary hover:bg-surface-muted">
+                    className="absolute right-1 top-1/2 flex h-9 w-9 -translate-y-1/2 items-center justify-center rounded-md text-text-secondary hover:bg-surface-hover">
               {busy ? <Loader2 size={14} className="animate-spin" /> : <X size={14} />}
             </button>
           )}
@@ -89,7 +89,7 @@ export default function NotebookSearch({ collectionId, readyCount }: { collectio
           {([["text", "Kelime", Type], ["meaning", "Anlamca", Brain], ["hybrid", "Karma", Layers]] as const).map(([k, l, I]) => (
             <button key={k} onClick={() => setMode(k)} role="radio" aria-checked={mode === k}
                     className={cx("flex min-h-[36px] items-center gap-1 rounded-lg px-2.5 py-1 text-xs",
-                      mode === k ? "bg-accent-purple text-white" : "text-text-secondary hover:bg-surface-muted")}>
+                      mode === k ? "bg-accent-soft font-medium text-accent-purple" : "text-text-secondary hover:bg-surface-hover")}>
               <I size={12} /> {l}
             </button>
           ))}
@@ -114,29 +114,29 @@ export default function NotebookSearch({ collectionId, readyCount }: { collectio
             {res.groups.map((g) => (
               <div key={g.document_id} className="rounded-xl border bg-surface-muted/40">
                 <button onClick={() => open(g.document_id, g.hits[0]?.page ?? null)}
-                        className="flex w-full items-center gap-2 px-3 py-2 text-left hover:bg-surface-muted">
+                        className="flex w-full items-center gap-2 px-3 py-2 text-left hover:bg-surface-hover">
                   <FileText size={14} className="shrink-0 text-accent-purple" />
                   <span className="min-w-0 flex-1 truncate text-sm font-medium">{g.title}</span>
-                  <span className="shrink-0 rounded-full bg-surface px-2 py-0.5 text-[11px] text-text-secondary">{g.count} yer</span>
+                  <span className="shrink-0 rounded-full bg-surface px-2 py-0.5 text-2xs text-text-secondary">{g.count} yer</span>
                 </button>
                 <div className="divide-y border-t">
                   {g.hits.map((h, i) => (
                     <button key={i} onClick={() => open(g.document_id, h.page)}
                             title={h.how === "meaning" ? "Anlamca yakın (kelime birebir geçmiyor)" : "Kelime birebir geçiyor"}
-                            className="flex w-full items-start gap-2.5 px-3 py-2 text-left hover:bg-surface-muted">
-                      <span className={cx("mt-0.5 shrink-0 rounded-md px-1.5 py-0.5 text-[11px] font-medium",
-                        h.how === "meaning" ? "bg-accent-purple/10 text-accent-purple" : "bg-amber-500/15 text-amber-800 dark:text-amber-300")}>
+                            className="flex w-full items-start gap-2.5 px-3 py-2 text-left hover:bg-surface-hover">
+                      <span className={cx("mt-0.5 shrink-0 rounded-md px-1.5 py-0.5 text-2xs font-medium",
+                        h.how === "meaning" ? "bg-info-bg text-info" : "bg-surface-muted text-text-secondary")}>
                         s.{h.page ?? "?"}
                       </span>
                       <span className="min-w-0 flex-1 text-xs leading-relaxed text-text-secondary">
-                        {h.section && <span className="mr-1 text-[11px] uppercase tracking-wide opacity-70">{h.section} ·</span>}
+                        {h.section && <span className="mr-1 text-2xs uppercase tracking-wide text-text-secondary">{h.section} ·</span>}
                         <Mark text={h.snippet} q={res.query} />
                       </span>
                       <ExternalLink size={12} className="mt-1 shrink-0 text-text-secondary/60" />
                     </button>
                   ))}
                   {g.count > g.hits.length && (
-                    <p className="px-3 py-1.5 text-[11px] text-text-secondary">+{g.count - g.hits.length} yer daha bu kaynakta</p>
+                    <p className="px-3 py-1.5 text-2xs text-text-secondary">+{g.count - g.hits.length} yer daha bu kaynakta</p>
                   )}
                 </div>
               </div>

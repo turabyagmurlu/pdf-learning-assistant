@@ -8,6 +8,7 @@ import dynamic from "next/dynamic";
 import { useRouter } from "next/navigation";
 import { Loader2, Sparkles, RefreshCw, Search, BookMarked, Share2, Clock } from "lucide-react";
 import { api } from "@/lib/api";
+import { docHref } from "@/lib/links";
 import { Skeleton } from "@/components/Skeleton";
 import { Cost, costTitle, ErrNote, Err, toErr } from "@/components/CostBadge";
 import type { CMNode, CMEdge } from "@/components/ConceptMap";
@@ -210,7 +211,7 @@ export function GlossaryTab({ id, readyN, confirm }: { id: string; readyN: numbe
                     <p className="mt-1 text-sm leading-relaxed text-text-secondary">{g.definition}</p>
                     <div className="mt-2 flex flex-wrap gap-1">
                       {g.mentions.map((m, j) => (m.pages.length ? m.pages.slice(0, 4) : [0]).map((pg, k) => (
-                        <button key={j + "-" + k} onClick={() => router.push("/documents/" + m.document_id + (pg ? "?page=" + pg : ""))}
+                        <button key={j + "-" + k} onClick={() => router.push(docHref(m.document_id, { page: pg || null, from: id }))}
                                 title={m.title + (pg ? " · sayfa " + pg : "")}
                                 className="min-h-[32px] max-w-[220px] truncate rounded-full border bg-surface px-2 py-0.5 text-xs text-text-secondary hover:border-accent-purple/50 hover:text-accent-purple">
                           {m.title}{pg ? " · s." + pg : ""}
@@ -360,7 +361,7 @@ export function TimelineTab({ id, readyN, confirm }: { id: string; readyN: numbe
                         <h4 className="font-medium">{e.title}</h4>
                       </div>
                       {e.detail && <p className="mt-1 text-sm leading-relaxed text-text-secondary">{e.detail}</p>}
-                      <button onClick={() => router.push("/documents/" + e.document_id + (e.page ? "?page=" + e.page : ""))}
+                      <button onClick={() => router.push(docHref(e.document_id, { page: e.page, from: id }))}
                               className="mt-2 min-h-[32px] max-w-full truncate rounded-full border bg-surface px-2 py-0.5 text-xs text-text-secondary hover:border-accent-purple/50 hover:text-accent-purple">
                         {e.document_title}{e.page ? " · s." + e.page : ""}
                       </button>

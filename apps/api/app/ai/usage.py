@@ -76,6 +76,40 @@ def status(model: str) -> str:
     return "aktif"
 
 
+def blocked_until(model: str) -> float | None:
+    """Modelin yeniden kullanilabilecegi unix zamani; simdi kullanilabiliyorsa None."""
+    with _LOCK:
+        if model in _DEAD:
+            return None
+        t = _BLOCKED.get(model, 0)
+    return t if t > time.time() else None
+
+
+def service_state() -> dict:
+    """Saglayici (Gemini) ozeti, model adi vermeden: {"state": aktif|yogun|doldu, "retry_min": int|None}.
+
+    - aktif: havuzda en az bir model hemen kullanilabilir (retry_min None).
+    - yogun: hepsi gecici olarak (dakikalik 429 / 5xx) bekliyor; retry_min = en erken acilana kadar dk.
+    - doldu: hepsi gunluk kotasini doldurmus ya da bu anahtarda yok; retry_min = Pasifik gece yarisina kadar dk.
+    Import dongusu olmasin diye gemini_provider fonksiyon icinde yuklenir.
+    """
+    from app.ai.gemini_provider import pool_models
+    models = pool_models()
+    sts = [status(m) for m in models]
+    if any(s == "aktif" for s in sts):
+        return {"state": "aktif", "retry_min": None}
+    now = time.time()
+    if all(s in ("gunluk_doldu", "yok") for s in sts):
+        state = "doldu"
+        until = next_reset().timestamp()
+    else:
+        state = "yogun"
+        waits = [t for t in (blocked_until(m) for m, s in zip(models, sts) if s == "dakikalik_dolu") if t]
+        until = min(waits) if waits else now + 60
+    retry_min = max(1, int((until - now + 59) // 60))
+    return {"state": state, "retry_min": retry_min}
+
+
 def snapshot() -> dict:
     d = today()
     with _LOCK:

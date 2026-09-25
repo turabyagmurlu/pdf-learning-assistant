@@ -18,11 +18,22 @@
   --text-primary:#1B2233; --text-secondary:#5B6172;
   --accent-purple:#5A48D8; --accent-teal:#17756B; --accent-amber:#8A5A00;
   --accent-coral:#B3452C; --success:#28784A; --warning:#8A5A00; --danger:#B3402D;
+  --info:#17756B;
   --on-accent:#FFFFFF;
+  /* hover zemini (koyu temada da gorunur; hover:bg-black/5 yerine) */
+  --surface-hover:#EFECE5;
+  /* durum zeminleri: metin rengiyle cift (rozet, bilgi kutusu) — hepsi >= 4.5:1 */
+  --success-bg:#E6F2EA; --warning-bg:#FBF0DA; --danger-bg:#FBE9E5; --info-bg:#E2F2EF;
+  /* vurgu (mor) yumusak zemin: secili cip, rozet */
+  --accent-soft:rgba(90,72,216,.10);
+  /* konu (veri) paleti: mor icermez, tur rengiyle karismaz */
+  --data-1:#2F7D9A; --data-2:#5E8C3A; --data-3:#C0762A; --data-4:#A34E73; --data-5:#6B6FA8; --data-6:#8A7A52;
   /* bildirimler sohbet kutusu / yuzen dugme yuksekliginin ustunde dursun */
   --toast-lift:64px;
   --font-mono:ui-monospace;
   --ease:cubic-bezier(.2,.7,.2,1);
+  /* hareket sureleri: basma / hover-renk / sayfa-pencere */
+  --dur-1:120ms; --dur-2:200ms; --dur-3:320ms;
 }
 .dark{
   --bg:#0F1420; --surface:#161C2B; --surface-muted:#1E2637; --border:#293246;
@@ -30,7 +41,13 @@
   --text-primary:#EDEFF5; --text-secondary:#A5AEC2;
   --accent-purple:#A99BFF; --accent-teal:#48C9BA; --accent-amber:#EDB652;
   --accent-coral:#F08A72; --success:#4FB877; --warning:#E7AC4C; --danger:#F08A76;
+  --info:#48C9BA;
   --on-accent:#0F1420;
+  --surface-hover:#232C40;
+  --success-bg:rgba(79,184,119,.15); --warning-bg:rgba(231,172,76,.15);
+  --danger-bg:rgba(240,138,118,.15); --info-bg:rgba(72,201,186,.15);
+  --accent-soft:rgba(169,155,255,.15);
+  --data-1:#6FB6D0; --data-2:#9BC46E; --data-3:#E2A15E; --data-4:#D486AC; --data-5:#A3A7E0; --data-6:#C2B287;
 }
 html,body{background:var(--bg);color:var(--text-primary);font-family:var(--font-body),system-ui,sans-serif;}
 * { border-color: var(--border); }
@@ -50,11 +67,22 @@ body{-webkit-font-smoothing:antialiased;-moz-osx-font-smoothing:grayscale;text-r
   letter-spacing:-0.01em;
   font-weight:500;
 }
+/* Uzun okuma metni (sohbet cevabi, ozet): ayni serif, ama otomatik optik boyut ve 400 agirlik */
+.font-reading{
+  font-family:var(--font-heading),Georgia,serif;
+  font-optical-sizing:auto;
+  font-variation-settings:"SOFT" 50;
+  font-weight:400;
+  letter-spacing:0;
+  font-size:16px;
+  line-height:1.65;
+}
 
 button,a,[role="button"]{-webkit-tap-highlight-color:transparent;touch-action:manipulation;}
 :focus-visible{outline:2px solid var(--accent-purple);outline-offset:2px;}
 select,input,textarea{color:inherit;}
-@media (max-width:767px){ input,select,textarea{font-size:16px;} }
+/* H-3: iOS Safari 16px altindaki alanlara dokununca sayfayi buyutur; .text-sm gibi utility'ler bu kurali ezmesin */
+@media (max-width:767px){ input,select,textarea{font-size:16px!important;} }
 body{padding-left:env(safe-area-inset-left);padding-right:env(safe-area-inset-right);}
 
 /* --- Kontrast guvenlik agi ---
@@ -95,8 +123,16 @@ body{padding-left:env(safe-area-inset-left);padding-right:env(safe-area-inset-ri
 
 /* kart: hafif yukselme */
 .lift{transition:transform .22s var(--ease),box-shadow .22s var(--ease),border-color .22s var(--ease);}
-.lift:hover{transform:translateY(-2px);box-shadow:0 10px 30px rgba(20,25,40,.10);}
-.dark .lift:hover{box-shadow:0 12px 34px rgba(0,0,0,.45);}
+/* yalniz fareli cihazda: dokunmatikte kart "havada" kalmasin */
+@media (hover:hover){
+  .lift:hover{transform:translateY(-2px);box-shadow:0 10px 30px rgba(20,25,40,.10);}
+  .dark .lift:hover{box-shadow:0 12px 34px rgba(0,0,0,.45);}
+}
+
+/* Telefonda bir yazi alani odaktayken (klavye acik) alt menu gizlensin */
+@media (max-width:767px){
+  html:has(input:focus, textarea:focus, [contenteditable="true"]:focus) .bottom-nav{ display:none; }
+}
 
 /* dugme: basinca hafif kucul */
 button{transition:background-color .15s var(--ease),color .15s var(--ease),border-color .15s var(--ease),opacity .15s var(--ease),transform .12s var(--ease);}

@@ -1,3 +1,4 @@
+"""Okuyucu notlari ve vurgulari (documents/{id}/notes, notes/{id})."""
 import uuid
 from fastapi import APIRouter, Depends
 from pydantic import BaseModel
@@ -39,28 +40,6 @@ async def list_notes(doc_id: str, conn=Depends(db), user=Depends(current_user)):
     return [dict(r) for r in rows]
 
 
-@router.get("/notes")
-async def list_all_notes(conn=Depends(db), user=Depends(current_user)):
-    """Kullanicinin tum vurgu ve notlari, belge basligiyla (Vurgular sayfasi)."""
-    rows = await conn.fetch(
-        """SELECT n.id, n.document_id, n.page_number, n.selected_text, n.note_content,
-                  n.highlight_color, n.anchor, n.tags, n.created_at,
-                  d.title AS document_title,
-                  COALESCE((SELECT array_agg(l.collection_id::text ORDER BY l.added_at, l.collection_id)
-                            FROM document_collections l WHERE l.document_id = d.id), ARRAY[]::text[]) AS collection_ids
-           FROM notes n JOIN documents d ON d.id = n.document_id
-           WHERE n.user_id=$1
-           ORDER BY d.title, n.page_number NULLS LAST, n.created_at""",
-        user["id"])
-    out = []
-    for r in rows:
-        d = dict(r)
-        d["collection_ids"] = list(d.get("collection_ids") or [])
-        d["collection_id"] = d["collection_ids"][0] if d["collection_ids"] else None   # geriye uyum
-        out.append(d)
-    return out
-
-
 class NotePatch(BaseModel):
     note_content: str | None = None
     highlight_color: str | None = None
@@ -90,10 +69,6 @@ async def delete_note(note_id: str, conn=Depends(db), user=Depends(current_user)
     await conn.execute("DELETE FROM notes WHERE id=$1 AND user_id=$2", note_id, user["id"])
     return {"ok": True}
 
-
-@router.get("/notes/search")
-async def search_notes(q: str, conn=Depends(db), user=Depends(current_user)):
-    rows = await conn.fetch(
-        "SELECT * FROM notes WHERE user_id=$1 AND note_content ILIKE $2 ORDER BY created_at DESC",
-        user["id"], f"%{q}%")
-    return [dict(r) for r in rows]
+# Kaldirilan uclar (TK-6, web cagirmiyor): GET /notes (eski Vurgular sayfasi), GET /notes/search.
+# PATCH /notes/{id} duruyor: okuyucu notu simdilik sil+yeniden olustur ile guncelliyor
+# (hooks/useAnnotations.ts), ileride PATCH'e gecebilir.
