@@ -1,7 +1,7 @@
 "use client";
 /**
  * Tarayicinin kendi ses motoruyla (Web Speech API) okuma.
- * Gemini ses kotasi dolduğunda yedek yol: ucretsiz, sinirsiz, anında baslar.
+ * Seslendirme yogun ya da gunluk kullanim dolu oldugunda yedek yol: ucretsiz, sinirsiz, aninda baslar.
  * Uzun metin tek seferde verilince Chrome susuyor; bu yuzden cumlelere bolup
  * sirayla okutuyoruz ve boylece ilerleme de gosterebiliyoruz.
  */
@@ -152,18 +152,18 @@ export default function BrowserVoice({ text, onClose }: { text: string; onClose?
       <div className="flex items-center gap-2 text-sm">
         <Volume2 size={15} className="text-accent-purple" />
         <span className="font-medium">Cihaz sesi (yedek)</span>
-        <span className="text-xs text-text-secondary">· kota harcamaz, ama anlatıcı sesi kadar doğal değil</span>
+        <span className="text-xs text-text-secondary">· ücretsiz, ama anlatıcı sesi kadar doğal değil</span>
       </div>
       {voices.length > 0 && !voiceQuality(voices.find((v) => v.name === voiceName) || voices[0]).female && (
         <p className="mt-2 rounded-lg bg-warning/10 px-3 py-2 text-[11px] text-text-secondary">
           Bu cihazda yüklü tek Türkçe ses erkek ve robotik. Doğal bir kadın sesi istersen uygulamayı
           <b> Microsoft Edge</b>'de aç — Edge'in çevrimiçi Türkçe kadın sesi burada listeye düşer.
-          Asıl anlatıcı sesi için kota yenilenince <b>Dinle</b>'ye dön.
+          Asıl anlatıcı sesi için kullanım hakkın yenilenince <b>Dinle</b>'ye dön.
         </p>
       )}
 
       <div className="mt-3 flex flex-wrap items-center gap-2">
-        <button onClick={() => jump(-2)} title="2 cümle geri (←)" aria-label="Geri"
+        <button onClick={() => jump(-2)} title="2 cümle geri (←)" aria-label="2 cümle geri"
                 className="flex items-center gap-1 rounded-xl border px-3 py-2 text-sm hover:bg-black/5">
           <SkipBack size={15} /> <span className="text-xs">2 cümle</span>
         </button>
@@ -172,7 +172,7 @@ export default function BrowserVoice({ text, onClose }: { text: string; onClose?
           {state === "playing" ? <Pause size={15} /> : <Play size={15} />}
           {state === "playing" ? "Duraklat" : state === "paused" ? "Devam et" : "Oku"}
         </button>
-        <button onClick={() => jump(2)} title="2 cümle ileri (→)" aria-label="İleri"
+        <button onClick={() => jump(2)} title="2 cümle ileri (→)" aria-label="2 cümle ileri"
                 className="flex items-center gap-1 rounded-xl border px-3 py-2 text-sm hover:bg-black/5">
           <span className="text-xs">2 cümle</span> <SkipForward size={15} />
         </button>
@@ -183,14 +183,15 @@ export default function BrowserVoice({ text, onClose }: { text: string; onClose?
         <div className="flex items-center gap-1 rounded-xl border px-1.5 py-1">
           {SPEEDS.map((s) => (
             <button key={s} onClick={() => { setRate(s); if (state !== "idle") setTimeout(() => speakFrom(idx.current), 0); }}
-                    className={"rounded-lg px-2 py-1 text-xs " + (rate === s ? "bg-accent-purple text-white" : "text-text-secondary")}>
+                    aria-label={`Hız ${s}×`} aria-pressed={rate === s}
+                    className={"min-h-[36px] rounded-lg px-2 py-1 text-xs " + (rate === s ? "bg-accent-purple text-white" : "text-text-secondary")}>
               {s}×
             </button>
           ))}
         </div>
 
         {voices.length > 1 && (
-          <select value={voiceName} onChange={(e) => { setVoiceName(e.target.value); if (state !== "idle") setTimeout(() => speakFrom(idx.current), 0); }}
+          <select value={voiceName} aria-label="Cihaz sesi" onChange={(e) => { setVoiceName(e.target.value); if (state !== "idle") setTimeout(() => speakFrom(idx.current), 0); }}
                   className="rounded-xl border bg-surface px-2 py-2 text-xs">
             {voices.map((v) => <option key={v.name} value={v.name}>{describe(v)}</option>)}
           </select>

@@ -194,7 +194,7 @@ async def _run_ingest(document_id: str):
         await _set(conn, document_id, processing_stage="chunking", page_count=pc)
         chunks = chunk_pages(pages)
         if not chunks:
-            await _set(conn, document_id, status="failed", error_message="İçerik parçalanamadı.", processing_stage=None)
+            await _set(conn, document_id, status="failed", error_message="Bu kaynaktan metin çıkarılamadı; 'Yeniden işle' ile tekrar dene.", processing_stage=None)
             return
 
         # Gomme: parca parca, ilerleme yazarak. Yarim kalmis bir islemde

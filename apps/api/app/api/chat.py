@@ -3,10 +3,9 @@ import uuid
 from fastapi import APIRouter, Depends
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
-from app.deps import db, current_user
+from app.deps import db, current_user, user_id_from_token
 from app.db.session import get_pool
-from app.core.errors import NotFound, AiUnavailable
-from app.core.security import decode_token
+from app.core.errors import NotFound, AppError
 from app.services import rag_service
 from app.ai.factory import get_embeddings, get_llm
 from app.ai.prompts.system import build_system_prompt
@@ -55,12 +54,25 @@ def _sse(event: str, data: dict) -> str:
     return f"event: {event}\ndata: {json.dumps(data, ensure_ascii=False)}\n\n"
 
 
+GENERIC_FAIL = "Yapay zekâ şu an yanıt veremiyor; birkaç saniye sonra tekrar dene."
+
+
+def _sse_error(e: Exception | None = None, message: str | None = None, code: str | None = None) -> str:
+    """Hata olayi: {code, message}. Web, metne degil `code`a bakar (USAGE_LIMIT, AI_BUSY, ...)."""
+    if isinstance(e, AppError):
+        code = code or e.code
+        message = message or e.user_message
+        if e.code == "AI_UNAVAILABLE" and message == AppError.user_message:
+            message = GENERIC_FAIL
+    return _sse("error", {"code": code or "AI_UNAVAILABLE", "message": message or GENERIC_FAIL})
+
+
 @router.post("/sessions")
 async def create_session(body: SessionIn, conn=Depends(db), user=Depends(current_user)):
     doc = await conn.fetchrow("SELECT id FROM documents WHERE id=$1 AND user_id=$2",
                               body.document_id, user["id"])
     if not doc:
-        raise NotFound("Belge bulunamadı.")
+        raise NotFound("Kaynak bulunamadı; silinmiş olabilir.")
     sid = str(uuid.uuid4())
     await conn.execute(
         "INSERT INTO chat_sessions (id, user_id, document_id, mode, title) VALUES ($1,$2,$3,$4,$5)",
@@ -89,7 +101,7 @@ async def list_sessions(document_id: str | None = None, nonempty: int = 1,
 async def messages(sid: str, conn=Depends(db), user=Depends(current_user)):
     s = await conn.fetchrow("SELECT id FROM chat_sessions WHERE id=$1 AND user_id=$2", sid, user["id"])
     if not s:
-        raise NotFound("Oturum bulunamadı.")
+        raise NotFound("Sohbet bulunamadı; silinmiş olabilir.")
     rows = await conn.fetch(
         "SELECT role, content, citations, created_at FROM chat_messages WHERE session_id=$1 ORDER BY created_at",
         sid)
@@ -99,14 +111,24 @@ async def messages(sid: str, conn=Depends(db), user=Depends(current_user)):
 # Not: SSE için token'ı query param olarak da kabul ediyoruz (EventSource header gönderemez)
 @router.post("/sessions/{sid}/messages")
 async def send(sid: str, body: MessageIn, token: str | None = None):
-    uid = decode_token(token) if token else None
     pool = await get_pool()
 
     async def gen():
         async with pool.acquire() as conn:
-            s = await conn.fetchrow("SELECT * FROM chat_sessions WHERE id=$1", sid)
-            if not s or (uid and str(s["user_id"]) != uid):
-                yield _sse("error", {"message": "Oturum bulunamadı."}); return
+            uid = None
+            if token:
+                try:
+                    uid = await user_id_from_token(conn, token)
+                except Exception:  # noqa
+                    uid = None
+            if not uid:
+                yield _sse_error(message="Oturumun kapanmış. Tekrar giriş yap.", code="UNAUTHORIZED"); return
+            try:
+                s = await conn.fetchrow("SELECT * FROM chat_sessions WHERE id=$1::uuid", sid)
+            except Exception:  # noqa - gecersiz kimlik
+                s = None
+            if not s or str(s["user_id"]) != str(uid):
+                yield _sse_error(message="Sohbet bulunamadı; sayfayı yenileyip tekrar dene.", code="NOT_FOUND"); return
             try:
                 from app.ai import usage as _u
                 from app.deps import is_owner as _own
@@ -141,10 +163,10 @@ async def send(sid: str, body: MessageIn, token: str | None = None):
             try:
                 chunks = await rag_service.retrieve(conn, str(s["document_id"]), body.content, embedder)
             except Exception as e:  # noqa
-                yield _sse("error", {"message": "Asistan şu an yanıt veremiyor."}); return
+                yield _sse_error(e); return
 
             if not chunks:
-                msg = "Bu bilgi PDF içinde açıkça geçmiyor. İstersen genel bilgiyle açıklayayım."
+                msg = "Bu bilgi kaynakta açıkça geçmiyor. İstersen genel bilgiyle açıklayayım."
                 yield _sse("token", {"text": msg})
                 await conn.execute(
                     "INSERT INTO chat_messages (session_id, role, content) VALUES ($1,'assistant',$2)",
@@ -164,10 +186,7 @@ async def send(sid: str, body: MessageIn, token: str | None = None):
                     full += tok
                     yield _sse("token", {"text": tok})
             except Exception as e:  # noqa
-                msg = getattr(e, "user_message", None) or "Asistan şu an yanıt veremiyor."
-                if msg == AiUnavailable.user_message:
-                    msg = "Asistan şu an yanıt veremiyor; birkaç saniye sonra tekrar dene."
-                yield _sse("error", {"message": msg}); return
+                yield _sse_error(e); return
 
             citations = [{"n": i + 1, "chunk_id": str(c["id"]), "page": c["page_number"],
                           "section": c.get("section_title"), "snippet": c["content"][:180]}

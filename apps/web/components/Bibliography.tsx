@@ -1,17 +1,20 @@
 "use client";
 /**
- * Otomatik kaynakça: defterdeki kaynakların künyesi (bir kez çıkarılır, saklanır) +
+ * Otomatik kaynakça: defterdeki kaynakların künyesi (kullanıcı "Künyeleri çıkar" deyince bir kez çıkarılır, saklanır) +
  * APA 7 / MLA 9 / Chicago biçimleri, düzenleme, kopyalama, .txt / .bib indirme.
  */
 import { useEffect, useMemo, useState } from "react";
-import { Loader2, Copy, Check, Download, Pencil, RefreshCw, X } from "lucide-react";
+import { Loader2, Copy, Check, Download, Pencil, RefreshCw } from "lucide-react";
 import { api } from "@/lib/api";
 import SourceIcon from "@/components/SourceIcon";
 import { toast } from "@/components/Toast";
+import { Cost, costTitle, ErrNote, Err, toErr } from "@/components/CostBadge";
+import Modal from "@/components/Modal";
 
 type Meta = { type: string; authors: string[]; year: string; title: string; container: string; publisher: string;
   volume: string; issue: string; pages: string; doi: string };
-type Item = { document_id: string; file_title: string; kind: string; url?: string | null; accessed?: string | null; edited: boolean; meta: Meta };
+type Item = { document_id: string; file_title: string; kind: string; url?: string | null; accessed?: string | null; edited: boolean; meta: Meta;
+  failed?: boolean; pending?: boolean };
 type Seg = { t: string; i?: boolean };
 type Style = "apa" | "mla" | "chicago";
 
@@ -108,17 +111,38 @@ function bibtex(items: Item[]) {
 
 export default function Bibliography({ notebookId }: { notebookId: string }) {
   const [items, setItems] = useState<Item[] | null>(null);
+  const [pending, setPending] = useState(0);        // kunyesi henuz cikarilmamis kaynak sayisi
   const [busy, setBusy] = useState(false);
-  const [err, setErr] = useState("");
+  const [extracting, setExtracting] = useState<string | "all" | null>(null);
+  const [err, setErr] = useState<Err>(null);
   const [style, setStyle] = useState<Style>("apa");
   const [edit, setEdit] = useState<Item | null>(null);
   const [copied, setCopied] = useState(false);
 
-  async function load(refresh = false) {
-    setBusy(true); setErr("");
-    try { const r = await api(`/collections/${notebookId}/bibliography${refresh ? "?refresh=1" : ""}`, {}, 1); setItems(r.items || []); }
-    catch (e: any) { setErr(e?.message || "Kaynakça hazırlanamadı."); if (!items) setItems([]); }
+  function take(r: any) {
+    if (r && Array.isArray(r.items)) setItems(r.items);
+    if (r && typeof r.pending === "number") setPending(r.pending);
+    else if (r && Array.isArray(r.items)) setPending(r.items.filter((x: Item) => x.pending).length);
+  }
+  // GET yapay zekayi cagirmaz; yalniz kayitli kunyeleri ve bekleyen sayisini getirir.
+  async function load() {
+    setBusy(true); setErr(null);
+    try { take(await api(`/collections/${notebookId}/bibliography`, {}, 1)); }
+    catch (e) { setErr(toErr(e, "Kaynakça yüklenemedi; sayfayı yenileyip tekrar dene.")); if (!items) setItems([]); }
     finally { setBusy(false); }
+  }
+  /** Kunyeleri yapay zekayla cikar: tumu (bekleyenler) ya da tek kaynak (Tekrar dene). */
+  async function extract(docId?: string) {
+    setExtracting(docId || "all"); setErr(null);
+    try {
+      const r = await api(`/collections/${notebookId}/bibliography/extract`, { method: "POST",
+        body: JSON.stringify(docId ? { document_ids: [docId] } : {}) }, 1);
+      if (r && Array.isArray(r.items)) take(r); else await load();
+      const failedNow = ((r?.items || []) as Item[]).filter((x) => x.failed && (!docId || x.document_id === docId)).length;
+      if (failedNow) toast.error(docId ? "Bu künye otomatik çıkarılamadı; kalemle kendin düzeltebilirsin." : `${failedNow} künye otomatik çıkarılamadı; kalemle düzeltebilirsin.`);
+      else toast("Künyeler çıkarıldı");
+    } catch (e) { setErr(toErr(e, "Künyeler çıkarılamadı; birazdan tekrar dene.")); }
+    finally { setExtracting(null); }
   }
   useEffect(() => {
     try { const s = localStorage.getItem("bib.style"); if (s === "apa" || s === "mla" || s === "chicago") setStyle(s); } catch {}
@@ -129,6 +153,7 @@ export default function Bibliography({ notebookId }: { notebookId: string }) {
 
   const sorted = useMemo(() => [...(items || [])].sort((a, b) => sortKey(a).localeCompare(sortKey(b), "tr")), [items]);
   const text = useMemo(() => sorted.map((it) => plain(formatCite(it, style))).join("\n\n"), [sorted, style]);
+  const calls = Math.max(1, Math.ceil(pending / 8));   // 8 kaynak = 1 kullanim
 
   function dl(name: string, body: string, type: string) {
     const a = document.createElement("a");
@@ -139,48 +164,55 @@ export default function Bibliography({ notebookId }: { notebookId: string }) {
     if (!edit) return;
     try {
       const r = await api(`/documents/${edit.document_id}/cite`, { method: "PUT", body: JSON.stringify({ meta: m }) });
-      setItems((l) => (l || []).map((x) => x.document_id === edit.document_id ? { ...x, meta: r.meta, edited: true } : x));
+      setItems((l) => (l || []).map((x) => x.document_id === edit.document_id ? { ...x, meta: r.meta, edited: true, failed: false, pending: false } : x));
       setEdit(null); toast("Künye kaydedildi");
-    } catch (e: any) { toast.error(e?.message || "Kaydedilemedi"); }
+    } catch (e: any) { toast.error(e?.message || "Künye kaydedilemedi; tekrar dene."); }
   }
 
   return (
     <div>
       <div className="flex flex-wrap items-center gap-2">
-        <div className="flex gap-0.5 rounded-full bg-surface-muted p-0.5">
+        <div role="radiogroup" aria-label="Kaynakça biçimi" className="flex gap-0.5 rounded-full bg-surface-muted p-0.5">
           {STYLES.map(([k, l]) => (
-            <button key={k} onClick={() => setStyle(k)}
-                    className={"rounded-full px-3 py-1 text-sm " + (style === k ? "bg-surface font-medium shadow-soft" : "text-text-secondary")}>{l}</button>
+            <button key={k} onClick={() => setStyle(k)} role="radio" aria-checked={style === k}
+                    className={"min-h-[36px] rounded-full px-3 py-1 text-sm " + (style === k ? "bg-surface font-medium shadow-soft" : "text-text-secondary")}>{l}</button>
           ))}
         </div>
         <span className="ml-auto flex flex-wrap gap-1.5">
           <button onClick={async () => { try { await navigator.clipboard.writeText(text); setCopied(true); setTimeout(() => setCopied(false), 1500); } catch {} }}
                   disabled={!sorted.length}
-                  className="flex items-center gap-1.5 rounded-lg border bg-surface px-3 py-1.5 text-sm hover:border-accent-purple/50 disabled:opacity-50">
+                  className="flex min-h-[40px] items-center gap-1.5 rounded-lg border bg-surface px-3 py-1.5 text-sm hover:border-accent-purple/50 disabled:opacity-50">
             {copied ? <Check size={14} /> : <Copy size={14} />} {copied ? "Kopyalandı" : "Tümünü kopyala"}
           </button>
           <button onClick={() => dl("kaynakca.txt", text, "text/plain")} disabled={!sorted.length}
-                  className="flex items-center gap-1.5 rounded-lg border bg-surface px-3 py-1.5 text-sm hover:border-accent-purple/50 disabled:opacity-50">
+                  className="flex min-h-[40px] items-center gap-1.5 rounded-lg border bg-surface px-3 py-1.5 text-sm hover:border-accent-purple/50 disabled:opacity-50">
             <Download size={14} /> .txt
           </button>
           <button onClick={() => dl("kaynakca.bib", bibtex(sorted), "application/x-bibtex")} disabled={!sorted.length}
-                  className="flex items-center gap-1.5 rounded-lg border bg-surface px-3 py-1.5 text-sm hover:border-accent-purple/50 disabled:opacity-50">
+                  className="flex min-h-[40px] items-center gap-1.5 rounded-lg border bg-surface px-3 py-1.5 text-sm hover:border-accent-purple/50 disabled:opacity-50">
             <Download size={14} /> BibTeX
-          </button>
-          <button onClick={() => load(true)} disabled={busy} title="Düzenlemediğin künyeleri yeniden çıkar (kota harcar)"
-                  className="flex items-center gap-1.5 rounded-lg border bg-surface px-3 py-1.5 text-sm text-text-secondary hover:border-accent-purple/50 disabled:opacity-50">
-            <RefreshCw size={14} className={busy ? "animate-spin" : ""} /> Yenile
           </button>
         </span>
       </div>
       <p className="mt-2 text-xs text-text-secondary">
-        Künyeler kaynakların ilk sayfasından bir kez çıkarılır ve saklanır; eksik ya da yanlış olanı kalemle düzelt. Yazar adına göre sıralı.
+        Künye (yazar, yıl, başlık, yayın yeri) kaynağın ilk sayfasından bir kez çıkarılır ve saklanır; eksik ya da yanlış olanı kalemle düzelt.
+        Yazar adına göre sıralı. Sekmeyi açmak ücretsizdir.
       </p>
-      {err && <p className="mt-3 text-sm text-danger">{err}</p>}
+      {pending > 0 && (
+        <div className="mt-3 flex flex-wrap items-center gap-2 rounded-xl border border-accent-purple/30 bg-accent-purple/5 px-3 py-2.5 text-sm">
+          <span className="min-w-0 flex-1">{pending} kaynağın künyesi henüz çıkarılmadı; şimdilik dosya adıyla gösteriliyor.</span>
+          <button onClick={() => extract()} disabled={!!extracting} title={costTitle(calls)}
+                  className="flex min-h-[40px] items-center gap-1.5 rounded-lg bg-accent-purple px-3 py-1.5 text-sm text-white disabled:opacity-60">
+            {extracting === "all" ? <Loader2 size={14} className="animate-spin" /> : <RefreshCw size={14} />}
+            {extracting === "all" ? "Çıkarılıyor…" : "Künyeleri çıkar"} <Cost n={calls} className="bg-white/20" />
+          </button>
+        </div>
+      )}
+      <ErrNote err={err} className="mt-3" />
       {items === null || (busy && !items.length) ? (
-        <p className="mt-6 flex items-center gap-2 text-sm text-text-secondary"><Loader2 size={16} className="animate-spin" /> Künyeler hazırlanıyor… (ilk seferde birkaç saniye)</p>
+        <p className="mt-6 flex items-center gap-2 text-sm text-text-secondary"><Loader2 size={16} className="animate-spin" /> Künyeler yükleniyor…</p>
       ) : !sorted.length ? (
-        <p className="mt-6 text-sm text-text-secondary">Hazır kaynak yok.</p>
+        <p className="mt-6 text-sm text-text-secondary">Kaynakça için hazır kaynak yok. Kaynak ekle ya da işlenmelerini bekle.</p>
       ) : (
         <ol className="mt-4 space-y-2">
           {sorted.map((it) => {
@@ -189,13 +221,25 @@ export default function Bibliography({ notebookId }: { notebookId: string }) {
             return (
               <li key={it.document_id} className="group flex items-start gap-3 rounded-xl border bg-surface px-4 py-3">
                 <SourceIcon kind={it.kind} size={16} className="mt-1" />
-                <p className="min-w-0 flex-1 font-heading text-[15px] leading-7 [overflow-wrap:anywhere]" style={{ paddingLeft: "1.5em", textIndent: "-1.5em" }}>
-                  {segs.map((s, i) => s.i ? <i key={i}>{s.t}</i> : <span key={i}>{s.t}</span>)}
-                  {missing && <span className="ml-2 rounded-full bg-amber-100 px-2 py-0.5 align-middle font-body text-[10px] text-amber-800 dark:bg-amber-500/15 dark:text-amber-300">eksik bilgi</span>}
-                </p>
-                <button onClick={() => setEdit(it)} aria-label="Künyeyi düzenle" title="Künyeyi düzenle"
-                        className="shrink-0 rounded-md p-1.5 text-text-secondary hover:bg-surface-muted hover:text-accent-purple">
-                  <Pencil size={14} />
+                <div className="min-w-0 flex-1">
+                  <p className="font-heading text-[15px] leading-7 [overflow-wrap:anywhere]" style={{ paddingLeft: "1.5em", textIndent: "-1.5em" }}>
+                    {segs.map((s, i) => s.i ? <i key={i}>{s.t}</i> : <span key={i}>{s.t}</span>)}
+                    {missing && !it.failed && !it.pending && <span className="ml-2 rounded-full bg-amber-100 px-2 py-0.5 align-middle font-body text-[11px] text-amber-900 dark:bg-amber-500/15 dark:text-amber-300">eksik bilgi</span>}
+                  </p>
+                  {it.failed && (
+                    <p className="mt-1 flex flex-wrap items-center gap-2 font-body text-xs text-amber-900 dark:text-amber-300">
+                      <span>Künye otomatik çıkarılamadı.</span>
+                      <button onClick={() => setEdit(it)} className="min-h-[32px] rounded-md border px-2 hover:bg-surface-muted">Düzenle</button>
+                      <button onClick={() => extract(it.document_id)} disabled={!!extracting} title={costTitle(1)}
+                              className="flex min-h-[32px] items-center gap-1 rounded-md border px-2 hover:bg-surface-muted disabled:opacity-60">
+                        {extracting === it.document_id && <Loader2 size={12} className="animate-spin" />} Tekrar dene <Cost n={1} />
+                      </button>
+                    </p>
+                  )}
+                </div>
+                <button onClick={() => setEdit(it)} aria-label={`Künyeyi düzenle: ${it.meta.title || it.file_title}`} title="Künyeyi düzenle"
+                        className="flex h-10 w-10 shrink-0 items-center justify-center rounded-md text-text-secondary hover:bg-surface-muted hover:text-accent-purple">
+                  <Pencil size={15} />
                 </button>
               </li>
             );
@@ -217,14 +261,9 @@ function CiteEditor({ item, onClose, onSave }: { item: Item; onClose: () => void
     </label>
   );
   return (
-    <div className="fixed inset-0 z-[80] flex items-end justify-center bg-black/40 sm:items-center sm:p-4" onClick={onClose}>
-      <div onClick={(e) => e.stopPropagation()} role="dialog" aria-label="Künyeyi düzenle"
-           className="max-h-[90vh] w-full max-w-lg overflow-y-auto rounded-t-2xl border bg-surface p-5 sm:rounded-2xl">
-        <div className="mb-3 flex items-center justify-between">
-          <h3 className="font-heading text-lg">Künyeyi düzenle</h3>
-          <button onClick={onClose} aria-label="Kapat" className="rounded-md p-1 hover:bg-surface-muted"><X size={18} /></button>
-        </div>
-        <p className="mb-3 truncate text-xs text-text-secondary">Dosya: {item.file_title}</p>
+    <Modal open onClose={onClose} title="Künyeyi düzenle" size="md">
+      <div>
+        <p className="mb-3 truncate text-xs text-text-secondary">Kaynak: {item.file_title}</p>
         <div className="grid grid-cols-2 gap-3">
           <label className="col-span-2 block text-xs text-text-secondary">Tür
             <select value={m.type} onChange={(e) => setM({ ...m, type: e.target.value })}
@@ -251,6 +290,6 @@ function CiteEditor({ item, onClose, onSave }: { item: Item; onClose: () => void
                   className="rounded-lg bg-accent-purple px-4 py-2 text-sm text-white">Kaydet</button>
         </div>
       </div>
-    </div>
+    </Modal>
   );
 }

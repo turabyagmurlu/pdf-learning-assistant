@@ -6,7 +6,7 @@ from concurrent.futures import ThreadPoolExecutor
 from urllib.parse import urlparse
 import httpx
 from app.config import settings
-from app.core.errors import AppError, AiUnavailable
+from app.core.errors import AppError, AiUnavailable, AiBusy, UsageLimit
 from app.ai import usage
 from app.sources.web import UA, _safe_host
 
@@ -33,7 +33,9 @@ def _call(topic: str, context: str) -> dict:
     import time as _t
     from app.ai.gemini_provider import pool_models
     if _t.time() < _SEARCH_OFF_UNTIL:
-        raise AiUnavailable("Google araması bu hesapta kapalı (ücretli katman gerektiriyor).")
+        raise AiUnavailable("Web'de kaynak arama şu an kullanılamıyor. Link yapıştırarak kaynak ekleyebilirsin.",
+                            detail="google_search ucretli katman gerektiriyor")
+    usage.check_user()
     body = {"contents": [{"role": "user", "parts": [{"text": _prompt(topic, context)}]}],
             "tools": [{"google_search": {}}],
             "generationConfig": {"temperature": 0.3}}
@@ -61,9 +63,9 @@ def _call(topic: str, context: str) -> dict:
     if errs and all("billing" in e.lower() or "plan" in e.lower() for e in errs):
         _SEARCH_OFF_UNTIL = _t.time() + 6 * 3600          # 6 saat sonra yeniden dene (faturalandirma acilmis olabilir)
     if any(" 429 " in e for e in errs):
-        raise AiUnavailable("Web araması kotası şu an dolu; birkaç dakika sonra tekrar dene.", detail="; ".join(errs))
-    raise AiUnavailable("Web araması şu an yapılamıyor. (" + (errs[0] if errs else "model yok") + ")",
-                        detail="; ".join(errs))
+        raise AiBusy("Web'de kaynak arama şu an yoğun; birkaç dakika sonra tekrar dene.", detail="; ".join(errs))
+    raise AiUnavailable("Web'de kaynak arama şu an kullanılamıyor. Link yapıştırarak kaynak ekleyebilirsin.",
+                        detail="; ".join(errs) or "kullanilabilir model yok")
 
 
 def _resolve(uri: str) -> str | None:
@@ -236,7 +238,7 @@ def discover(topic: str, context: str = "", exclude: set[str] | None = None) -> 
         raise AppError("Aramak istediğin konuyu yaz.")
     seen = set(exclude or ())
     # 1) Google aramasi destekli model (kota varsa)
-    overview, queries, web_results, web_err, web_debug = "", [], [], None, None
+    overview, queries, web_results, web_err, web_debug, web_exc = "", [], [], None, None, None
     try:
         j = _call(topic, context)
         cand = (j.get("candidates") or [{}])[0]
@@ -260,8 +262,9 @@ def discover(topic: str, context: str = "", exclude: set[str] | None = None) -> 
         for p in web_results:
             p["origin"] = "google"
     except (AiUnavailable, AppError) as e:
-        web_err = getattr(e, "user_message", str(e))
+        web_err = getattr(e, "user_message", None) or "Web'de kaynak arama şu an kullanılamıyor."
         web_debug = getattr(e, "detail", None)
+        web_exc = e
     # 2) acik kaynaklar: akademik (OpenAlex) + ansiklopedi (Vikipedi) - kota harcamaz
     q_en = _en_query(topic)
     with ThreadPoolExecutor(max_workers=3) as ex:
@@ -273,9 +276,13 @@ def discover(topic: str, context: str = "", exclude: set[str] | None = None) -> 
     web_results.sort(key=lambda p: (not p.get("academic"), p.get("kind") != "pdf", -(p.get("words") or 0)))
     results = web_results[:8] + open_results[:10]
     if not results:
+        if isinstance(web_exc, AiUnavailable):      # UsageLimit / AiBusy kodu korunsun (web ayirt eder)
+            raise web_exc
         raise AppError(web_err or "Uygun kaynak bulunamadı; konuyu biraz daha açık yazmayı dene.")
     note = None
-    if web_err:
-        note = "Google araması şu an kullanılamadı; akademik yayın ve ansiklopedi kaynakları gösteriliyor."
+    if isinstance(web_exc, UsageLimit):
+        note = "Bugünkü yapay zekâ kullanımın doldu; web araması yapılmadı. Akademik yayın ve ansiklopedi kaynakları gösteriliyor."
+    elif web_err:
+        note = "Web araması şu an yapılamadı; akademik yayın ve ansiklopedi kaynakları gösteriliyor."
     return {"topic": topic, "overview": overview[:1500], "queries": queries, "results": results, "note": note,
             "debug": (web_debug or "")[:400] or None}

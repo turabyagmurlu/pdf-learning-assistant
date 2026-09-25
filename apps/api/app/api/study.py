@@ -1,5 +1,6 @@
 import asyncio
 import json
+import logging
 import time
 import uuid
 from datetime import datetime, timedelta, timezone
@@ -13,6 +14,10 @@ from app.services.tts_service import (synthesize, synthesize_pcm, wav_from_pcm, 
 from app.db.session import get_pool
 
 router = APIRouter(tags=["study"])
+log = logging.getLogger(__name__)
+
+# /tts dogrudan seslendirme siniri = split_for_tts parca boyu (tek parca, tek kullanim)
+TTS_DIRECT_MAX = 2600
 
 
 class GenerateIn(BaseModel):
@@ -46,12 +51,12 @@ async def generate(doc_id: str, body: GenerateIn, conn=Depends(db), user=Depends
         "SELECT id, title, short_summary, key_concepts FROM documents WHERE id=$1 AND user_id=$2",
         doc_id, user["id"])
     if not doc:
-        raise NotFound("Belge bulunamadı.")
+        raise NotFound("Kaynak bulunamadı; silinmiş olabilir.")
     rows = await conn.fetch(
         "SELECT content, page_number FROM document_chunks WHERE document_id=$1 ORDER BY chunk_index", doc_id)
     context = _sample_context(rows)
     if not context.strip():
-        raise AppError("Bu belgenin metni henüz çıkarılmamış. Belge 'Hazır' olunca tekrar dene.")
+        raise AppError("Bu kaynağın metni henüz hazır değil. Kaynak 'Hazır' olunca tekrar dene.")
     existing_rows = await conn.fetch(
         "SELECT question FROM study_items WHERE document_id=$1 AND user_id=$2 ORDER BY created_at DESC LIMIT 60",
         doc_id, user["id"])
@@ -91,7 +96,7 @@ async def study_from_text(doc_id: str, body: FromTextIn, conn=Depends(db), user=
     """PDF'te secilen metinden aninda flashcard uretir."""
     doc = await conn.fetchrow("SELECT id FROM documents WHERE id=$1 AND user_id=$2", doc_id, user["id"])
     if not doc:
-        raise NotFound("Belge bulunamadı.")
+        raise NotFound("Kaynak bulunamadı; silinmiş olabilir.")
     txt = (body.text or "").strip()
     if len(txt) < 15:
         raise AppError("Seçilen metin çok kısa. Biraz daha uzun bir bölüm seç.")
@@ -120,7 +125,7 @@ async def explain(doc_id: str, body: ExplainIn, conn=Depends(db), user=Depends(c
     """Acik olan sayfayi sade dille anlatir (sesli okumaya uygun)."""
     doc = await conn.fetchrow("SELECT id FROM documents WHERE id=$1 AND user_id=$2", doc_id, user["id"])
     if not doc:
-        raise NotFound("Belge bulunamadı.")
+        raise NotFound("Kaynak bulunamadı; silinmiş olabilir.")
     txt = (body.text or "").strip()
     if len(txt) < 40 and body.page:
         rows = await conn.fetch(
@@ -147,12 +152,18 @@ async def tts_voices(user=Depends(current_user)):
 
 @router.post("/tts")
 async def tts(body: TtsIn, user=Depends(current_user)):
-    """Kisa metinler icin dogrudan WAV. Uzun metinlerde /tts/jobs kullan."""
+    """Kisa metinler icin dogrudan WAV (tek parca). Daha uzun metinler is kuyruguna gider.
+
+    Sinir, is kuyrugunun parca boyuyla (split_for_tts, ~2600 karakter) aynidir:
+    okuyucudaki "Anlat" metinlerinin neredeyse tamami tek cagrida seslenir ve
+    maliyet iki yolda da ayni kalir (parca basina 1 kullanim)."""
     txt = (body.text or "").strip()
     if len(txt) < 2:
         raise AppError("Seslendirilecek metin boş.")
-    if len(txt) > 1500:
-        raise AppError("Metin uzun; /tts/jobs ucunu kullan.")
+    if len(txt) > TTS_DIRECT_MAX:
+        # Istemci uzun metni zaten is kuyruguna gonderir; bu yalniz savunma amacli.
+        raise AppError("Bu metin tek seferde seslendirilemeyecek kadar uzun. "
+                       "Sayfayı yenileyip tekrar dene ya da cihaz sesiyle dinle.")
     voice, style = body.voice or DEFAULT_VOICE, body.style or ""
     key = "wav:" + cache_key(txt, voice, style)
     wav = await _cache_get(key)
@@ -229,7 +240,8 @@ async def _run_tts_job(job_id: str, chunks: list[str], voice: str, style: str, k
                     if q.daily or attempt == 4:
                         raise
                     job["waiting"] = int(q.retry_after)
-                    job["note"] = f"Kota doldu; {int(q.retry_after)} sn bekleniyor…"
+                    job["note"] = (f"Seslendirme şu an yoğun; {int(q.retry_after)} saniye sonra "
+                                   "kendiliğinden devam edecek…")
                     await asyncio.sleep(q.retry_after)
                     job["waiting"], job["note"] = 0, ""
                 except TtsBusy as b:
@@ -237,7 +249,7 @@ async def _run_tts_job(job_id: str, chunks: list[str], voice: str, style: str, k
                         raise
                     wait = b.retry_after * (attempt + 1)     # 8, 16, 24, 32 sn
                     job["waiting"] = wait
-                    job["note"] = f"Ses motoru yoğun; {wait} sn sonra tekrar denenecek…"
+                    job["note"] = f"Seslendirme şu an yoğun; {wait} saniye sonra yeniden denenecek…"
                     await asyncio.sleep(wait)
                     job["waiting"], job["note"] = 0, ""
                 except Exception:  # noqa
@@ -255,7 +267,11 @@ async def _run_tts_job(job_id: str, chunks: list[str], voice: str, style: str, k
         job["status"] = "error"
         job["quota"] = isinstance(e, TtsQuota)
         job["daily"] = bool(getattr(e, "daily", False))
-        job["error"] = getattr(e, "user_message", None) or str(e)[:200] or "Seslendirme başarısız."
+        # Ham hata metni kullaniciya gitmez; yalniz loga yazilir.
+        if not getattr(e, "user_message", None):
+            log.warning("tts job %s failed: %s", job_id, str(e)[:300])
+        job["error"] = (getattr(e, "user_message", None)
+                        or "Seslendirme şu an yapılamadı; biraz sonra tekrar dene ya da cihaz sesiyle dinle.")
     job["note"] = ""
     job["waiting"] = 0
     job["at"] = time.time()
@@ -294,7 +310,7 @@ async def tts_job_create(body: TtsIn, user=Depends(current_user)):
 async def tts_job_status(job_id: str, user=Depends(current_user)):
     job = _TTS_JOBS.get(job_id)
     if not job or job.get("user") != str(user["id"]):
-        raise NotFound("Seslendirme işi bulunamadı; yeniden başlat.")
+        raise NotFound("Ses hazırlığı yarıda kaldı; seslendirmeyi yeniden başlat.")
     return {"status": job["status"], "done": job["done"], "total": job["total"],
             "error": job["error"], "quota": job.get("quota", False),
             "daily": job.get("daily", False), "note": job.get("note", ""),
@@ -306,9 +322,9 @@ async def tts_job_status(job_id: str, user=Depends(current_user)):
 async def tts_job_audio(job_id: str, user=Depends(current_user)):
     job = _TTS_JOBS.get(job_id)
     if not job or job.get("user") != str(user["id"]):
-        raise NotFound("Seslendirme işi bulunamadı; yeniden başlat.")
+        raise NotFound("Ses hazırlığı yarıda kaldı; seslendirmeyi yeniden başlat.")
     if job["status"] != "ready" or not job.get("wav"):
-        raise AppError("Ses henüz hazır değil.")
+        raise AppError("Ses hâlâ hazırlanıyor; birkaç saniye sonra tekrar dene.")
     return Response(content=job["wav"], media_type="audio/wav",
                     headers={"Cache-Control": "no-store"})
 
@@ -336,11 +352,11 @@ class ItemPatch(BaseModel):
 async def patch_item(item_id: str, body: ItemPatch, conn=Depends(db), user=Depends(current_user)):
     row = await conn.fetchrow("SELECT id FROM study_items WHERE id=$1 AND user_id=$2", item_id, user["id"])
     if not row:
-        raise NotFound("Öğe bulunamadı.")
+        raise NotFound("Aradığın içerik bulunamadı; silinmiş olabilir.")
     if body.question is not None:
         q = body.question.strip()
         if len(q) < 3:
-            raise AppError("Soru çok kısa.")
+            raise AppError("Soru çok kısa; en az birkaç kelime yaz.")
         await conn.execute("UPDATE study_items SET question=$1 WHERE id=$2", q, item_id)
     if body.answer is not None:
         await conn.execute("UPDATE study_items SET answer=$1 WHERE id=$2", body.answer.strip(), item_id)
@@ -351,7 +367,7 @@ async def patch_item(item_id: str, body: ItemPatch, conn=Depends(db), user=Depen
 async def delete_item(item_id: str, conn=Depends(db), user=Depends(current_user)):
     r = await conn.execute("DELETE FROM study_items WHERE id=$1 AND user_id=$2", item_id, user["id"])
     if r.endswith(" 0"):
-        raise NotFound("Öğe bulunamadı.")
+        raise NotFound("Aradığın içerik bulunamadı; silinmiş olabilir.")
     return {"ok": True}
 
 
@@ -385,7 +401,7 @@ async def create_item(body: ItemCreate, conn=Depends(db), user=Depends(current_u
     """Elle kart olusturma (ve yanlis quiz sorusunu karta cevirme)."""
     doc = await conn.fetchrow("SELECT id FROM documents WHERE id=$1 AND user_id=$2", body.document_id, user["id"])
     if not doc:
-        raise NotFound("Belge bulunamadı.")
+        raise NotFound("Kaynak bulunamadı; silinmiş olabilir.")
     q, a = body.question.strip(), body.answer.strip()
     if len(q) < 3 or len(a) < 1:
         raise AppError("Soru ve cevap boş olamaz.")
@@ -408,7 +424,7 @@ async def review(item_id: str, body: ReviewIn, conn=Depends(db), user=Depends(cu
     row = await conn.fetchrow("SELECT ease_factor, interval_days FROM study_items WHERE id=$1 AND user_id=$2",
                               item_id, user["id"])
     if not row:
-        raise NotFound("Öğe bulunamadı.")
+        raise NotFound("Aradığın içerik bulunamadı; silinmiş olabilir.")
     ef = row["ease_factor"] or 2.5
     interval = row["interval_days"] or 0
     q = max(0, min(5, body.quality))

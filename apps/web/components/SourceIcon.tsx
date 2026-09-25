@@ -4,15 +4,16 @@ import { YoutubeIcon } from "@/components/YoutubeAdd";
 
 /** Kaynak turune gore simge + renk. */
 export function sourceColor(kind?: string | null) {
+  // Acik temada >= 4.5:1 (700 tonlari), koyu temada 300 tonlari (WCAG AA; rozet yazilari 11-12px).
   switch (kind) {
-    case "youtube": return "text-red-600";
-    case "audio": return "text-violet-600";
-    case "docx": return "text-blue-600";
-    case "xlsx": case "csv": return "text-emerald-600";
-    case "pptx": return "text-orange-600";
-    case "web": case "html": return "text-sky-600";
-    case "text": case "md": case "txt": case "rtf": return "text-amber-600";
-    case "epub": return "text-fuchsia-600";
+    case "youtube": return "text-red-700 dark:text-red-300";
+    case "audio": return "text-violet-700 dark:text-violet-300";
+    case "docx": return "text-blue-700 dark:text-blue-300";
+    case "xlsx": case "csv": return "text-emerald-700 dark:text-emerald-300";
+    case "pptx": return "text-orange-700 dark:text-orange-300";
+    case "web": case "html": return "text-sky-700 dark:text-sky-300";
+    case "text": case "md": case "txt": case "rtf": return "text-amber-800 dark:text-amber-300";
+    case "epub": return "text-fuchsia-700 dark:text-fuchsia-300";
     default: return "text-accent-purple";
   }
 }
@@ -41,10 +42,11 @@ export function sourceLabel(kind?: string | null, pages?: number | null) {
     case "csv": return "CSV";
     case "pptx": return "Sunum";
     case "web": case "html": return "Web";
-    case "text": return "Not";
+    case "text": return "Yapıştırılan metin";
     case "md": return "Markdown";
     case "txt": case "rtf": return "Metin";
     case "epub": return "E-kitap";
+    case "image": return "Görsel";
     default: return pages ? `PDF · ${pages} s.` : "PDF";
   }
 }

@@ -14,8 +14,9 @@
  *   ...
  *   return (<> ... {dialog} </>);
  */
-import { useCallback, useRef, useState } from "react";
+import { useCallback, useId, useRef, useState } from "react";
 import { AlertTriangle, X } from "lucide-react";
+import Modal from "@/components/Modal";
 
 export type ConfirmOptions = {
   title: string;
@@ -54,81 +55,81 @@ export function useConfirm() {
     resolver.current = null;
   }
 
+  const titleId = "confirm-" + useId();
   const needType = (opts?.typeToConfirm || "").trim();
   const ready = !needType || typed.trim() === needType;
 
-  const dialog = !opts ? null : (
-    <div className="fixed inset-0 z-[80] flex items-end justify-center bg-black/50 p-0 sm:items-center sm:p-4"
-         onClick={() => close(false)}
-         role="dialog" aria-modal="true" aria-label={opts.title}>
-      <div onClick={(e) => e.stopPropagation()}
-           className="w-full max-w-md rounded-t-2xl border bg-surface p-5 shadow-xl sm:rounded-2xl">
-        <div className="flex items-start gap-3">
-          <div className={"flex h-9 w-9 shrink-0 items-center justify-center rounded-full " +
-            (opts.danger ? "bg-danger/10 text-danger" : "bg-accent-purple/10 text-accent-purple")}>
-            <AlertTriangle size={18} />
+  const dialog = (
+    <Modal open={!!opts} onClose={() => close(false)} size="md" labelledBy={titleId}>
+      {opts && (
+        <>
+          <div className="flex items-start gap-3">
+            <div className={"flex h-9 w-9 shrink-0 items-center justify-center rounded-full " +
+              (opts.danger ? "bg-danger/10 text-danger" : "bg-accent-purple/10 text-accent-purple")}>
+              <AlertTriangle size={18} aria-hidden="true" />
+            </div>
+            <div className="min-w-0 flex-1">
+              <h2 id={titleId} className="font-heading text-lg leading-snug">{opts.title}</h2>
+              {opts.description && (
+                <p className="mt-1.5 text-sm text-text-secondary">{opts.description}</p>
+              )}
+            </div>
+            <button type="button" onClick={() => close(false)} aria-label="Kapat" data-modal-close=""
+                    className="-mr-1.5 -mt-1.5 flex h-10 w-10 shrink-0 items-center justify-center rounded-lg text-text-secondary hover:bg-surface-muted">
+              <X size={18} />
+            </button>
           </div>
-          <div className="min-w-0 flex-1">
-            <h3 className="font-heading text-lg leading-snug">{opts.title}</h3>
-            {opts.description && (
-              <p className="mt-1.5 text-sm text-text-secondary">{opts.description}</p>
-            )}
-          </div>
-          <button onClick={() => close(false)} aria-label="Kapat"
-                  className="rounded-md p-1 text-text-secondary hover:bg-surface-muted">
-            <X size={18} />
-          </button>
-        </div>
 
-        {(opts.losses?.length || opts.keeps?.length) ? (
-          <div className="mt-3.5 space-y-1.5 rounded-xl bg-surface-muted/60 p-3 text-sm">
-            {opts.losses?.map((l, i) => (
-              <p key={"l" + i} className="flex items-start gap-2 text-danger">
-                <span className="mt-[7px] h-1.5 w-1.5 shrink-0 rounded-full bg-danger" /> {l}
-              </p>
-            ))}
-            {opts.keeps?.map((k, i) => (
-              <p key={"k" + i} className="flex items-start gap-2 text-text-secondary">
-                <span className="mt-[7px] h-1.5 w-1.5 shrink-0 rounded-full bg-success" /> {k}
-              </p>
-            ))}
-          </div>
-        ) : null}
+          {(opts.losses?.length || opts.keeps?.length) ? (
+            <div className="mt-3.5 space-y-1.5 rounded-xl bg-surface-muted/60 p-3 text-sm">
+              {opts.losses?.map((l, i) => (
+                <p key={"l" + i} className="flex items-start gap-2 text-danger">
+                  <span className="mt-[7px] h-1.5 w-1.5 shrink-0 rounded-full bg-danger" aria-hidden="true" /> {l}
+                </p>
+              ))}
+              {opts.keeps?.map((k, i) => (
+                <p key={"k" + i} className="flex items-start gap-2 text-text-secondary">
+                  <span className="mt-[7px] h-1.5 w-1.5 shrink-0 rounded-full bg-success" aria-hidden="true" /> {k}
+                </p>
+              ))}
+            </div>
+          ) : null}
 
-        {opts.checkbox && (
-          <label className="mt-3.5 flex cursor-pointer items-start gap-2 rounded-xl border border-danger/30 p-3 text-sm">
-            <input type="checkbox" checked={checked} className="mt-0.5 h-4 w-4 accent-red-600"
-                   onChange={(e) => { setChecked(e.target.checked); checkedRef.current = e.target.checked; }} />
-            <span>{opts.checkbox}</span>
-          </label>
-        )}
-
-        {needType && (
-          <div className="mt-3.5">
-            <label className="block text-xs text-text-secondary">
-              Onaylamak için <b className="text-text-primary">{needType}</b> yaz
+          {opts.checkbox && (
+            <label className="mt-3.5 flex min-h-[44px] cursor-pointer items-start gap-2 rounded-xl border border-danger/30 p-3 text-sm">
+              <input type="checkbox" checked={checked} className="mt-0.5 h-5 w-5 shrink-0 accent-red-600"
+                     onChange={(e) => { setChecked(e.target.checked); checkedRef.current = e.target.checked; }} />
+              <span>{opts.checkbox}</span>
             </label>
-            <input autoFocus value={typed} onChange={(e) => setTyped(e.target.value)}
-                   onKeyDown={(e) => { if (e.key === "Enter" && ready) close(true); if (e.key === "Escape") close(false); }}
-                   placeholder={needType}
-                   className="mt-1 w-full rounded-lg border bg-surface px-3 py-2 text-sm outline-none focus:border-danger" />
-          </div>
-        )}
+          )}
 
-        <div className="mt-4 flex justify-end gap-2">
-          <button onClick={() => close(false)}
-                  className="rounded-xl border px-4 py-2 text-sm hover:bg-surface-muted">
-            {opts.cancelLabel || "Vazgeç"}
-          </button>
-          <button onClick={() => ready && close(true)} disabled={!ready}
-                  autoFocus={!needType}
-                  className={"rounded-xl px-4 py-2 text-sm text-white disabled:cursor-not-allowed disabled:opacity-40 " +
-                    (opts.danger ? "bg-danger" : "bg-accent-purple")}>
-            {opts.confirmLabel || "Devam et"}
-          </button>
-        </div>
-      </div>
-    </div>
+          {needType && (
+            <div className="mt-3.5">
+              <label htmlFor={titleId + "-type"} className="block text-xs text-text-secondary">
+                Onaylamak için <b className="text-text-primary">{needType}</b> yaz
+              </label>
+              <input id={titleId + "-type"} data-autofocus="" value={typed} onChange={(e) => setTyped(e.target.value)}
+                     onKeyDown={(e) => { if (e.key === "Enter" && ready) close(true); }}
+                     placeholder={needType} autoComplete="off"
+                     className="mt-1 w-full rounded-lg border bg-surface px-3 py-2 text-sm outline-none focus:border-danger" />
+            </div>
+          )}
+
+          <div className="mt-4 flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
+            <button type="button" onClick={() => close(false)} data-autofocus={opts.danger && !needType ? "" : undefined}
+                    className="min-h-[44px] rounded-xl border px-4 py-2 text-sm hover:bg-surface-muted sm:min-h-[40px]">
+              {opts.cancelLabel || "Vazgeç"}
+            </button>
+            <button type="button" onClick={() => ready && close(true)} disabled={!ready}
+                    data-autofocus={!opts.danger && !needType ? "" : undefined}
+                    className={"min-h-[44px] rounded-xl px-4 py-2 text-sm font-medium text-on-accent disabled:cursor-not-allowed disabled:opacity-40 sm:min-h-[40px] " +
+                      (opts.danger ? "bg-danger" : "bg-accent-purple")}>
+              {opts.confirmLabel || "Devam et"}
+            </button>
+          </div>
+        </>
+      )}
+    </Modal>
   );
 
   return { confirm, dialog, wasChecked: () => checkedRef.current };

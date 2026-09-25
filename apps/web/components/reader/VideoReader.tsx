@@ -6,9 +6,12 @@
  */
 import { useEffect, useRef, useState } from "react";
 import { api } from "@/lib/api";
+import { usePoll } from "@/hooks/usePoll";
 import { ChatPanel } from "@/components/chat/ChatPanel";
+import ReaderHeader, { useNotebookContext, notebookHref, useMedia } from "@/components/reader/ReaderHeader";
+import Modal from "@/components/Modal";
 import { stageInfo } from "@/lib/docstage";
-import { ExternalLink, Loader2, Search } from "lucide-react";
+import { ExternalLink, Loader2, Search, Info, MessageSquare } from "lucide-react";
 
 declare global { interface Window { YT?: any; onYouTubeIframeAPIReady?: () => void } }
 
@@ -55,10 +58,14 @@ export default function VideoReader({ id, doc }: { id: string; doc: any }) {
   // ses oynatici: zamani takip et, acilista kaldigi yerden / ?page=N'den basla
   useEffect(() => {
     if (!isAudio) return;
+    let last = -1;
     const t = setInterval(() => {
       const a = audioRef.current; if (!a) return;
+      const cur = Math.floor(a.currentTime);
+      if (cur === last) return;
+      last = cur;
       setNow(a.currentTime); if (a.currentTime > 1) { try { localStorage.setItem(`video.pos.${id}`, String(a.currentTime)); } catch {} }
-    }, 500);
+    }, 1000);
     return () => clearInterval(t);
   }, [isAudio, id]);
   const [secs, setSecs] = useState<Section[] | null>(null);
@@ -69,21 +76,20 @@ export default function VideoReader({ id, doc }: { id: string; doc: any }) {
   const holder = useRef<HTMLDivElement>(null);
   const listRef = useRef<HTMLDivElement>(null);
   const pendingSeek = useRef<number | null>(null);
+  const ctx = useNotebookContext(doc);
+  const isLg = useMedia("(min-width: 1024px)");
+  const isXl = useMedia("(min-width: 1280px)");
+  const [infoOpen, setInfoOpen] = useState(false);
+  const [chatOpen, setChatOpen] = useState(false);
 
-  // dokum (hazir olana kadar yokla)
-  useEffect(() => {
-    let alive = true, t: any;
-    async function load() {
-      try {
-        const r = await api(`/documents/${id}/transcript`);
-        if (!alive) return;
-        if (r.ready) setSecs(r.sections || []);
-        else t = setTimeout(load, 5000);
-      } catch { if (alive) t = setTimeout(load, 8000); }
-    }
-    load();
-    return () => { alive = false; clearTimeout(t); };
-  }, [id, doc.status]);
+  // dokum: hazir olana kadar yokla (sekme gizliyken / cevrimdisiyken durur)
+  async function loadTranscript(): Promise<boolean> {
+    const r = await api(`/documents/${id}/transcript`, {}, 1);
+    if (r.ready) { setSecs(r.sections || []); return true; }
+    return false;
+  }
+  useEffect(() => { setSecs(null); loadTranscript().catch(() => {}); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [id, doc.status]);
+  usePoll(loadTranscript, { active: secs === null && doc.status !== "failed", base: 5000, max: 15000 });
 
   // ?page=N -> o bolumun basindan baslat
   function startFromUrl(list: Section[] | null): number {
@@ -115,12 +121,15 @@ export default function VideoReader({ id, doc }: { id: string; doc: any }) {
         },
       });
     }).catch(() => {});
+    let last = -1;
     const t = setInterval(() => {
       try {
         const cur = playerRef.current?.getCurrentTime?.();
-        if (typeof cur === "number") { setNow(cur); if (cur > 1) localStorage.setItem(`video.pos.${id}`, String(cur)); }
+        if (typeof cur !== "number" || Math.floor(cur) === last) return;
+        last = Math.floor(cur);
+        setNow(cur); if (cur > 1) localStorage.setItem(`video.pos.${id}`, String(cur));
       } catch {}
-    }, 700);
+    }, 1000);
     return () => { alive = false; clearInterval(t); try { playerRef.current?.destroy?.(); } catch {} };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [vid]);
@@ -150,7 +159,7 @@ export default function VideoReader({ id, doc }: { id: string; doc: any }) {
     if (el && listRef.current) {
       const box = listRef.current;
       if (el.offsetTop < box.scrollTop || el.offsetTop > box.scrollTop + box.clientHeight - 80)
-        box.scrollTo({ top: el.offsetTop - 12, behavior: "smooth" });
+        box.scrollTo({ top: el.offsetTop - 12, behavior: window.matchMedia?.("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth" });
     }
   }, [active, follow, q]);
 
@@ -159,34 +168,31 @@ export default function VideoReader({ id, doc }: { id: string; doc: any }) {
     .filter((v) => !needle || v.lines.length);
   const st = stageInfo({ ...doc, source_type: isAudio ? "audio" : "youtube" });
 
-  return (
-    <div className="flex h-screen flex-col lg:flex-row">
-      {/* sol: bilgi */}
-      <aside className="hidden w-72 shrink-0 overflow-auto border-r bg-surface p-4 xl:block">
-        <h2 className="font-heading text-lg leading-tight">{doc.title}</h2>
+  const info = (
+    <>
         <p className="mt-1 text-xs text-text-secondary">
           {media.channel ? media.channel + " · " : ""}{media.duration ? fmt(media.duration) : ""}
           {media.method ? " · " + (media.method === "altyazi" ? "altyazıdan" : "yapay zekâ dökümü") : ""}
         </p>
         {!isAudio && (
           <a href={doc.source_url || `https://www.youtube.com/watch?v=${vid}`} target="_blank" rel="noreferrer"
-             className="mt-2 inline-flex items-center gap-1 text-xs text-accent-purple hover:underline">
-            YouTube'da aç <ExternalLink size={12} />
+             className="mt-2 inline-flex min-h-[40px] items-center gap-1 text-xs text-accent-purple hover:underline">
+            YouTube'da aç <ExternalLink size={12} aria-hidden /><span className="sr-only"> (yeni sekmede açılır)</span>
           </a>
         )}
         {doc.status !== "ready" ? (
           <p className="mt-4 text-sm text-text-secondary">
-            {doc.status === "failed" ? `⚠️ ${doc.error_message}` : `${st.label}…`}
+            {doc.status === "failed" ? `⚠️ ${doc.error_message || "Bu kaynak işlenemedi."}` : `${st.label}…`}
           </p>
         ) : (
           <>
             {doc.short_summary && <p className="mt-4 text-sm leading-relaxed text-text-secondary">{doc.short_summary}</p>}
             {toArr(doc.key_concepts).length > 0 && (
               <div className="mt-5">
-                <p className="mb-1.5 text-xs font-semibold uppercase tracking-wide text-text-secondary">Anahtar kavramlar</p>
+                <h3 className="mb-1.5 text-xs font-semibold uppercase tracking-wide text-text-secondary">Anahtar kavramlar</h3>
                 <div className="flex flex-wrap gap-1.5">
                   {toArr(doc.key_concepts).map((k, i) => (
-                    <span key={i} title={k?.definition || ""} className="rounded-full bg-accent-amber/15 px-2.5 py-0.5 text-xs text-accent-amber">
+                    <span key={i} title={k?.definition || ""} className="rounded-full bg-accent-amber/15 px-2.5 py-0.5 text-xs text-amber-800 dark:text-amber-300">
                       {typeof k === "string" ? k : (k?.term || "")}
                     </span>
                   ))}
@@ -195,13 +201,30 @@ export default function VideoReader({ id, doc }: { id: string; doc: any }) {
             )}
           </>
         )}
+    </>
+  );
+
+  return (
+    <div className="flex h-dvh flex-col">
+    <ReaderHeader doc={doc} ctx={ctx}>
+      {!isXl && (
+        <button type="button" onClick={() => setInfoOpen(true)} aria-haspopup="dialog"
+                className="flex h-11 shrink-0 items-center gap-1.5 rounded-lg px-2.5 text-sm text-text-secondary hover:bg-surface-muted">
+          <Info size={18} aria-hidden /> <span className="hidden sm:inline">Özet</span><span className="sr-only sm:hidden">Özet ve kavramlar</span>
+        </button>
+      )}
+    </ReaderHeader>
+    <div className="flex min-h-0 flex-1 flex-col lg:flex-row">
+      {/* sol: bilgi */}
+      <aside className="hidden w-72 shrink-0 overflow-auto border-r bg-surface p-4 xl:block" aria-label="Özet ve kavramlar">
+        <h2 className="font-heading text-lg leading-tight">{doc.title}</h2>
+        {isXl && info}
       </aside>
 
       {/* orta: video + dokum */}
-      <main className="flex min-h-0 min-w-0 flex-1 flex-col">
+      <section aria-label={isAudio ? "Ses ve döküm" : "Video ve döküm"} className="flex min-h-0 min-w-0 flex-1 flex-col">
         {isAudio ? (
           <div className="shrink-0 border-b bg-surface px-4 py-3">
-            <p className="mb-2 truncate text-sm font-medium xl:hidden">{doc.title}</p>
             {audioUrl ? (
               <audio ref={audioRef} src={audioUrl} controls preload="metadata" className="w-full"
                      onLoadedMetadata={(e) => {
@@ -219,28 +242,28 @@ export default function VideoReader({ id, doc }: { id: string; doc: any }) {
             </div>
           </div>
         )}
-        <div className="flex shrink-0 items-center gap-2 border-b px-4 py-2">
-          <h3 className="truncate text-sm font-medium xl:hidden">{doc.title}</h3>
-          <div className="ml-auto flex items-center gap-1.5 rounded-lg border bg-surface px-2 py-1">
-            <Search size={14} className="text-text-secondary" />
-            <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Dökümde ara…"
-                   className="w-40 bg-transparent text-sm outline-none" />
-          </div>
+        <div className="flex shrink-0 items-center gap-2 border-b px-3 py-1.5 sm:px-4">
+          <label className="ml-auto flex min-h-[40px] min-w-0 items-center gap-1.5 rounded-lg border bg-surface px-2">
+            <Search size={14} className="shrink-0 text-text-secondary" aria-hidden />
+            <span className="sr-only">Dökümde ara</span>
+            <input type="search" value={q} onChange={(e) => setQ(e.target.value)} placeholder="Dökümde ara…"
+                   className="w-32 min-w-0 bg-transparent text-sm outline-none sm:w-40" />
+          </label>
         </div>
         <div ref={listRef} onWheel={() => setFollow(false)} onTouchMove={() => setFollow(false)}
              className="relative min-h-0 flex-1 overflow-y-auto px-4 py-3">
           {secs === null ? (
             <div className="flex items-center gap-2 p-6 text-sm text-text-secondary">
-              <Loader2 size={16} className="animate-spin" />
-              {doc.status === "failed" ? doc.error_message : `Döküm hazırlanıyor · ${st.label}`}
+              {doc.status !== "failed" && <Loader2 size={16} className="animate-spin" aria-hidden />}
+              <span role="status">{doc.status === "failed" ? (doc.error_message || "Bu kaynak işlenemedi.") : `Döküm hazırlanıyor · ${st.label}`}</span>
             </div>
           ) : !view.length ? (
-            <p className="p-6 text-sm text-text-secondary">{needle ? "Eşleşme yok." : "Döküm boş."}</p>
+            <p className="p-6 text-sm text-text-secondary">{needle ? "Eşleşme yok. Farklı bir kelime dene." : "Bu kaynaktan döküm çıkarılamadı. Kaynağı Kütüphane'den yeniden işlemeyi dene."}</p>
           ) : view.map(({ s, i, lines }) => (
             <section key={s.page} data-sec={i}
                      className={"mb-3 rounded-xl border p-3 transition " + (i === active ? "border-red-400/60 bg-red-500/5" : "bg-surface")}>
-              <button onClick={() => seek(s.start)}
-                      className="mb-1 text-[11px] font-semibold uppercase tracking-wide text-text-secondary hover:text-red-600">
+              <button type="button" onClick={() => seek(s.start)} aria-label={`Bölüm ${s.page}: ${fmt(s.start)} ile ${fmt(s.end)} arası, buradan oynat`}
+                      className="mb-1 min-h-[36px] text-xs font-semibold uppercase tracking-wide text-text-secondary hover:text-red-700">
                 ▶ {fmt(s.start)} – {fmt(s.end)} · bölüm {s.page}
               </button>
               <p className="text-sm leading-relaxed">
@@ -255,20 +278,46 @@ export default function VideoReader({ id, doc }: { id: string; doc: any }) {
             </section>
           ))}
           {!follow && active >= 0 && !q && (
-            <button onClick={() => setFollow(true)}
-                    className="sticky bottom-2 left-full rounded-full bg-red-600 px-3 py-1 text-xs text-white shadow">
+            <button type="button" onClick={() => setFollow(true)}
+                    className="sticky bottom-2 left-full min-h-[40px] rounded-full bg-red-700 px-4 text-sm text-white shadow">
               Oynayan yere dön
             </button>
           )}
         </div>
-      </main>
+      </section>
 
-      {/* sag: sohbet */}
-      <aside className="flex h-[45vh] shrink-0 flex-col border-t bg-surface lg:h-auto lg:w-[400px] lg:border-l lg:border-t-0">
-        <div className="min-h-0 flex-1">
-          <ChatPanel documentId={id} onGoPage={goPage} video={!isAudio} generic={isAudio} />
+      {/* sag: sohbet (genis ekran) */}
+      {isLg && (
+        <aside className="flex w-[400px] shrink-0 flex-col border-l bg-surface" aria-label="Bu kaynağa sor">
+          <div className="min-h-0 flex-1">
+            <ChatPanel documentId={id} onGoPage={goPage} video={!isAudio} generic={isAudio} notebookHref={ctx.id ? notebookHref(ctx) : null} />
+          </div>
+        </aside>
+      )}
+    </div>
+
+    {/* dar ekran: sohbet alttan acilan tabakada */}
+    {!isLg && (
+      <div className="shrink-0 border-t bg-surface px-3 pt-2" style={{ paddingBottom: "max(0.5rem, env(safe-area-inset-bottom))" }}>
+        <button type="button" onClick={() => setChatOpen(true)} aria-haspopup="dialog"
+                className="flex min-h-[48px] w-full items-center justify-center gap-2 rounded-xl bg-accent-purple px-4 text-sm font-medium text-white">
+          <MessageSquare size={17} aria-hidden /> Bu kaynağa sor
+        </button>
+      </div>
+    )}
+    {!isLg && (
+      <Modal open={chatOpen} onClose={() => setChatOpen(false)} ariaLabel="Bu kaynağa sor" size="lg" className="h-[85dvh] p-0">
+        <div className="flex min-h-0 flex-1 flex-col">
+          <ChatPanel documentId={id} onGoPage={(pg) => { setChatOpen(false); goPage(pg); }} video={!isAudio} generic={isAudio}
+                     notebookHref={ctx.id ? notebookHref(ctx) : null} onClose={() => setChatOpen(false)} />
         </div>
-      </aside>
+      </Modal>
+    )}
+    {!isXl && (
+      <Modal open={infoOpen} onClose={() => setInfoOpen(false)} title={doc.title || "Özet"} size="md">
+        {info}
+      </Modal>
+    )}
     </div>
   );
 }

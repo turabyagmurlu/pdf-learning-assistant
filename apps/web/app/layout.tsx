@@ -27,11 +27,18 @@ export const metadata: Metadata = {
     title: "TY PDF",
     statusBarStyle: "default",
   },
-  formatDetection: { telephone: false },
+  formatDetection: { telephone: false, email: false, address: false },
 };
 
+// Durum cubugu rengi sistem temasina gore; kullanici temayi elle degistirirse
+// ThemeToggle.applyTheme tum theme-color etiketlerini gunceller.
+// Yakinlastirma engellenmez (maximumScale / userScalable verilmez; WCAG 1.4.4).
 export const viewport: Viewport = {
-  themeColor: "#f6b45c",
+  themeColor: [
+    { media: "(prefers-color-scheme: light)", color: "#f6b45c" },
+    { media: "(prefers-color-scheme: dark)", color: "#1c1747" },
+  ],
+  colorScheme: "light dark",
   width: "device-width",
   initialScale: 1,
   viewportFit: "cover",

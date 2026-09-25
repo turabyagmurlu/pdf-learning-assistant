@@ -1,37 +1,64 @@
 "use client";
 import { toast } from "@/components/Toast";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
-import { api, API, getToken } from "@/lib/api";
+import { api, errorMessage } from "@/lib/api";
 import { CardSkeleton } from "@/components/Skeleton";
 import PageHeader from "@/components/PageHeader";
-import { stageInfo } from "@/lib/docstage";
+import { etaText, stageInfo } from "@/lib/docstage";
 import YoutubeAdd from "@/components/YoutubeAdd";
 import TextAdd from "@/components/TextAdd";
-import SourceIcon from "@/components/SourceIcon";
-import { ACCEPT, TYPES_HINT, rejectReason } from "@/lib/sources";
+import DiscoverPanel from "@/components/DiscoverPanel";
+import SourceIcon, { sourceLabel } from "@/components/SourceIcon";
+import Modal from "@/components/Modal";
+import { ACCEPT, LIMIT_HINT, TYPES_HINT, rejectReason } from "@/lib/sources";
+import { PRIVACY_LINE, usePrivacyGate } from "@/lib/privacy";
 import { useRefreshOn } from "@/components/Wake";
 import { useConfirm } from "@/components/Confirm";
-import { UploadCloud, Search, Star, Trash2, Pencil, LayoutGrid, List, MoreVertical, X, FileText, FolderOpen, FolderPlus, Check, BookOpen, RefreshCw } from "lucide-react";
+import { usePoll } from "@/hooks/usePoll";
+import Link from "next/link";
+import {
+  UploadCloud, Search, Star, Trash2, Pencil, LayoutGrid, List, MoreVertical, Notebook, BookMarked, Plus, Check,
+  BookOpen, RefreshCw, Globe, ChevronDown, CheckSquare, Square, X, Loader2,
+} from "lucide-react";
 
 type Doc = {
-  id: string; title: string; status: string; processing_stage?: string | null;
+  id: string; title: string; status: string; processing_stage?: string | null; source_type?: string | null;
   page_count?: number | null; short_summary?: string | null; difficulty_level?: string | null;
-  key_concepts?: any; category?: string | null; tags?: any; is_favorite?: boolean; collection_id?: string | null; created_at?: string;
+  key_concepts?: unknown; category?: string | null; tags?: unknown; is_favorite?: boolean;
+  collection_id?: string | null; collection_ids?: string[] | null; created_at?: string;
   progress_done?: number | null; progress_total?: number | null; error_message?: string | null;
 };
+type Col = { id: string; title: string };
 
-const cx = (...a: any[]) => a.filter(Boolean).join(" ");
+const cx = (...a: (string | false | null | undefined)[]) => a.filter(Boolean).join(" ");
 const KIND_GROUP: Record<string, string> = {
   pdf: "PDF", youtube: "Video", audio: "Ses", docx: "Belge", pptx: "Belge", epub: "Belge", rtf: "Belge",
-  xlsx: "Tablo", csv: "Tablo", web: "Web", html: "Web", text: "Metin", md: "Metin", txt: "Metin",
+  xlsx: "Tablo", csv: "Tablo", web: "Web", html: "Web", text: "Metin", md: "Metin", txt: "Metin", image: "Görsel",
 };
-const KIND_ORDER = ["PDF", "Video", "Ses", "Web", "Belge", "Tablo", "Metin"];
+const KIND_ORDER = ["PDF", "Video", "Ses", "Web", "Belge", "Tablo", "Metin", "Görsel"];
 
-function toArr(v: any): any[] {
+function toArr(v: unknown): unknown[] {
   if (Array.isArray(v)) return v;
   if (typeof v === "string") { try { const p = JSON.parse(v); return Array.isArray(p) ? p : []; } catch { return []; } }
   return [];
+}
+/** Kaynagin bagli oldugu defterler (API: collection_ids; eski yanitta collection_id). */
+function colIds(d: Doc): string[] {
+  if (Array.isArray(d.collection_ids)) return d.collection_ids;
+  return d.collection_id ? [d.collection_id] : [];
+}
+const isProcessing = (d: Doc) => d.status !== "ready" && d.status !== "failed";
+
+/** Silme onayinda kaynak turune gore kaybolacaklar */
+function deleteLosses(d?: Doc): string {
+  const k = d?.source_type || "pdf";
+  if (k === "youtube") return "Video dökümü, notların, vurguların ve sohbet geçmişi silinir";
+  if (k === "audio") return "Ses kaydı, dökümü, notların ve sohbet geçmişi silinir";
+  if (k === "web" || k === "html") return "Kaydedilen sayfa metni, notların, vurguların ve sohbet geçmişi silinir";
+  if (k === "text") return "Yapıştırdığın metin, notların, vurguların ve sohbet geçmişi silinir";
+  if (k === "pdf") return "PDF dosyası, vurguların, kenar notların ve sohbet geçmişi silinir";
+  return "Dosya, vurguların, notların ve sohbet geçmişi silinir";
 }
 
 const VIEW_KEY = "lib.view", DENS_KEY = "lib.density", SORT_KEY = "lib.sort";
@@ -40,6 +67,7 @@ export default function LibraryPage() {
   const router = useRouter();
   const [docs, setDocs] = useState<Doc[]>([]);
   const [loading, setLoading] = useState(true);
+  const [loadErr, setLoadErr] = useState("");
   const [q, setQ] = useState("");
   const [cat, setCat] = useState("");
   const [tag, setTag] = useState("");
@@ -48,50 +76,64 @@ export default function LibraryPage() {
   const [view, setView] = useState<"grid" | "list">("grid");
   const [density, setDensity] = useState<"comfortable" | "compact">("comfortable");
   const [sort, setSort] = useState<"recent" | "title" | "fav">("recent");
-  const [uploading, setUploading] = useState(false);
+  const [uploading, setUploading] = useState<{ done: number; total: number } | null>(null);
   const [drag, setDrag] = useState(false);
   const [editing, setEditing] = useState<Doc | null>(null);
   const [menuFor, setMenuFor] = useState<string | null>(null);
-  const [collections, setCollections] = useState<{ id: string; title: string }[]>([]);
+  const [collections, setCollections] = useState<Col[]>([]);
   const [prog, setProg] = useState<Record<string, { page: number; numPages: number; pct: number }>>({});
-  const [folder, setFolder] = useState("");
-  const [creatingFolder, setCreatingFolder] = useState(false);
-  const [newFolder, setNewFolder] = useState("");
+  const [nb, setNb] = useState("");                     // defter filtresi ("" tumu, "__none__" deftersiz)
+  const [creatingNb, setCreatingNb] = useState(false);
+  const [newNb, setNewNb] = useState("");
+  const [nbBusy, setNbBusy] = useState(false);
   const [renamingId, setRenamingId] = useState<string | null>(null);
   const [renameVal, setRenameVal] = useState("");
-  const [folderMenu, setFolderMenu] = useState<string | null>(null);
+  const [nbMenu, setNbMenu] = useState<string | null>(null);
+  const [selecting, setSelecting] = useState(false);
+  const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [linkFor, setLinkFor] = useState<string[] | null>(null);      // "Deftere ekle" penceresi: kaynak kimlikleri
+  const [webOpen, setWebOpen] = useState(false);
+  const [webNb, setWebNb] = useState("");
   const fileRef = useRef<HTMLInputElement>(null);
   const { confirm, dialog: confirmDialog } = useConfirm();
+  const { gate, dialog: privacyDialog } = usePrivacyGate();
+  const ids = useId();
 
-  async function renameFolder(id: string) {
-    const t = renameVal.trim();
-    setRenamingId(null);
-    if (!t) return;
-    setCollections((cs) => cs.map((c) => (c.id === id ? { ...c, title: t } : c)));
-    try { await api("/collections/" + id, { method: "PATCH", body: JSON.stringify({ title: t }) }); } catch { reload(); }
-  }
-  async function deleteFolder(id: string, title: string) {
-    const n = docs.filter((d) => d.collection_id === id).length;
-    const ok = await confirm({
-      title: `"${title}" defteri silinsin mi?`,
-      description: "Defter kalıcı olarak silinir; bu işlem geri alınamaz.",
-      losses: ["Defterin sohbeti, taslağı, sözlüğü, haritası ve zaman çizelgesi silinir"],
-      keeps: n > 0 ? [`İçindeki ${n} kaynak silinmez; Kütüphane'de deftersiz kalır`] : undefined,
-      confirmLabel: "Defteri sil", danger: true,
-      typeToConfirm: n > 0 ? title : undefined,
-    });
-    if (!ok) return;
-    setFolderMenu(null);
-    if (folder === id) setFolder("");
-    setCollections((cs) => cs.filter((c) => c.id !== id));
-    setDocs((ds) => ds.map((d) => (d.collection_id === id ? { ...d, collection_id: null } : d)));
-    try { await api("/collections/" + id, { method: "DELETE" }); } catch { reload(); }
-  }
+  const colName = useMemo(() => {
+    const m: Record<string, string> = {};
+    collections.forEach((c) => { m[c.id] = c.title; });
+    return m;
+  }, [collections]);
 
-  async function reload() { try { const d = await api("/documents"); setDocs(d as Doc[]); } catch {} try { const cs = await fetch(API + "/collections", { headers: { Authorization: "Bearer " + getToken() } }); if (cs.ok) setCollections(await cs.json()); } catch {} setLoading(false); }
-  useEffect(() => { reload(); }, []);
+  const reloadDocs = useCallback(async (): Promise<Doc[] | null> => {
+    try {
+      const d = (await api("/documents")) as Doc[];
+      setDocs(d); setLoadErr("");
+      return d;
+    } catch (e) { setLoadErr(errorMessage(e)); return null; }
+  }, []);
+  const reloadCols = useCallback(async () => {
+    try {
+      const cs = await api("/collections");
+      setCollections(((Array.isArray(cs) ? cs : []) as Col[]).map((c) => ({ id: c.id, title: c.title })));
+    } catch { /* defter listesi gelmezse kenar cubugu bos kalir; kaynaklar yine gorunur */ }
+  }, []);
+  const reload = useCallback(async () => {
+    await Promise.all([reloadDocs(), reloadCols()]);
+    setLoading(false);
+  }, [reloadDocs, reloadCols]);
+
+  useEffect(() => { reload(); }, [reload]);
   useRefreshOn(reload);
-  // okuma ilerlemesini oku (reader localStorage'a yazar)
+
+  // Islenen kaynak varken durum yoklamasi (sekme gizliyken / cevrimdisiyken durur, aralik uzar)
+  const anyProc = docs.some(isProcessing);
+  usePoll(async () => {
+    const d = await reloadDocs();
+    return !!d && !d.some(isProcessing);
+  }, { active: anyProc, base: 3000, max: 15000 });
+
+  // okuma ilerlemesini oku (okuyucu localStorage'a yazar)
   useEffect(() => {
     if (!docs.length) return;
     const out: Record<string, { page: number; numPages: number; pct: number }> = {};
@@ -101,7 +143,7 @@ export default function LibraryPage() {
         if (!raw) continue;
         const p = JSON.parse(raw);
         if (p && typeof p.pct === "number") out[d.id] = { page: p.page, numPages: p.numPages, pct: p.pct };
-      } catch {}
+      } catch { /* bozuk kayit yok sayilir */ }
     }
     setProg(out);
   }, [docs]);
@@ -110,221 +152,392 @@ export default function LibraryPage() {
       const v = localStorage.getItem(VIEW_KEY); if (v === "grid" || v === "list") setView(v);
       const de = localStorage.getItem(DENS_KEY); if (de === "comfortable" || de === "compact") setDensity(de);
       const s = localStorage.getItem(SORT_KEY); if (s === "recent" || s === "title" || s === "fav") setSort(s);
-    } catch {}
+    } catch { /* localStorage kapali */ }
   }, []);
-  useEffect(() => { try { localStorage.setItem(VIEW_KEY, view); } catch {} }, [view]);
-  useEffect(() => { try { localStorage.setItem(DENS_KEY, density); } catch {} }, [density]);
-  useEffect(() => { try { localStorage.setItem(SORT_KEY, sort); } catch {} }, [sort]);
-  useEffect(() => {
-    const anyProc = docs.some((d) => d.status !== "ready" && d.status !== "failed");
-    if (!anyProc) return;
-    const t = setInterval(reload, 3000);
-    return () => clearInterval(t);
-  }, [docs]);
+  useEffect(() => { try { localStorage.setItem(VIEW_KEY, view); } catch { /* yok say */ } }, [view]);
+  useEffect(() => { try { localStorage.setItem(DENS_KEY, density); } catch { /* yok say */ } }, [density]);
+  useEffect(() => { try { localStorage.setItem(SORT_KEY, sort); } catch { /* yok say */ } }, [sort]);
 
   const categories = useMemo(() => { const s = new Set<string>(); docs.forEach((d) => { if (d.category) s.add(d.category); }); return Array.from(s).sort(); }, [docs]);
   const allTags = useMemo(() => { const s = new Set<string>(); docs.forEach((d) => toArr(d.tags).forEach((t) => s.add(String(t)))); return Array.from(s).sort(); }, [docs]);
+  const looseCount = useMemo(() => docs.filter((d) => colIds(d).length === 0).length, [docs]);
 
   const filtered = useMemo(() => {
     let list = [...docs];
     if (favOnly) list = list.filter((d) => d.is_favorite);
-    if (kind) list = list.filter((d) => KIND_GROUP[(d as any).source_type || "pdf"] === kind);
+    if (kind) list = list.filter((d) => KIND_GROUP[d.source_type || "pdf"] === kind);
     if (cat) list = list.filter((d) => d.category === cat);
     if (tag) list = list.filter((d) => toArr(d.tags).map(String).includes(tag));
-    if (folder === "__none__") list = list.filter((d) => !d.collection_id);
-    else if (folder) list = list.filter((d) => d.collection_id === folder);
+    if (nb === "__none__") list = list.filter((d) => colIds(d).length === 0);
+    else if (nb) list = list.filter((d) => colIds(d).includes(nb));
     if (q.trim()) {
-      const s = q.toLowerCase();
-      list = list.filter((d) => (d.title || "").toLowerCase().includes(s) || (d.short_summary || "").toLowerCase().includes(s) || toArr(d.tags).some((t) => String(t).toLowerCase().includes(s)));
+      const s = q.toLocaleLowerCase("tr");
+      list = list.filter((d) => (d.title || "").toLocaleLowerCase("tr").includes(s) || (d.short_summary || "").toLocaleLowerCase("tr").includes(s) || toArr(d.tags).some((t) => String(t).toLocaleLowerCase("tr").includes(s)));
     }
-    if (sort === "title") list.sort((a, b) => (a.title || "").localeCompare(b.title || ""));
+    if (sort === "title") list.sort((a, b) => (a.title || "").localeCompare(b.title || "", "tr"));
     else if (sort === "fav") list.sort((a, b) => Number(!!b.is_favorite) - Number(!!a.is_favorite));
     return list;
-  }, [docs, favOnly, cat, tag, q, sort, folder, kind]);
+  }, [docs, favOnly, cat, tag, q, sort, nb, kind]);
   const kindCounts = useMemo(() => {
     const m: Record<string, number> = {};
-    docs.forEach((d) => { const g = KIND_GROUP[(d as any).source_type || "pdf"] || "Metin"; m[g] = (m[g] || 0) + 1; });
+    docs.forEach((d) => { const g = KIND_GROUP[d.source_type || "pdf"] || "Metin"; m[g] = (m[g] || 0) + 1; });
     return m;
   }, [docs]);
 
-  async function onFiles(files: FileList | null) {
-    if (!files || !files.length) return;
-    setUploading(true);
-    for (const f of Array.from(files)) {
-      if (rejectReason(f)) { toast.error(rejectReason(f) as string); continue; }
+  async function upload(files: File[]) {
+    const ok: string[] = [];
+    let linked = 0;
+    setUploading({ done: 0, total: files.length });
+    for (let i = 0; i < files.length; i++) {
+      const f = files[i];
       const fd = new FormData(); fd.append("file", f);
-      try { await fetch(API + "/documents", { method: "POST", headers: { Authorization: "Bearer " + getToken() }, body: fd }); } catch {}
+      try {
+        const r = (await api("/documents", { method: "POST", body: fd })) as { id?: string; linked_existing?: boolean } | null;
+        if (r?.id) ok.push(r.id);
+        if (r?.linked_existing) linked++;
+      } catch (e) {
+        toast.error(`“${f.name}” yüklenemedi. ${errorMessage(e)}`);
+      }
+      setUploading({ done: i + 1, total: files.length });
     }
-    setUploading(false); reload();
+    setUploading(null);
+    reload();
+    if (ok.length) {
+      const msg = linked === ok.length
+        ? (ok.length === 1 ? "Bu dosya zaten Kütüphane'nde; yeniden yüklenmedi." : `${ok.length} dosya zaten Kütüphane'nde; yeniden yüklenmedi.`)
+        : `${ok.length} kaynak eklendi; hazırlanıyor. Soru sormak için bir deftere ekle.`;
+      toast(msg, { action: { label: "Deftere ekle", run: () => setLinkFor(ok) } });
+    }
   }
 
-  async function patchDoc(id: string, body: any) {
+  function onFiles(list: FileList | null) {
+    if (!list || !list.length) return;
+    const files: File[] = [];
+    for (const f of Array.from(list)) {
+      const why = rejectReason(f);
+      if (why) toast.error(why); else files.push(f);
+    }
+    if (fileRef.current) fileRef.current.value = "";
+    if (files.length) gate(() => { void upload(files); });
+  }
+
+  async function patchDoc(id: string, body: Partial<Doc>) {
     const prevDocs = docs;
     setDocs((prev) => prev.map((d) => (d.id === id ? { ...d, ...body } : d)));
-    try { const r = await fetch(API + "/documents/" + id, { method: "PATCH", headers: { Authorization: "Bearer " + getToken(), "Content-Type": "application/json" }, body: JSON.stringify(body) }); if (!r.ok) setDocs(prevDocs); } catch { setDocs(prevDocs); }
+    try { await api("/documents/" + id, { method: "PATCH", body: JSON.stringify(body) }); }
+    catch (e) { setDocs(prevDocs); toast.error("Değişiklik kaydedilemedi. " + errorMessage(e)); }
   }
   async function reprocess(id: string) {
     setDocs((prev) => prev.map((d) => (d.id === id ? { ...d, status: "uploaded", error_message: null } : d)));
-    try { await api("/documents/" + id + "/reprocess", { method: "POST" }); } catch {}
+    try { await api("/documents/" + id + "/reprocess", { method: "POST" }); }
+    catch (e) { toast.error("Yeniden hazırlama başlatılamadı. " + errorMessage(e)); }
     reload();
   }
   async function removeDoc(id: string) {
     const d = docs.find((x) => x.id === id);
+    const inNbs = d ? colIds(d).map((c) => colName[c]).filter(Boolean) : [];
     const ok = await confirm({
-      title: `"${d?.title || "Bu kaynak"}" silinsin mi?`,
-      description: "PDF ve üzerindeki her şey kalıcı olarak silinir; geri alınamaz.",
-      losses: ["PDF dosyası, vurguların, kenar notların ve sohbet geçmişi silinir",
-               "Bulunduğu defterlerden de çıkar"],
+      title: `“${d?.title || "Bu kaynak"}” silinsin mi?`,
+      description: "Kaynak ve üzerindeki her şey kalıcı olarak silinir; geri alınamaz.",
+      losses: [deleteLosses(d),
+               ...(inNbs.length ? [inNbs.length === 1 ? `«${inNbs[0]}» defterinden de çıkar` : `Bağlı olduğu ${inNbs.length} defterden de çıkar (${inNbs.join(", ")})`] : [])],
       confirmLabel: "Kalıcı olarak sil", danger: true,
     });
     if (!ok) return;
     const prevDocs = docs;
-    setDocs((prev) => prev.filter((d) => d.id !== id));
-    try { const r = await fetch(API + "/documents/" + id, { method: "DELETE", headers: { Authorization: "Bearer " + getToken() } }); if (!r.ok) setDocs(prevDocs); } catch { setDocs(prevDocs); }
+    setDocs((prev) => prev.filter((x) => x.id !== id));
+    try { await api("/documents/" + id, { method: "DELETE" }); toast("Kaynak silindi."); }
+    catch (e) { setDocs(prevDocs); toast.error("Kaynak silinemedi. " + errorMessage(e)); }
   }
 
-  async function createFolder() { const t = newFolder.trim(); if (!t) { setCreatingFolder(false); return; } try { const r = await fetch(API + "/collections", { method: "POST", headers: { Authorization: "Bearer " + getToken(), "Content-Type": "application/json" }, body: JSON.stringify({ title: t }) }); if (r.ok) { const j = await r.json().catch(() => null); setNewFolder(""); setCreatingFolder(false); reload(); if (j?.id) router.push("/collections/" + j.id); } } catch {} }
+  async function renameNb(id: string) {
+    const t = renameVal.trim();
+    setRenamingId(null);
+    if (!t) return;
+    setCollections((cs) => cs.map((c) => (c.id === id ? { ...c, title: t } : c)));
+    try { await api("/collections/" + id, { method: "PATCH", body: JSON.stringify({ title: t }) }); }
+    catch (e) { toast.error("Defterin adı değiştirilemedi. " + errorMessage(e)); reload(); }
+  }
+  async function deleteNb(id: string, title: string) {
+    const n = docs.filter((d) => colIds(d).includes(id)).length;
+    const ok = await confirm({
+      title: `“${title}” defteri silinsin mi?`,
+      description: "Defter kalıcı olarak silinir; bu işlem geri alınamaz.",
+      losses: ["Defterin sohbeti, taslağı, sözlüğü, haritası ve zaman çizelgesi silinir"],
+      keeps: n > 0 ? [`İçindeki ${n} kaynak silinmez; Kütüphane'de ve bağlı olduğu diğer defterlerde kalır`] : undefined,
+      confirmLabel: "Defteri sil", danger: true,
+      typeToConfirm: n > 0 ? title : undefined,
+    });
+    if (!ok) return;
+    setNbMenu(null);
+    if (nb === id) setNb("");
+    const prevCols = collections, prevDocs = docs;
+    setCollections((cs) => cs.filter((c) => c.id !== id));
+    setDocs((ds) => ds.map((d) => (colIds(d).includes(id) ? { ...d, collection_ids: colIds(d).filter((x) => x !== id), collection_id: null } : d)));
+    try { await api("/collections/" + id, { method: "DELETE" }); toast("Defter silindi; kaynaklar Kütüphane'de duruyor."); }
+    catch (e) { setCollections(prevCols); setDocs(prevDocs); toast.error("Defter silinemedi. " + errorMessage(e)); }
+  }
+  async function createNb() {
+    const t = newNb.trim();
+    if (!t) { setCreatingNb(false); return; }
+    if (nbBusy) return;
+    setNbBusy(true);
+    try {
+      const j = (await api("/collections", { method: "POST", body: JSON.stringify({ title: t }) })) as { id?: string } | null;
+      setNewNb(""); setCreatingNb(false);
+      if (j?.id) router.push("/collections/" + j.id); else reload();
+    } catch (e) {
+      toast.error("Defter oluşturulamadı. " + errorMessage(e));
+    } finally { setNbBusy(false); }
+  }
+
+  /** Defterden cikar: yalniz bagi koparir, kaynak Kutuphane'de kalir. */
+  async function unlink(docId: string, cid: string) {
+    const prevDocs = docs;
+    setDocs((ds) => ds.map((d) => (d.id === docId ? { ...d, collection_ids: colIds(d).filter((x) => x !== cid) } : d)));
+    try {
+      await api(`/collections/${cid}/documents/${docId}`, { method: "DELETE" });
+      toast(`«${colName[cid] || "Defter"}» defterinden çıkarıldı; kaynak Kütüphane'de duruyor.`, {
+        action: { label: "Geri al", run: () => { void linkDocs(cid, [docId]).then(() => reloadDocs()); } },
+      });
+    } catch (e) { setDocs(prevDocs); toast.error("Defterden çıkarılamadı. " + errorMessage(e)); }
+  }
+  async function linkDocs(cid: string, docIds: string[]) {
+    await api(`/collections/${cid}/documents`, { method: "POST", body: JSON.stringify({ document_ids: docIds }) });
+  }
+
+  function toggleSel(id: string) {
+    setSelected((s) => { const n = new Set(s); if (n.has(id)) n.delete(id); else n.add(id); return n; });
+  }
+  function endSelect() { setSelecting(false); setSelected(new Set()); }
 
   const gap = density === "compact" ? "gap-2" : "gap-5";
   const pad = density === "compact" ? "p-3" : "p-5";
+  const chip = (on: boolean) => cx("shrink-0 min-h-[36px] rounded-full px-3 text-xs", on ? "bg-accent-purple text-on-accent" : "border bg-surface text-text-secondary hover:border-accent-purple/50");
 
   return (
-    <div className="mx-auto w-full max-w-6xl px-4 py-5 md:px-6 md:py-8" onClick={() => { setMenuFor(null); setFolderMenu(null); }}>
+    <div className="mx-auto w-full max-w-6xl px-4 py-5 md:px-6 md:py-8" onClick={() => { setMenuFor(null); setNbMenu(null); }}>
       <PageHeader hero eyebrow="TY PDF" title="Kütüphane"
-                  subtitle="Tüm kaynakların tek yerde. Yükle, düzenle, defterlere dağıt." />
+                  subtitle="Tüm kaynakların tek yerde. Bir kaynak birden çok defterde olabilir; defterden çıkarmak kaynağı silmez." />
+
+      {loadErr && (
+        <div role="alert" className="mb-4 flex flex-wrap items-center justify-between gap-2 rounded-xl border border-warning/40 bg-warning/10 px-4 py-3 text-sm">
+          <span>Kaynakların yüklenemedi; silinmedi. {loadErr}</span>
+          <button type="button" onClick={() => reload()} className="min-h-[40px] rounded-lg bg-accent-purple px-3 text-on-accent">Tekrar dene</button>
+        </div>
+      )}
 
       <div className="mt-5 flex flex-col gap-6 lg:flex-row">
       <div className="min-w-0 flex-1">
 
       <div className="flex flex-wrap items-center gap-2">
-        <div className="flex min-w-[220px] flex-1 items-center gap-2 rounded-xl border bg-surface px-3">
-          <Search size={16} className="text-text-secondary" />
-          <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Ara: başlık, özet, etiket…" aria-label="Belgelerde ara" className="w-full bg-transparent py-2 text-sm outline-none" />
+        <div className="flex min-w-[220px] flex-1 items-center gap-2 rounded-xl border border-border-strong bg-surface px-3">
+          <Search size={16} className="text-text-secondary" aria-hidden="true" />
+          <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Ara: başlık, özet, etiket…" aria-label="Kaynakların adında, özetinde ve etiketlerinde ara"
+                 className="w-full border-0 bg-transparent py-2 text-sm outline-none" />
         </div>
-        <select value={sort} onChange={(e) => setSort(e.target.value as any)} aria-label="Sırala" className="rounded-xl border bg-surface px-3 py-2 text-sm">
+        <select value={sort} onChange={(e) => setSort(e.target.value as "recent" | "title" | "fav")} aria-label="Sırala" className="min-h-[40px] rounded-xl border bg-surface px-3 text-sm">
           <option value="recent">En yeni</option>
           <option value="title">Başlık (A-Z)</option>
           <option value="fav">Favoriler önce</option>
         </select>
-        <button onClick={() => setFavOnly((v) => !v)} aria-pressed={favOnly} aria-label="Sadece favoriler" className={cx("flex items-center gap-1.5 rounded-xl border px-3 py-2 text-sm", favOnly ? "border-accent-purple text-accent-purple" : "bg-surface text-text-secondary")}>
-          <Star size={15} className={favOnly ? "fill-current" : ""} /> Favoriler
+        <button type="button" onClick={() => setFavOnly((v) => !v)} aria-pressed={favOnly} className={cx("flex min-h-[40px] items-center gap-1.5 rounded-xl border px-3 text-sm", favOnly ? "border-accent-purple text-accent-purple" : "bg-surface text-text-secondary")}>
+          <Star size={15} className={favOnly ? "fill-current" : ""} aria-hidden="true" /> Favoriler
         </button>
-        <div className="flex items-center rounded-xl border bg-surface">
-          <button onClick={() => setView("grid")} aria-label="Izgara görünüm" aria-pressed={view === "grid"} className={cx("rounded-l-xl p-2", view === "grid" ? "text-accent-purple" : "text-text-secondary")}><LayoutGrid size={16} /></button>
-          <button onClick={() => setView("list")} aria-label="Liste görünüm" aria-pressed={view === "list"} className={cx("rounded-r-xl p-2", view === "list" ? "text-accent-purple" : "text-text-secondary")}><List size={16} /></button>
+        <div className="flex items-center rounded-xl border bg-surface" role="group" aria-label="Görünüm">
+          <button type="button" onClick={() => setView("grid")} aria-label="Izgara görünümü" aria-pressed={view === "grid"} className={cx("flex h-10 w-10 items-center justify-center rounded-l-xl", view === "grid" ? "text-accent-purple" : "text-text-secondary")}><LayoutGrid size={16} /></button>
+          <button type="button" onClick={() => setView("list")} aria-label="Liste görünümü" aria-pressed={view === "list"} className={cx("flex h-10 w-10 items-center justify-center rounded-r-xl", view === "list" ? "text-accent-purple" : "text-text-secondary")}><List size={16} /></button>
         </div>
-        <button onClick={() => setDensity((d) => (d === "comfortable" ? "compact" : "comfortable"))} aria-label="Yoğunluk değiştir" className="rounded-xl border bg-surface px-3 py-2 text-sm text-text-secondary">
+        <button type="button" onClick={() => setDensity((d) => (d === "comfortable" ? "compact" : "comfortable"))}
+                aria-label={density === "comfortable" ? "Sık görünüme geç" : "Ferah görünüme geç"}
+                className="min-h-[40px] rounded-xl border bg-surface px-3 text-sm text-text-secondary">
           {density === "comfortable" ? "Sık" : "Ferah"}
         </button>
+        {docs.length > 0 && (
+          <button type="button" onClick={() => (selecting ? endSelect() : setSelecting(true))} aria-pressed={selecting}
+                  className={cx("flex min-h-[40px] items-center gap-1.5 rounded-xl border px-3 text-sm", selecting ? "border-accent-purple text-accent-purple" : "bg-surface text-text-secondary")}>
+            <CheckSquare size={15} aria-hidden="true" /> {selecting ? "Seçimi bitir" : "Seç"}
+          </button>
+        )}
       </div>
 
-      {Object.keys(kindCounts).length > 1 && (
-        <div className="mt-3 flex gap-1.5 overflow-x-auto pb-0.5 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
-          <button onClick={() => setKind("")}
-                  className={cx("shrink-0 rounded-full px-3 py-1 text-xs", !kind ? "bg-accent-purple text-white" : "border bg-surface text-text-secondary hover:border-accent-purple/50")}>
-            Tümü <span className="opacity-70">{docs.length}</span>
+      {(Object.keys(kindCounts).length > 1 || looseCount > 0) && (
+        <div className="mt-3 flex gap-1.5 overflow-x-auto pb-0.5 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden" role="group" aria-label="Türe göre süz">
+          <button type="button" onClick={() => setKind("")} aria-pressed={!kind} className={chip(!kind)}>
+            Tüm kaynaklar <span className="opacity-80">{docs.length}</span>
           </button>
-          {KIND_ORDER.filter((k) => kindCounts[k]).map((k) => (
-            <button key={k} onClick={() => setKind(kind === k ? "" : k)}
-                    className={cx("shrink-0 rounded-full px-3 py-1 text-xs", kind === k ? "bg-accent-purple text-white" : "border bg-surface text-text-secondary hover:border-accent-purple/50")}>
-              {k} <span className="opacity-70">{kindCounts[k]}</span>
+          {Object.keys(kindCounts).length > 1 && KIND_ORDER.filter((k) => kindCounts[k]).map((k) => (
+            <button type="button" key={k} onClick={() => setKind(kind === k ? "" : k)} aria-pressed={kind === k} className={chip(kind === k)}>
+              {k} <span className="opacity-80">{kindCounts[k]}</span>
             </button>
           ))}
-          <button onClick={() => setFolder(folder === "__none__" ? "" : "__none__")}
-                  className={cx("shrink-0 rounded-full px-3 py-1 text-xs", folder === "__none__" ? "bg-accent-purple text-white" : "border bg-surface text-text-secondary hover:border-accent-purple/50")}>
-            Deftersiz <span className="opacity-70">{docs.filter((d) => !d.collection_id).length}</span>
-          </button>
+          {looseCount > 0 && (
+            <button type="button" onClick={() => setNb(nb === "__none__" ? "" : "__none__")} aria-pressed={nb === "__none__"} className={chip(nb === "__none__")}
+                    title="Hiçbir deftere eklenmemiş kaynaklar">
+              Deftersiz <span className="opacity-80">{looseCount}</span>
+            </button>
+          )}
         </div>
       )}
 
       {(categories.length > 0 || allTags.length > 0) && (
         <div className="mt-3 flex flex-wrap items-center gap-1.5">
-          {cat && <button onClick={() => setCat("")} className="rounded-full bg-accent-purple/15 px-2.5 py-1 text-xs text-accent-purple">kategori: {cat} ✕</button>}
+          {cat && <button type="button" onClick={() => setCat("")} aria-label={`Kategori süzgecini kaldır: ${cat}`} className="min-h-[32px] rounded-full bg-accent-purple/15 px-2.5 text-xs text-accent-purple">kategori: {cat} ✕</button>}
           {!cat && categories.map((c) => (
-            <button key={c} onClick={() => setCat(c)} className="rounded-full border bg-surface px-2.5 py-1 text-xs text-text-secondary hover:border-accent-purple/50">{c}</button>
+            <button type="button" key={c} onClick={() => setCat(c)} className="min-h-[32px] rounded-full border bg-surface px-2.5 text-xs text-text-secondary hover:border-accent-purple/50">{c}</button>
           ))}
-          {tag && <button onClick={() => setTag("")} className="rounded-full bg-accent-amber/20 px-2.5 py-1 text-xs text-accent-amber">#{tag} ✕</button>}
+          {tag && <button type="button" onClick={() => setTag("")} aria-label={`Etiket süzgecini kaldır: ${tag}`} className="min-h-[32px] rounded-full bg-accent-amber/15 px-2.5 text-xs text-accent-amber">#{tag} ✕</button>}
           {!tag && allTags.slice(0, 12).map((t) => (
-            <button key={t} onClick={() => setTag(t)} className="rounded-full border bg-surface px-2.5 py-1 text-xs text-text-secondary hover:border-accent-purple/50">#{t}</button>
+            <button type="button" key={t} onClick={() => setTag(t)} className="min-h-[32px] rounded-full border bg-surface px-2.5 text-xs text-text-secondary hover:border-accent-purple/50">#{t}</button>
           ))}
         </div>
       )}
 
-      <div
+      <button type="button"
         onDragOver={(e) => { e.preventDefault(); setDrag(true); }}
         onDragLeave={() => setDrag(false)}
         onDrop={(e) => { e.preventDefault(); setDrag(false); onFiles(e.dataTransfer.files); }}
         onClick={() => fileRef.current?.click()}
-        role="button" tabIndex={0}
-        onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") fileRef.current?.click(); }}
-        aria-label="Dosya yükle"
-        className={cx("mt-5 flex cursor-pointer flex-col items-center justify-center rounded-2xl border-2 border-dashed py-10 transition", drag ? "border-accent-purple bg-accent-purple/5" : "border-black/15")}
+        disabled={!!uploading}
+        aria-describedby={ids + "-types"}
+        className={cx("mt-5 flex w-full cursor-pointer flex-col items-center justify-center rounded-2xl border-2 border-dashed px-4 py-10 transition disabled:cursor-wait",
+          drag ? "border-accent-purple bg-accent-purple/5" : "border-border-strong")}
       >
-        <UploadCloud size={26} className="text-accent-purple" />
-        <p className="mt-2 text-sm text-text-secondary">{uploading ? "Yükleniyor…" : "Dosya yüklemek için tıkla veya sürükle"}</p>
-        <p className="mt-0.5 text-xs text-text-secondary/80">{TYPES_HINT}</p>
-        <input ref={fileRef} type="file" accept={ACCEPT} multiple hidden onChange={(e) => onFiles(e.target.files)} />
-      </div>
+        {uploading ? <Loader2 size={26} className="animate-spin text-accent-purple" aria-hidden="true" /> : <UploadCloud size={26} className="text-accent-purple" aria-hidden="true" />}
+        <span className="mt-2 text-sm text-text-primary" role="status">
+          {uploading ? `Yükleniyor… ${uploading.done}/${uploading.total}` : "Dosya yüklemek için tıkla ya da sürükle"}
+        </span>
+        <span id={ids + "-types"} className="mt-0.5 text-center text-xs text-text-secondary">{TYPES_HINT} · {LIMIT_HINT}</span>
+        <span className="mt-0.5 text-center text-xs text-text-secondary">{PRIVACY_LINE}</span>
+      </button>
+      <input ref={fileRef} type="file" accept={ACCEPT} multiple hidden onChange={(e) => onFiles(e.target.files)} />
       <div className="mt-3 rounded-2xl border bg-surface px-4 py-3">
         <YoutubeAdd onAdded={() => reload()} />
         <div className="mt-2"><TextAdd onAdded={() => reload()} /></div>
+        <div className="mt-2 border-t pt-2">
+          <button type="button" onClick={() => setWebOpen((v) => !v)} aria-expanded={webOpen} aria-controls={ids + "-web"}
+                  className="flex min-h-[40px] w-full items-center gap-2 text-left text-sm text-text-secondary hover:text-accent-purple">
+            <Globe size={16} aria-hidden="true" /> <span className="flex-1">Web&apos;de kaynak bul</span>
+            <ChevronDown size={15} className={cx("transition", webOpen && "rotate-180")} aria-hidden="true" />
+          </button>
+          {webOpen && (
+            <div id={ids + "-web"} className="mt-2">
+              {collections.length === 0 ? (
+                <p className="text-sm text-text-secondary">
+                  Web&apos;de bulunan kaynaklar bir deftere eklenir. Önce <button type="button" onClick={() => setCreatingNb(true)} className="text-accent-purple underline underline-offset-2">bir defter aç</button>.
+                </p>
+              ) : (
+                <>
+                  <label htmlFor={ids + "-webnb"} className="block text-xs font-medium text-text-secondary">Bulunanlar hangi deftere eklensin?</label>
+                  <select id={ids + "-webnb"} value={webNb} onChange={(e) => setWebNb(e.target.value)}
+                          className="mt-1 min-h-[40px] w-full rounded-lg border bg-surface px-3 text-sm sm:w-auto">
+                    <option value="">Defter seç…</option>
+                    {collections.map((c) => <option key={c.id} value={c.id}>{c.title}</option>)}
+                  </select>
+                  {webNb && (
+                    <div className="mt-3">
+                      <DiscoverPanel key={webNb} collectionId={webNb}
+                                     onAdded={(added, linked) => {
+                                       reload();
+                                       toast(`${added + linked} kaynak «${colName[webNb] || "defter"}» defterine eklendi.`);
+                                     }} />
+                    </div>
+                  )}
+                </>
+              )}
+            </div>
+          )}
+        </div>
       </div>
 
       {loading ? (
         <div className="mt-6"><CardSkeleton n={3} /></div>
       ) : filtered.length === 0 ? (
         <div className="mt-6 rounded-2xl border bg-surface p-10 text-center text-sm text-text-secondary">
-          {docs.length === 0 ? "Henüz kaynak eklemedin. PDF, Word, Excel, sunum, link ya da metin ekle; senin için özetleyeyim ve çalışılabilir hale getireyim." : "Filtreyle eşleşen belge yok."}
+          {docs.length === 0
+            ? "Henüz kaynak eklemedin. PDF, Word, Excel, sunum, link ya da metin ekle; senin için özetleyeyim ve soru sorabileceğin hâle getireyim. Başlamak için yukarıdaki alana dosya sürükle."
+            : <>Süzgeçle eşleşen kaynak yok. <button type="button" onClick={() => { setQ(""); setCat(""); setTag(""); setKind(""); setNb(""); setFavOnly(false); }} className="text-accent-purple underline underline-offset-2">Süzgeçleri temizle</button></>}
         </div>
       ) : (
-        <div className={view === "grid" ? "mt-6 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 " + gap : "mt-6 flex flex-col " + gap}>
-          {filtered.map((d) => (
-            <div key={d.id} onClick={() => router.push("/documents/" + d.id)} role="button" tabIndex={0}
-                 onKeyDown={(e) => { if (e.key === "Enter") router.push("/documents/" + d.id); }}
-                 className={cx("lift group relative cursor-pointer rounded-2xl border bg-surface", pad, "hover:border-accent-purple/40")}>
+        <ul className={view === "grid" ? "mt-6 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 " + gap : "mt-6 flex flex-col " + gap} aria-label="Kaynaklar">
+          {filtered.map((d) => {
+            const cids = colIds(d);
+            const isSel = selected.has(d.id);
+            const st = stageInfo(d);
+            return (
+            <li key={d.id}
+                className={cx("lift group relative rounded-2xl border bg-surface", pad, "hover:border-accent-purple/40", isSel && "border-accent-purple ring-1 ring-accent-purple")}>
               <div className="flex items-start justify-between gap-2">
                 <div className="flex min-w-0 items-center gap-2">
-                  <SourceIcon kind={(d as any).source_type} size={16} />
-                  <h3 className="truncate font-medium text-text-primary">{d.title}</h3>
+                  {selecting && (
+                    <button type="button" onClick={() => toggleSel(d.id)} role="checkbox" aria-checked={isSel}
+                            aria-label={`Seç: ${d.title}`} className="relative z-10 -ml-1 flex h-10 w-10 shrink-0 items-center justify-center text-accent-purple">
+                      {isSel ? <CheckSquare size={18} /> : <Square size={18} />}
+                    </button>
+                  )}
+                  <SourceIcon kind={d.source_type} size={16} />
+                  <h3 className="min-w-0 truncate font-medium text-text-primary">
+                    {selecting ? (
+                      <span>{d.title}</span>
+                    ) : (
+                      <Link href={"/documents/" + d.id} className="after:absolute after:inset-0 after:rounded-2xl after:content-[''] focus-visible:outline-none"
+                            aria-label={`${d.title} (${sourceLabel(d.source_type, d.page_count)}) aç`}>
+                        {d.title}
+                      </Link>
+                    )}
+                  </h3>
                 </div>
-                <div className="flex shrink-0 items-center gap-0.5">
-                  <button onClick={(e) => { e.stopPropagation(); patchDoc(d.id, { is_favorite: !d.is_favorite }); }} aria-label={d.is_favorite ? "Favoriden çıkar" : "Favori yap"} className={cx("rounded-md p-1", d.is_favorite ? "text-accent-amber" : "text-text-secondary/70 hover:text-accent-amber")}>
+                <div className="relative z-10 flex shrink-0 items-center gap-0.5">
+                  <button type="button" onClick={(e) => { e.stopPropagation(); patchDoc(d.id, { is_favorite: !d.is_favorite }); }} aria-pressed={!!d.is_favorite}
+                          aria-label={d.is_favorite ? `Favoriden çıkar: ${d.title}` : `Favori yap: ${d.title}`}
+                          className={cx("flex h-10 w-10 items-center justify-center rounded-md md:h-8 md:w-8", d.is_favorite ? "text-accent-amber" : "text-text-secondary hover:text-accent-amber")}>
                     <Star size={15} className={d.is_favorite ? "fill-current" : ""} />
                   </button>
-                  <button onClick={(e) => { e.stopPropagation(); setMenuFor(menuFor === d.id ? null : d.id); }} aria-label="Belge menüsü" title="Düzenle, deftere taşı, sil" className="rounded-md p-1 text-text-secondary/70 hover:bg-surface-muted hover:text-text-primary">
+                  <button type="button" onClick={(e) => { e.stopPropagation(); setMenuFor(menuFor === d.id ? null : d.id); }}
+                          aria-label={`Kaynak seçenekleri: ${d.title}`} aria-haspopup="menu" aria-expanded={menuFor === d.id}
+                          className="flex h-10 w-10 items-center justify-center rounded-md text-text-secondary hover:bg-surface-muted hover:text-text-primary md:h-8 md:w-8">
                     <MoreVertical size={15} />
                   </button>
                 </div>
               </div>
               {d.short_summary && <p className="mt-1.5 line-clamp-2 text-sm text-text-secondary">{d.short_summary}</p>}
-              <div className="mt-2 flex flex-wrap items-center gap-1.5 text-[11px]">
-                <span className={cx("rounded-full px-2 py-0.5", d.status === "ready" ? "bg-green-100 text-green-700" : d.status === "failed" ? "bg-red-100 text-red-700" : "bg-accent-purple/10 text-accent-purple")}>{stageInfo(d).label}</span>
+              <div className="mt-2 flex flex-wrap items-center gap-1.5 text-xs">
+                <span className={cx("rounded-full px-2 py-0.5", d.status === "ready" ? "bg-green-100 text-green-800 dark:bg-green-500/15 dark:text-green-300" : d.status === "failed" ? "bg-red-100 text-red-800 dark:bg-red-500/15 dark:text-red-300" : "bg-accent-purple/10 text-accent-purple")}>{st.label}</span>
                 {d.category && <span className="rounded-full bg-accent-purple/10 px-2 py-0.5 text-accent-purple">{d.category}</span>}
                 {d.difficulty_level && <span className="rounded-full bg-surface-muted px-2 py-0.5 text-text-secondary">{d.difficulty_level}</span>}
                 {d.page_count ? <span className="rounded-full bg-surface-muted px-2 py-0.5 text-text-secondary">{d.page_count} sayfa</span> : null}
                 {toArr(d.tags).slice(0, 4).map((t, i) => <span key={i} className="rounded-full bg-accent-amber/15 px-2 py-0.5 text-accent-amber">#{String(t)}</span>)}
               </div>
-              {d.status !== "ready" && d.status !== "failed" && (() => {
-                const st = stageInfo(d);
-                return (
-                  <div className="mt-2.5">
-                    <div className="h-1.5 w-full overflow-hidden rounded-full bg-surface-muted">
-                      <div className="h-full rounded-full bg-accent-purple transition-all"
-                           style={{ width: (st.pct ?? 15) + "%" }} />
-                    </div>
-                    <p className="mt-1 text-[11px] text-text-secondary">
-                      {st.pct !== null ? `%${st.pct} · ` : ""}{st.label}
-                      {d.status === "uploaded" ? " — en fazla 2 belge aynı anda işlenir" : ""}
-                    </p>
+              {cids.length > 0 && (
+                <div className="relative z-10 mt-2 flex flex-wrap items-center gap-1" aria-label="Bağlı olduğu defterler">
+                  {cids.slice(0, 3).map((c) => (
+                    <button type="button" key={c} onClick={() => setNb(nb === c ? "" : c)} title="Bu defterdeki kaynakları göster"
+                            className="flex min-h-[28px] max-w-[160px] items-center gap-1 rounded-full border px-2 text-xs text-text-secondary hover:border-accent-purple/50 hover:text-accent-purple">
+                      <Notebook size={12} className="shrink-0" aria-hidden="true" /><span className="truncate">{colName[c] || "Defter"}</span>
+                    </button>
+                  ))}
+                  {cids.length > 3 && <span className="text-xs text-text-secondary">+{cids.length - 3} defter</span>}
+                </div>
+              )}
+              {isProcessing(d) && (
+                <div className="mt-2.5">
+                  <div className="h-1.5 w-full overflow-hidden rounded-full bg-surface-muted" role="progressbar" aria-valuemin={0} aria-valuemax={100}
+                       aria-valuenow={st.pct ?? undefined} aria-label={`${d.title}: ${st.label}`}>
+                    <div className="h-full rounded-full bg-accent-purple transition-all" style={{ width: (st.pct ?? 15) + "%" }} />
                   </div>
-                );
-              })()}
+                  <p className="mt-1 text-xs text-text-secondary">
+                    {st.pct !== null ? `%${st.pct} · ` : ""}{st.label}
+                    {etaText(d) ? ` · tahmini ${etaText(d)}` : ""}
+                    {d.status === "uploaded" ? " · sırada (en fazla 2 kaynak aynı anda hazırlanır)" : ""}
+                  </p>
+                </div>
+              )}
               {d.status === "failed" && (
-                <div className="mt-2.5 rounded-lg bg-red-50 px-2.5 py-2 text-[11px] text-red-700 dark:bg-red-950/30 dark:text-red-300">
-                  <p>{d.error_message || "İşleme başarısız."}</p>
-                  <button onClick={(e) => { e.stopPropagation(); reprocess(d.id); }}
-                          className="mt-1.5 flex items-center gap-1 rounded-md border border-red-300 px-2 py-1 text-red-700 hover:bg-red-100 dark:border-red-800 dark:text-red-300">
-                    <RefreshCw size={12} /> Yeniden işle
+                <div className="relative z-10 mt-2.5 rounded-lg bg-red-50 px-2.5 py-2 text-xs text-red-800 dark:bg-red-950/30 dark:text-red-300">
+                  <p>{d.error_message || "Bu kaynak hazırlanamadı. Yeniden dene; olmazsa dosyayı farklı biçimde kaydedip yükle."}</p>
+                  <button type="button" onClick={(e) => { e.stopPropagation(); reprocess(d.id); }}
+                          className="mt-1.5 flex min-h-[36px] items-center gap-1 rounded-md border border-red-300 px-2 text-red-800 hover:bg-red-100 dark:border-red-800 dark:text-red-300 dark:hover:bg-red-950/50">
+                    <RefreshCw size={12} aria-hidden="true" /> Yeniden hazırla
                   </button>
                 </div>
               )}
@@ -333,89 +546,101 @@ export default function LibraryPage() {
                   <div className="h-1.5 w-full overflow-hidden rounded-full bg-surface-muted">
                     <div className="h-full rounded-full bg-accent-purple transition-all" style={{ width: prog[d.id].pct + "%" }} />
                   </div>
-                  <p className="mt-1 text-[11px] text-text-secondary">
+                  <p className="mt-1 text-xs text-text-secondary">
                     %{prog[d.id].pct} okundu · s.{prog[d.id].page}/{prog[d.id].numPages} · kaldığın yerden devam et
                   </p>
                 </div>
               )}
               {menuFor === d.id && (
-                <div onClick={(e) => e.stopPropagation()} className="absolute right-3 top-11 z-20 w-40 overflow-hidden rounded-xl border bg-surface shadow-lg">
-                  <button onClick={() => { setEditing(d); setMenuFor(null); }} className="flex w-full items-center gap-2 px-3 py-2 text-left text-sm hover:bg-surface-muted"><Pencil size={14} /> Düzenle</button>
-                  <button onClick={() => { removeDoc(d.id); setMenuFor(null); }} className="flex w-full items-center gap-2 px-3 py-2 text-left text-sm text-danger hover:bg-surface-muted"><Trash2 size={14} /> Sil</button>
+                <div onClick={(e) => e.stopPropagation()} role="menu" aria-label={`Kaynak seçenekleri: ${d.title}`}
+                     className="absolute right-3 top-12 z-20 w-56 overflow-hidden rounded-xl border bg-surface shadow-lg"
+                     onKeyDown={(e) => { if (e.key === "Escape") setMenuFor(null); }}>
+                  <button type="button" role="menuitem" autoFocus onClick={() => { setEditing(d); setMenuFor(null); }} className="flex min-h-[44px] w-full items-center gap-2 px-3 text-left text-sm hover:bg-surface-muted"><Pencil size={14} aria-hidden="true" /> Düzenle</button>
+                  <button type="button" role="menuitem" onClick={() => { setLinkFor([d.id]); setMenuFor(null); }} className="flex min-h-[44px] w-full items-center gap-2 px-3 text-left text-sm hover:bg-surface-muted"><BookMarked size={14} aria-hidden="true" /> Defterlere ekle / çıkar</button>
+                  {cids.map((c) => (
+                    <button type="button" role="menuitem" key={c} onClick={() => { setMenuFor(null); void unlink(d.id, c); }}
+                            className="flex min-h-[44px] w-full items-center gap-2 px-3 text-left text-sm hover:bg-surface-muted">
+                      <X size={14} aria-hidden="true" /> <span className="truncate">«{colName[c] || "Defter"}» defterinden çıkar</span>
+                    </button>
+                  ))}
+                  <button type="button" role="menuitem" onClick={() => { removeDoc(d.id); setMenuFor(null); }} className="flex min-h-[44px] w-full items-center gap-2 border-t px-3 text-left text-sm text-danger hover:bg-surface-muted"><Trash2 size={14} aria-hidden="true" /> Kaynağı sil</button>
                 </div>
               )}
-            </div>
-          ))}
-        </div>
+            </li>
+            );
+          })}
+        </ul>
       )}
 
       </div>
 
-      {/* RAF: klasorler */}
-      <aside className="w-full shrink-0 lg:w-64">
+      {/* Defterler */}
+      <aside className="w-full shrink-0 lg:w-64" aria-labelledby={ids + "-nbs"}>
         <div className="rounded-2xl border bg-surface p-3">
-          <div className="mb-2 flex items-center gap-1.5 px-1 text-sm font-medium text-text-primary">
-            <FolderOpen size={15} className="text-accent-purple" /> Defterler
-          </div>
+          <h2 id={ids + "-nbs"} className="mb-2 flex items-center gap-1.5 px-1 text-sm font-medium text-text-primary">
+            <Notebook size={15} className="text-accent-purple" aria-hidden="true" /> Defterler
+          </h2>
 
-          <button onClick={() => setFolder("")}
-                  className={cx("flex w-full items-center justify-between rounded-lg px-2.5 py-2 text-sm",
-                    folder === "" ? "bg-accent-purple/10 text-accent-purple" : "text-text-secondary hover:bg-surface-muted")}>
-            <span>Tüm belgeler</span>
+          <button type="button" onClick={() => setNb("")} aria-pressed={nb === ""}
+                  className={cx("flex min-h-[40px] w-full items-center justify-between rounded-lg px-2.5 text-sm",
+                    nb === "" ? "bg-accent-purple/10 text-accent-purple" : "text-text-secondary hover:bg-surface-muted")}>
+            <span>Tüm kaynaklar</span>
             <span className="text-xs">{docs.length}</span>
           </button>
 
           <div className="mt-1 space-y-0.5">
             {collections.map((c) => {
-              const n = docs.filter((d) => d.collection_id === c.id).length;
-              const on = folder === c.id;
+              const n = docs.filter((d) => colIds(d).includes(c.id)).length;
+              const on = nb === c.id;
               if (renamingId === c.id) {
                 return (
                   <div key={c.id} className="flex items-center gap-1 px-1 py-1">
                     <input autoFocus value={renameVal} onChange={(e) => setRenameVal(e.target.value)}
-                           onKeyDown={(e) => { if (e.key === "Enter") renameFolder(c.id); if (e.key === "Escape") setRenamingId(null); }}
-                           onBlur={() => renameFolder(c.id)}
-                           aria-label="Klasör adı"
+                           onKeyDown={(e) => { if (e.key === "Enter") renameNb(c.id); if (e.key === "Escape") setRenamingId(null); }}
+                           onBlur={() => renameNb(c.id)}
+                           aria-label="Defter adı"
                            className="min-w-0 flex-1 rounded-lg border bg-surface px-2.5 py-1.5 text-sm outline-none focus:border-accent-purple" />
-                    <button onMouseDown={(e) => e.preventDefault()} onClick={() => renameFolder(c.id)}
-                            aria-label="Kaydet" className="rounded-lg bg-accent-purple p-1.5 text-white"><Check size={14} /></button>
+                    <button type="button" onMouseDown={(e) => e.preventDefault()} onClick={() => renameNb(c.id)}
+                            aria-label="Adı kaydet" className="flex h-10 w-10 items-center justify-center rounded-lg bg-accent-purple text-on-accent"><Check size={14} /></button>
                   </div>
                 );
               }
               return (
                 <div key={c.id}
                      className={cx("group relative flex items-center rounded-lg", on ? "bg-accent-purple/10" : "hover:bg-surface-muted")}>
-                  <button onClick={() => setFolder(on ? "" : c.id)} title="Sadece bunları göster"
-                          className={cx("flex min-w-0 flex-1 items-center gap-2 px-2.5 py-2 text-left text-sm",
+                  <button type="button" onClick={() => setNb(on ? "" : c.id)} aria-pressed={on}
+                          aria-label={`${c.title} defterindeki kaynakları göster (${n})`}
+                          className={cx("flex min-h-[40px] min-w-0 flex-1 items-center gap-2 px-2.5 text-left text-sm",
                             on ? "text-accent-purple" : "text-text-secondary")}>
-                    <FolderOpen size={14} className="shrink-0 opacity-70" />
+                    <Notebook size={14} className="shrink-0 opacity-70" aria-hidden="true" />
                     <span className="truncate">{c.title}</span>
+                    <span className="ml-auto pl-1 text-xs">{n}</span>
                   </button>
-                  <span className={cx("px-1 text-xs", on ? "text-accent-purple" : "text-text-secondary")}>{n}</span>
-                  <button onClick={() => router.push("/collections/" + c.id)}
-                          title="Defteri aç" aria-label={c.title + " defterini aç"}
-                          className="rounded-md px-1.5 py-2 text-text-secondary hover:text-accent-purple">
+                  <button type="button" onClick={() => router.push("/collections/" + c.id)}
+                          aria-label={c.title + " defterini aç"}
+                          className="flex h-10 w-9 items-center justify-center rounded-md text-text-secondary hover:text-accent-purple">
                     <BookOpen size={14} />
                   </button>
-                  <button onClick={(e) => { e.stopPropagation(); setFolderMenu(folderMenu === c.id ? null : c.id); }}
-                          title="Klasör seçenekleri" aria-label="Klasör seçenekleri"
-                          className="rounded-md px-1.5 py-2 text-text-secondary hover:text-text-primary">
+                  <button type="button" onClick={(e) => { e.stopPropagation(); setNbMenu(nbMenu === c.id ? null : c.id); }}
+                          aria-label={`Defter seçenekleri: ${c.title}`} aria-haspopup="menu" aria-expanded={nbMenu === c.id}
+                          className="flex h-10 w-9 items-center justify-center rounded-md text-text-secondary hover:text-text-primary">
                     <MoreVertical size={14} />
                   </button>
-                  {folderMenu === c.id && (
-                    <div onClick={(e) => e.stopPropagation()}
-                         className="absolute right-0 top-9 z-20 w-40 overflow-hidden rounded-xl border bg-surface shadow-lg">
-                      <button onClick={() => { setFolderMenu(null); setRenameVal(c.title); setRenamingId(c.id); }}
-                              className="flex w-full items-center gap-2 px-3 py-2 text-left text-sm hover:bg-surface-muted">
-                        <Pencil size={14} /> Adını değiştir
+                  {nbMenu === c.id && (
+                    <div onClick={(e) => e.stopPropagation()} role="menu" aria-label={`Defter seçenekleri: ${c.title}`}
+                         onKeyDown={(e) => { if (e.key === "Escape") setNbMenu(null); }}
+                         className="absolute right-0 top-10 z-20 w-44 overflow-hidden rounded-xl border bg-surface shadow-lg">
+                      <button type="button" role="menuitem" autoFocus onClick={() => { setNbMenu(null); setRenameVal(c.title); setRenamingId(c.id); }}
+                              className="flex min-h-[44px] w-full items-center gap-2 px-3 text-left text-sm hover:bg-surface-muted">
+                        <Pencil size={14} aria-hidden="true" /> Adını değiştir
                       </button>
-                      <button onClick={() => { setFolderMenu(null); router.push("/collections/" + c.id); }}
-                              className="flex w-full items-center gap-2 px-3 py-2 text-left text-sm hover:bg-surface-muted">
-                        <BookOpen size={14} /> Defteri aç
+                      <button type="button" role="menuitem" onClick={() => { setNbMenu(null); router.push("/collections/" + c.id); }}
+                              className="flex min-h-[44px] w-full items-center gap-2 px-3 text-left text-sm hover:bg-surface-muted">
+                        <BookOpen size={14} aria-hidden="true" /> Defteri aç
                       </button>
-                      <button onClick={() => deleteFolder(c.id, c.title)}
-                              className="flex w-full items-center gap-2 px-3 py-2 text-left text-sm text-danger hover:bg-surface-muted">
-                        <Trash2 size={14} /> Sil
+                      <button type="button" role="menuitem" onClick={() => deleteNb(c.id, c.title)}
+                              className="flex min-h-[44px] w-full items-center gap-2 px-3 text-left text-sm text-danger hover:bg-surface-muted">
+                        <Trash2 size={14} aria-hidden="true" /> Defteri sil
                       </button>
                     </div>
                   )}
@@ -424,82 +649,217 @@ export default function LibraryPage() {
             })}
           </div>
 
-          {(() => {
-            const loose = docs.filter((d) => !d.collection_id).length;
-            if (loose === 0) return null;
-            const on = folder === "__none__";
-            return (
-              <button onClick={() => setFolder(on ? "" : "__none__")}
-                      className={cx("mt-1 flex w-full items-center justify-between rounded-lg px-2.5 py-2 text-sm",
-                        on ? "bg-accent-amber/15 text-accent-amber" : "text-text-secondary hover:bg-surface-muted")}>
-                <span className="flex items-center gap-2"><FolderOpen size={14} className="opacity-50" /> Deftersiz</span>
-                <span className="text-xs">{loose}</span>
-              </button>
-            );
-          })()}
+          {looseCount > 0 && (
+            <button type="button" onClick={() => setNb(nb === "__none__" ? "" : "__none__")} aria-pressed={nb === "__none__"}
+                    className={cx("mt-1 flex min-h-[40px] w-full items-center justify-between rounded-lg px-2.5 text-sm",
+                      nb === "__none__" ? "bg-accent-amber/15 text-accent-amber" : "text-text-secondary hover:bg-surface-muted")}>
+              <span className="flex items-center gap-2"><Notebook size={14} className="opacity-50" aria-hidden="true" /> Deftersiz</span>
+              <span className="text-xs">{looseCount}</span>
+            </button>
+          )}
 
           <div className="mt-2 border-t pt-2">
-            {creatingFolder ? (
-              <div className="flex items-center gap-1">
-                <input autoFocus value={newFolder} onChange={(e) => setNewFolder(e.target.value)}
-                       onKeyDown={(e) => { if (e.key === "Enter") createFolder(); if (e.key === "Escape") setCreatingFolder(false); }}
-                       placeholder="Defter adı" aria-label="Yeni klasör adı"
+            {creatingNb ? (
+              <form className="flex items-center gap-1" onSubmit={(e) => { e.preventDefault(); void createNb(); }}>
+                <input autoFocus value={newNb} onChange={(e) => setNewNb(e.target.value)}
+                       onKeyDown={(e) => { if (e.key === "Escape") setCreatingNb(false); }}
+                       placeholder="Defter adı" aria-label="Yeni defter adı" disabled={nbBusy}
                        className="min-w-0 flex-1 rounded-lg border bg-surface px-2.5 py-1.5 text-sm outline-none focus:border-accent-purple" />
-                <button onClick={createFolder} aria-label="Klasörü oluştur" className="rounded-lg bg-accent-purple p-1.5 text-white"><Check size={14} /></button>
-              </div>
+                <button type="submit" aria-label="Defteri oluştur" disabled={nbBusy || !newNb.trim()}
+                        className="flex h-10 w-10 items-center justify-center rounded-lg bg-accent-purple text-on-accent disabled:opacity-50">
+                  {nbBusy ? <Loader2 size={14} className="animate-spin" /> : <Check size={14} />}
+                </button>
+              </form>
             ) : (
-              <button onClick={() => setCreatingFolder(true)}
-                      className="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-sm text-text-secondary hover:bg-surface-muted hover:text-accent-purple">
-                <FolderPlus size={14} /> Yeni defter
+              <button type="button" onClick={() => setCreatingNb(true)}
+                      className="flex min-h-[40px] w-full items-center gap-2 rounded-lg px-2.5 text-sm text-text-secondary hover:bg-surface-muted hover:text-accent-purple">
+                <Plus size={14} aria-hidden="true" /> Yeni defter
               </button>
             )}
           </div>
         </div>
 
-        <p className="mt-2 px-1 text-xs text-text-secondary">
-          Bir kaynağı deftere eklemek için 📖 ile defteri aç → <b>Kaynak ekle</b>.
+        <p className="mt-2 px-1 text-xs leading-relaxed text-text-secondary">
+          Bir kaynağı deftere eklemek için kartındaki <b>⋮</b> menüsünden <b>Defterlere ekle</b>&apos;yi seç ya da <b>Seç</b> ile birden çok kaynağı birlikte ekle.
+          Bir kaynak birden çok defterde olabilir.
         </p>
       </aside>
       </div>
 
-      {editing && <EditModal doc={editing} collections={collections} onClose={() => setEditing(null)} onSave={(b) => { patchDoc(editing.id, b); setEditing(null); }} />}
+      {selecting && (
+        <div className="fixed inset-x-0 z-40 flex justify-center px-3"
+             style={{ bottom: "calc(var(--bottom-nav, 0px) + 12px)" }}>
+          <div className="flex w-full max-w-lg items-center gap-2 rounded-2xl border bg-surface p-2 pl-4 shadow-medium" role="region" aria-label="Seçili kaynaklar">
+            <span className="flex-1 text-sm" role="status">{selected.size} kaynak seçildi</span>
+            <button type="button" onClick={endSelect} className="min-h-[44px] rounded-xl border px-3 text-sm hover:bg-surface-muted">Vazgeç</button>
+            <button type="button" disabled={!selected.size} onClick={() => setLinkFor(Array.from(selected))}
+                    className="flex min-h-[44px] items-center gap-1.5 rounded-xl bg-accent-purple px-3 text-sm font-medium text-on-accent disabled:opacity-50">
+              <BookMarked size={15} aria-hidden="true" /> Deftere ekle
+            </button>
+          </div>
+        </div>
+      )}
+
+      <EditModal doc={editing} onClose={() => setEditing(null)}
+                 onSave={(b) => { if (editing) patchDoc(editing.id, b); setEditing(null); }}
+                 onNotebooks={() => { if (editing) { const id = editing.id; setEditing(null); setLinkFor([id]); } }}
+                 notebookNames={editing ? colIds(editing).map((c) => colName[c]).filter(Boolean) : []} />
+
+      <LinkDialog docIds={linkFor} docs={docs} collections={collections}
+                  onClose={() => setLinkFor(null)}
+                  onDone={(msg) => { setLinkFor(null); endSelect(); reload(); if (msg) toast(msg); }}
+                  onCreated={(c) => setCollections((cs) => [...cs, c])} />
+
       {confirmDialog}
+      {privacyDialog}
     </div>
   );
 }
 
-function EditModal({ doc, collections, onClose, onSave }: { doc: Doc; collections: { id: string; title: string }[]; onClose: () => void; onSave: (b: any) => void }) {
-  const [title, setTitle] = useState(doc.title || "");
-  const [category, setCategory] = useState(doc.category || "");
-  const [tagsStr, setTagsStr] = useState(toArr(doc.tags).join(", "));
-  const [fav, setFav] = useState(!!doc.is_favorite);
-  const [col, setCol] = useState(doc.collection_id || "");
+/** Kaynak(lar)i defterlere ekle / defterlerden cikar. Kaynak birden cok defterde olabilir. */
+function LinkDialog({ docIds, docs, collections, onClose, onDone, onCreated }: {
+  docIds: string[] | null; docs: Doc[]; collections: Col[];
+  onClose: () => void; onDone: (msg?: string) => void; onCreated: (c: Col) => void;
+}) {
+  const open = !!docIds && docIds.length > 0;
+  const targets = useMemo(() => docs.filter((d) => docIds?.includes(d.id)), [docs, docIds]);
+  // baslangic: secili kaynaklarin hepsinin bagli oldugu defterler isaretli
+  const initial = useMemo(() => {
+    const s = new Set<string>();
+    if (!targets.length) return s;
+    collections.forEach((c) => { if (targets.every((d) => colIds(d).includes(c.id))) s.add(c.id); });
+    return s;
+  }, [targets, collections]);
+  const [checked, setChecked] = useState<Set<string>>(new Set());
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState("");
+  const [newTitle, setNewTitle] = useState("");
+  const [creating, setCreating] = useState(false);
+  const fid = useId();
+
+  useEffect(() => { if (open) { setChecked(new Set(initial)); setErr(""); setNewTitle(""); } }, [open, initial]);
+
+  async function createAndCheck() {
+    const t = newTitle.trim();
+    if (!t || creating) return;
+    setCreating(true); setErr("");
+    try {
+      const j = (await api("/collections", { method: "POST", body: JSON.stringify({ title: t }) })) as { id?: string } | null;
+      if (j?.id) { onCreated({ id: j.id, title: t }); setChecked((s) => new Set(s).add(j.id as string)); setNewTitle(""); }
+    } catch (e) { setErr("Defter oluşturulamadı. " + errorMessage(e)); }
+    finally { setCreating(false); }
+  }
+
+  async function save() {
+    if (busy) return;
+    const add = Array.from(checked).filter((c) => !initial.has(c));
+    const remove = Array.from(initial).filter((c) => !checked.has(c));
+    if (!add.length && !remove.length) { onClose(); return; }
+    setBusy(true); setErr("");
+    try {
+      for (const c of add) {
+        const need = targets.filter((d) => !colIds(d).includes(c)).map((d) => d.id);
+        if (need.length) await api(`/collections/${c}/documents`, { method: "POST", body: JSON.stringify({ document_ids: need }) });
+      }
+      for (const c of remove) {
+        for (const d of targets) {
+          if (colIds(d).includes(c)) await api(`/collections/${c}/documents/${d.id}`, { method: "DELETE" });
+        }
+      }
+      const parts: string[] = [];
+      if (add.length) parts.push(`${add.length} deftere eklendi`);
+      if (remove.length) parts.push(`${remove.length} defterden çıkarıldı`);
+      onDone(`${targets.length === 1 ? "Kaynak" : targets.length + " kaynak"} ${parts.join(", ")}.`);
+    } catch (e) {
+      setErr("Defterler güncellenemedi. " + errorMessage(e));
+    } finally { setBusy(false); }
+  }
+
+  const title = targets.length === 1 ? "Defterlere ekle" : `${targets.length} kaynağı defterlere ekle`;
   return (
-    <div role="dialog" aria-modal="true" aria-label="Belgeyi düzenle" className="fixed inset-0 z-50 flex items-center justify-center bg-black/30 p-4" onClick={onClose}>
-      <div className="w-full max-w-md rounded-2xl border bg-surface p-5 shadow-xl" onClick={(e) => e.stopPropagation()}>
-        <div className="mb-3 flex items-center justify-between">
-          <h3 className="font-heading text-lg">Belgeyi düzenle</h3>
-          <button onClick={onClose} aria-label="Kapat" className="rounded-md p-1 hover:bg-surface-muted"><X size={16} /></button>
+    <Modal open={open} onClose={() => { if (!busy) onClose(); }} title={title} size="md">
+      {targets.length === 1 && <p className="-mt-1 mb-2 truncate text-sm text-text-secondary">{targets[0].title}</p>}
+      <p className="text-xs text-text-secondary">Bir kaynak birden çok defterde olabilir. İşareti kaldırmak kaynağı yalnız o defterden çıkarır; Kütüphane&apos;den silmez.</p>
+      <fieldset className="mt-3">
+        <legend className="sr-only">Defterler</legend>
+        {collections.length === 0 && <p className="text-sm text-text-secondary">Henüz defterin yok; aşağıdan bir tane oluştur.</p>}
+        <div className="max-h-[40vh] space-y-0.5 overflow-y-auto">
+          {collections.map((c) => {
+            const on = checked.has(c.id);
+            const partial = !initial.has(c.id) && targets.some((d) => colIds(d).includes(c.id));
+            return (
+              <label key={c.id} className="flex min-h-[44px] cursor-pointer items-center gap-3 rounded-lg px-2 hover:bg-surface-muted">
+                <input type="checkbox" checked={on} className="h-5 w-5 shrink-0 accent-[var(--accent-purple)]"
+                       onChange={(e) => setChecked((s) => { const n = new Set(s); if (e.target.checked) n.add(c.id); else n.delete(c.id); return n; })} />
+                <span className="min-w-0 flex-1 truncate text-sm">{c.title}</span>
+                {partial && <span className="shrink-0 text-xs text-text-secondary">bazıları ekli</span>}
+              </label>
+            );
+          })}
         </div>
-        <label className="mb-1 block text-xs font-medium text-text-secondary">Başlık</label>
-        <input value={title} onChange={(e) => setTitle(e.target.value)} className="mb-3 w-full rounded-lg border bg-surface-muted px-3 py-2 text-sm outline-none focus:border-accent-purple" />
-        <label className="mb-1 block text-xs font-medium text-text-secondary">Kategori</label>
-        <input value={category} onChange={(e) => setCategory(e.target.value)} placeholder="ör. Tarih, Makale, Ders" className="mb-3 w-full rounded-lg border bg-surface-muted px-3 py-2 text-sm outline-none focus:border-accent-purple" />
-        <label className="mb-1 block text-xs font-medium text-text-secondary">Etiketler (virgülle)</label>
-        <input value={tagsStr} onChange={(e) => setTagsStr(e.target.value)} placeholder="ör. sınav, önemli" className="mb-3 w-full rounded-lg border bg-surface-muted px-3 py-2 text-sm outline-none focus:border-accent-purple" />
-        <label className="mb-1 block text-xs font-medium text-text-secondary">Klasör</label>
-        <select value={col} onChange={(e) => setCol(e.target.value)} aria-label="Klasör" className="mb-3 w-full rounded-lg border bg-surface-muted px-3 py-2 text-sm outline-none focus:border-accent-purple">
-          <option value="">(Klasörsüz)</option>
-          {collections.map((c) => (<option key={c.id} value={c.id}>{c.title}</option>))}
-        </select>
-        <label className="mb-4 flex items-center gap-2 text-sm text-text-primary">
-          <input type="checkbox" checked={fav} onChange={(e) => setFav(e.target.checked)} /> Favori
-        </label>
-        <div className="flex justify-end gap-2">
-          <button onClick={onClose} className="rounded-lg px-3 py-1.5 text-sm text-text-secondary hover:bg-surface-muted">Vazgeç</button>
-          <button onClick={() => onSave({ title: title.trim() || doc.title, category: category.trim(), tags: tagsStr.split(",").map((s) => s.trim()).filter(Boolean), is_favorite: fav, collection_id: col })} className="rounded-lg bg-accent-purple px-4 py-1.5 text-sm text-white">Kaydet</button>
-        </div>
+      </fieldset>
+      <form className="mt-3 flex items-center gap-2 border-t pt-3" onSubmit={(e) => { e.preventDefault(); void createAndCheck(); }}>
+        <label htmlFor={fid} className="sr-only">Yeni defter adı</label>
+        <input id={fid} value={newTitle} onChange={(e) => setNewTitle(e.target.value)} placeholder="Yeni defter adı"
+               className="min-w-0 flex-1 rounded-lg border bg-surface px-3 py-2 text-sm outline-none focus:border-accent-purple" />
+        <button type="submit" disabled={!newTitle.trim() || creating}
+                className="flex min-h-[40px] items-center gap-1 rounded-lg border px-3 text-sm hover:border-accent-purple/50 disabled:opacity-50">
+          {creating ? <Loader2 size={14} className="animate-spin" aria-hidden="true" /> : <Plus size={14} aria-hidden="true" />} Oluştur
+        </button>
+      </form>
+      {err && <p role="alert" className="mt-2 text-sm text-danger">{err}</p>}
+      <div className="mt-4 flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
+        <button type="button" onClick={onClose} disabled={busy} className="min-h-[44px] rounded-xl border px-4 text-sm hover:bg-surface-muted sm:min-h-[40px]">Vazgeç</button>
+        <button type="button" onClick={save} disabled={busy}
+                className="flex min-h-[44px] items-center justify-center gap-1.5 rounded-xl bg-accent-purple px-4 text-sm font-medium text-on-accent disabled:opacity-60 sm:min-h-[40px]">
+          {busy && <Loader2 size={14} className="animate-spin" aria-hidden="true" />} Kaydet
+        </button>
       </div>
-    </div>
+    </Modal>
+  );
+}
+
+function EditModal({ doc, onClose, onSave, onNotebooks, notebookNames }: {
+  doc: Doc | null; onClose: () => void; onSave: (b: Partial<Doc>) => void; onNotebooks: () => void; notebookNames: string[];
+}) {
+  const [title, setTitle] = useState("");
+  const [category, setCategory] = useState("");
+  const [tagsStr, setTagsStr] = useState("");
+  const [fav, setFav] = useState(false);
+  const fid = useId();
+  useEffect(() => {
+    if (!doc) return;
+    setTitle(doc.title || ""); setCategory(doc.category || "");
+    setTagsStr(toArr(doc.tags).join(", ")); setFav(!!doc.is_favorite);
+  }, [doc]);
+
+  const input = "mb-3 w-full rounded-lg border bg-surface px-3 py-2 text-sm outline-none focus:border-accent-purple";
+  return (
+    <Modal open={!!doc} onClose={onClose} title="Kaynağı düzenle" size="md">
+      <form onSubmit={(e) => {
+        e.preventDefault();
+        if (!doc) return;
+        onSave({ title: title.trim() || doc.title, category: category.trim(), tags: tagsStr.split(",").map((s) => s.trim()).filter(Boolean), is_favorite: fav });
+      }}>
+        <label htmlFor={fid + "-t"} className="mb-1 block text-xs font-medium text-text-secondary">Başlık</label>
+        <input id={fid + "-t"} data-autofocus="" value={title} onChange={(e) => setTitle(e.target.value)} className={input} />
+        <label htmlFor={fid + "-c"} className="mb-1 block text-xs font-medium text-text-secondary">Kategori</label>
+        <input id={fid + "-c"} value={category} onChange={(e) => setCategory(e.target.value)} placeholder="ör. Tarih, Makale, Ders" className={input} />
+        <label htmlFor={fid + "-g"} className="mb-1 block text-xs font-medium text-text-secondary">Etiketler (virgülle ayır)</label>
+        <input id={fid + "-g"} value={tagsStr} onChange={(e) => setTagsStr(e.target.value)} placeholder="ör. sınav, önemli" className={input} />
+        <div className="mb-3 rounded-lg border px-3 py-2">
+          <p className="text-xs font-medium text-text-secondary">Defterler</p>
+          <p className="mt-0.5 text-sm">{notebookNames.length ? notebookNames.join(" · ") : "Hiçbir deftere ekli değil"}</p>
+          <button type="button" onClick={onNotebooks} className="mt-1 min-h-[36px] text-sm text-accent-purple underline underline-offset-2">Defterlere ekle / çıkar</button>
+        </div>
+        <label className="mb-4 flex min-h-[40px] items-center gap-2 text-sm text-text-primary">
+          <input type="checkbox" checked={fav} onChange={(e) => setFav(e.target.checked)} className="h-5 w-5" /> Favori
+        </label>
+        <div className="flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
+          <button type="button" onClick={onClose} className="min-h-[44px] rounded-xl border px-4 text-sm hover:bg-surface-muted sm:min-h-[40px]">Vazgeç</button>
+          <button type="submit" className="min-h-[44px] rounded-xl bg-accent-purple px-4 text-sm font-medium text-on-accent sm:min-h-[40px]">Kaydet</button>
+        </div>
+      </form>
+    </Modal>
   );
 }

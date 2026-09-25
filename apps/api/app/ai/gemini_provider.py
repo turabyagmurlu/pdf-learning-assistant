@@ -3,7 +3,7 @@ from typing import AsyncIterator, Sequence
 import httpx
 from app.config import settings
 from app.ai.provider import EmbeddingProvider, LLMProvider
-from app.core.errors import AiUnavailable
+from app.core.errors import AiUnavailable, AiBusy
 from app.ai import usage
 
 BASE = "https://generativelanguage.googleapis.com/v1beta"
@@ -70,7 +70,8 @@ class GeminiEmbeddings(EmbeddingProvider):
                                 wait = min(120.0, float(m.group(1)) + 1.0)
                     if "PerDay" in last:
                         usage.mark_limited(self.model, True)
-                        raise AiUnavailable("Günlük gömme kotası doldu; yarın otomatik devam eder.", detail=last)
+                        raise AiBusy("Bugünlük kaynak hazırlama kapasitesi doldu; bu kaynak yarın kendiliğinden "
+                                     "işlenmeye devam edecek.", detail=last)
                 except AiUnavailable:
                     raise
                 except Exception:  # noqa
@@ -82,7 +83,7 @@ class GeminiEmbeddings(EmbeddingProvider):
             except Exception:  # noqa
                 last = r.text[:200]
             raise AiUnavailable(detail=f"embedding {r.status_code}: {last}")
-        raise AiUnavailable("Gömme servisi yoğun; belge daha sonra yeniden denenecek.", detail=last)
+        raise AiBusy("Kaynak hazırlama şu an yoğun; birazdan kendiliğinden yeniden denenecek.", detail=last)
 
 
 def _is_daily(text: str) -> bool:
@@ -148,14 +149,13 @@ class GeminiLLM(LLMProvider):
     @staticmethod
     def _friendly(status: int, text: str) -> AiUnavailable:
         if status == 429 and _is_daily(text):
-            from zoneinfo import ZoneInfo
-            reset = usage.next_reset().astimezone(ZoneInfo("Europe/Istanbul")).strftime("%H:%M")
-            return AiUnavailable(f"Bugünkü yapay zekâ kotası tüm modellerde doldu; {reset} civarı yenilenir.",
-                                 detail=text[:200])
+            reset = usage.at_time(usage.reset_local())
+            return AiBusy(f"Yapay zekâ bugünlük kapasitesini doldurdu; saat {reset} yeniden açılır. "
+                          "Kayıtlı cevaplar, arama ve okuma çalışmaya devam ediyor.", detail=text[:200])
         if status == 429:
-            return AiUnavailable("Yapay zekâ kotası şu an dolu; bir dakika sonra tekrar dene.", detail=text[:200])
+            return AiBusy("Yapay zekâ şu an yoğun; bir dakika sonra tekrar dene.", detail=text[:200])
         if status in (500, 502, 503, 504):
-            return AiUnavailable("Model şu an yoğun; birkaç saniye sonra tekrar dene.", detail=text[:200])
+            return AiBusy("Yapay zekâ şu an yoğun; birkaç saniye sonra tekrar dene.", detail=text[:200])
         return AiUnavailable(detail=f"{status}: {text[:200]}")
 
     def _handle_fail(self, model: str, status: int, text: str) -> bool:

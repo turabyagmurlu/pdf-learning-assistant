@@ -126,17 +126,49 @@ def user_limit() -> int:
     return int(getattr(settings, "user_daily_ai_limit", 60) or 0)
 
 
+LOCAL_TZ = ZoneInfo("Europe/Istanbul")
+
+
+def reset_local() -> str:
+    """Gunluk sayacin sifirlanma ani, Turkiye saatiyle 'HH:MM'."""
+    return next_reset().astimezone(LOCAL_TZ).strftime("%H:%M")
+
+
+_DIGIT_SFX = {0: "da", 1: "de", 2: "de", 3: "te", 4: "te", 5: "te", 6: "da", 7: "de", 8: "de", 9: "da"}
+_TENS_SFX = {1: "da", 2: "de", 3: "da", 4: "ta", 5: "de"}
+
+
+def at_time(hhmm: str) -> str:
+    """'10:00' -> "10:00'da", '13:00' -> "13:00'te", '10:05' -> "10:05'te" (Turkce bulunma eki)."""
+    try:
+        h, m = (int(x) for x in hhmm.split(":"))
+    except Exception:  # noqa
+        return hhmm
+    n = m if m else h
+    if n == 0:
+        sfx = "da"                                   # sifir
+    elif n % 10:
+        sfx = _DIGIT_SFX[n % 10]
+    else:
+        sfx = _TENS_SFX.get(n // 10, "da")
+    return f"{hhmm}'{sfx}"
+
+
+def limit_message(lim: int | None = None) -> str:
+    lim = user_limit() if lim is None else lim
+    return (f"Bugünkü {lim} kullanımın doldu; saat {at_time(reset_local())} yenilenir. "
+            "Kayıtlı cevaplar, arama ve okuma çalışmaya devam ediyor.")
+
+
 def check_user():
-    """Istek atmadan once: kisinin bugunku hakki doldu mu?"""
+    """Istek atmadan once: kisinin bugunku hakki doldu mu? (429 USAGE_LIMIT)"""
     u = CURRENT_USER.get()
     if not u or u[1]:
         return
     lim = user_limit()
     if lim and user_used(u[0]) >= lim:
-        from app.core.errors import AiUnavailable
-        raise AiUnavailable(
-            f"Bugünkü yapay zekâ hakkın doldu ({lim} istek). Kayıtlı cevaplar, arama ve okuma "
-            "çalışmaya devam ediyor; hakkın gece yarısı (Pasifik saati) yenilenir.")
+        from app.core.errors import UsageLimit
+        raise UsageLimit(limit_message(lim))
 
 
 def record_user(kind: str, n: int = 1):

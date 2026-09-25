@@ -132,6 +132,23 @@ async def lifespan(app: FastAPI):
                 "SELECT day::text AS day, user_id, requests FROM ai_user_usage WHERE day >= current_date - 1"))
     except Exception:  # noqa
         pass
+    # Kaynak <-> defter coka-cok iliskisi (bir kaynak birden cok defterde olabilir)
+    try:
+        from app.db.session import get_pool
+        pool = await get_pool()
+        async with pool.acquire() as conn:
+            await _migrate_document_collections(conn)
+    except Exception as e:  # noqa
+        print("document_collections migrasyonu basarisiz:", repr(e))
+    # Auth semasi (token_version, password_resets) trafik gelmeden hazir olsun
+    try:
+        from app.db.session import get_pool
+        from app.db.auth_migrations import ensure_auth_schema
+        pool = await get_pool()
+        async with pool.acquire() as conn:
+            await ensure_auth_schema(conn)
+    except Exception as e:  # noqa - ilk auth isteginde yeniden denenir
+        print("auth migrasyonu basarisiz:", repr(e))
     # Model havuzu: bu anahtarda olmayan modelleri bastan ele (bos istek harcamasin)
     import asyncio as _asyncio
     try:
@@ -155,6 +172,47 @@ async def lifespan(app: FastAPI):
     except Exception:  # noqa
         pass
     await close_pool()
+
+
+async def _migrate_document_collections(conn):
+    """Idempotent. document_collections tablosu + documents.file_hash; mevcut
+    documents.collection_id degerleri TEK SEFER bag tablosuna kopyalanir (typdf_migrations isareti; genel adli schema_migrations baska araclarla cakisabilir).
+    documents.collection_id silinmez; geriye uyum icin 'ilk bag' olarak guncel tutulur."""
+    await conn.execute("ALTER TABLE documents ADD COLUMN IF NOT EXISTS file_hash text")
+    await conn.execute(
+        "CREATE INDEX IF NOT EXISTS documents_user_hash_idx ON documents (user_id, file_hash) WHERE file_hash IS NOT NULL")
+    await conn.execute(
+        "CREATE TABLE IF NOT EXISTS document_collections ("
+        " document_id uuid NOT NULL REFERENCES documents(id) ON DELETE CASCADE,"
+        " collection_id uuid NOT NULL REFERENCES collections(id) ON DELETE CASCADE,"
+        " added_at timestamptz NOT NULL DEFAULT now(),"
+        " PRIMARY KEY (document_id, collection_id))")
+    await conn.execute(
+        "CREATE INDEX IF NOT EXISTS document_collections_col_idx ON document_collections (collection_id, document_id)")
+    await conn.execute(
+        "CREATE TABLE IF NOT EXISTS typdf_migrations (name text PRIMARY KEY, applied_at timestamptz NOT NULL DEFAULT now())")
+    async with conn.transaction():
+        done = await conn.fetchval(
+            "SELECT 1 FROM typdf_migrations WHERE name='document_collections_backfill' FOR UPDATE")
+        if done:
+            # Yakalama: deploy sirasinda ESKI surumun yalniz collection_id yazdigi (hic bagi olmayan)
+            # kaynaklar. Bagi olan kaynaga dokunulmaz -> kullanicinin kaldirdigi baglar geri gelmez.
+            await conn.execute(
+                """INSERT INTO document_collections (document_id, collection_id, added_at)
+                   SELECT d.id, d.collection_id, d.created_at
+                   FROM documents d JOIN collections c ON c.id = d.collection_id AND c.user_id = d.user_id
+                   WHERE d.collection_id IS NOT NULL
+                     AND NOT EXISTS (SELECT 1 FROM document_collections x WHERE x.document_id = d.id)
+                   ON CONFLICT (document_id, collection_id) DO NOTHING""")
+            return
+        await conn.execute(
+            """INSERT INTO document_collections (document_id, collection_id, added_at)
+               SELECT d.id, d.collection_id, d.created_at
+               FROM documents d JOIN collections c ON c.id = d.collection_id AND c.user_id = d.user_id
+               WHERE d.collection_id IS NOT NULL
+               ON CONFLICT (document_id, collection_id) DO NOTHING""")
+        await conn.execute(
+            "INSERT INTO typdf_migrations (name) VALUES ('document_collections_backfill') ON CONFLICT (name) DO NOTHING")
 
 
 async def _flush_usage():
@@ -266,11 +324,30 @@ async def backup_status(user=Depends(current_user)):
 
 @app.get("/usage")
 async def usage_status(user=Depends(current_user)):
-    """Kota gostergesi: bugunku istekler (model/tur), model durumlari, sifirlanma saati."""
+    """Yapay zeka kullanim gostergesi. Herkes: kendi kullanimi (me) ve yenilenme saati.
+    Model listeleri ve uygulama geneli sayaclar yalniz sahibe (owner) dolu gelir."""
     from app.ai import usage
     from app.ai.gemini_provider import pool_models
     from app.services.tts_service import _tts_models
     snap = usage.snapshot()
+    owner = bool(user.get("is_owner"))
+    me = {"used": usage.user_used(str(user["id"])), "limit": usage.user_limit(),
+          "owner": owner, "reset_local": usage.reset_local()}
+    # Servis (saglayici) ozeti: model adi vermeden aktif | yogun | doldu
+    sts = [usage.status(m) for m in pool_models()]
+    service = ("doldu" if all(s in ("gunluk_doldu", "yok") for s in sts)
+               else "yogun" if not any(s == "aktif" for s in sts) else "aktif")
+    if not owner:
+        return {
+            "day": snap["day"],
+            "reset_at": usage.next_reset().isoformat(),
+            "kinds": {},
+            "text_models": [],
+            "tts_models": [],
+            "embed": [],
+            "service": service,
+            "me": me,
+        }
     def models(lst, kind):
         out = []
         for m in lst:
@@ -291,8 +368,8 @@ async def usage_status(user=Depends(current_user)):
         "text_models": models(pool_models(), "metin"),
         "tts_models": models(_tts_models(), "ses"),
         "embed": {"model": settings.gemini_embed_model, "status": usage.status(settings.gemini_embed_model)},
-        "me": {"used": usage.user_used(str(user["id"])), "limit": usage.user_limit(),
-               "owner": bool(user.get("is_owner"))},
+        "service": service,
+        "me": me,
     }
 
 

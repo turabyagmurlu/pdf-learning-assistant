@@ -18,6 +18,9 @@ class NoteIn(BaseModel):
 
 @router.post("/documents/{doc_id}/notes")
 async def add_note(doc_id: str, body: NoteIn, conn=Depends(db), user=Depends(current_user)):
+    own = await conn.fetchval("SELECT 1 FROM documents WHERE id=$1 AND user_id=$2", doc_id, user["id"])
+    if not own:
+        raise NotFound("Kaynak bulunamadı; silinmiş olabilir.")
     nid = str(uuid.uuid4())
     await conn.execute(
         """INSERT INTO notes (id, user_id, document_id, page_number, selected_text, note_content,
@@ -42,12 +45,20 @@ async def list_all_notes(conn=Depends(db), user=Depends(current_user)):
     rows = await conn.fetch(
         """SELECT n.id, n.document_id, n.page_number, n.selected_text, n.note_content,
                   n.highlight_color, n.anchor, n.tags, n.created_at,
-                  d.title AS document_title, d.collection_id
+                  d.title AS document_title,
+                  COALESCE((SELECT array_agg(l.collection_id::text ORDER BY l.added_at, l.collection_id)
+                            FROM document_collections l WHERE l.document_id = d.id), ARRAY[]::text[]) AS collection_ids
            FROM notes n JOIN documents d ON d.id = n.document_id
            WHERE n.user_id=$1
            ORDER BY d.title, n.page_number NULLS LAST, n.created_at""",
         user["id"])
-    return [dict(r) for r in rows]
+    out = []
+    for r in rows:
+        d = dict(r)
+        d["collection_ids"] = list(d.get("collection_ids") or [])
+        d["collection_id"] = d["collection_ids"][0] if d["collection_ids"] else None   # geriye uyum
+        out.append(d)
+    return out
 
 
 class NotePatch(BaseModel):
@@ -60,7 +71,7 @@ class NotePatch(BaseModel):
 async def patch_note(note_id: str, body: NotePatch, conn=Depends(db), user=Depends(current_user)):
     row = await conn.fetchrow("SELECT id FROM notes WHERE id=$1 AND user_id=$2", note_id, user["id"])
     if not row:
-        raise NotFound("Not bulunamadı.")
+        raise NotFound("Not bulunamadı; silinmiş olabilir.")
     sets, vals, i = [], [], 1
     if body.note_content is not None:
         sets.append(f"note_content=${i}"); vals.append(body.note_content); i += 1

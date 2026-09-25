@@ -53,7 +53,7 @@ export default function PodcastPlayer({ src, title, subtitle, artwork, storageKe
     const ms = (navigator as any).mediaSession;
     try {
       ms.metadata = new (window as any).MediaMetadata({
-        title, artist: subtitle || "TY PDF · Sesli ders", album: "TY PDF",
+        title, artist: subtitle || "TY PDF · Sesli özet", album: "TY PDF",
         artwork: artwork ? [{ src: artwork, sizes: "512x512", type: "image/png" }] : [],
       });
       ms.setActionHandler("play", () => ref.current?.play());
@@ -115,7 +115,7 @@ export default function PodcastPlayer({ src, title, subtitle, artwork, storageKe
       </div>
 
       <div className="mt-3 flex items-center justify-center gap-2 sm:gap-3">
-        <button onClick={nextSpeed} title="Hız" className="flex w-14 items-center justify-center gap-1 rounded-lg border px-2 py-1.5 text-xs text-text-secondary hover:border-accent-purple/50">
+        <button onClick={nextSpeed} title="Oynatma hızı" aria-label={`Oynatma hızı ${speed}×, değiştir`} className="flex min-h-[40px] w-14 items-center justify-center gap-1 rounded-lg border px-2 py-1.5 text-xs text-text-secondary hover:border-accent-purple/50">
           <Gauge size={13} /> {speed}×
         </button>
         <button onClick={() => skip(-SKIP)} aria-label={`${SKIP} saniye geri`} title={`${SKIP} sn geri (←)`}

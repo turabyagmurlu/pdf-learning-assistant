@@ -21,10 +21,18 @@ export function YoutubeIcon({ size = 18, className = "" }: { size?: number; clas
   );
 }
 
-export default function YoutubeAdd({ collectionId, onAdded, compact }: {
+/** Ayni kaynak zaten varsa API yeni kopya acmaz: {linked_existing: true}. */
+export function linkedExistingText(hasCollection: boolean) {
+  return hasCollection ? "Bu kaynak zaten kütüphanende vardı, deftere bağlandı." : "Bu kaynak zaten kütüphanende var.";
+}
+
+export default function YoutubeAdd({ collectionId, onAdded, compact, autoFocus, quiet }: {
   collectionId?: string;
   onAdded?: (doc: any) => void;
   compact?: boolean;
+  autoFocus?: boolean;
+  /** Basari mesajini ust bilesen (ör. bildirim) gosterecekse kendi satirini yazmaz. */
+  quiet?: boolean;
 }) {
   const [url, setUrl] = useState("");
   const [busy, setBusy] = useState(false);
@@ -40,11 +48,12 @@ export default function YoutubeAdd({ collectionId, onAdded, compact }: {
       const r = await api(yt ? "/documents/youtube" : "/documents/web", { method: "POST",
         body: JSON.stringify({ url: u, collection_id: collectionId || null }) }, 1);
       setUrl("");
-      setMsg({ ok: true, text: yt ? `“${r.title}” eklendi — döküm arka planda çıkarılıyor.`
+      if (!quiet) setMsg({ ok: true, text: r?.linked_existing ? linkedExistingText(!!collectionId)
+        : yt ? `“${r.title}” eklendi — döküm arka planda çıkarılıyor.`
         : `“${r.title}” eklendi — ${r.source_type === "pdf" ? "PDF" : "sayfa metni"} işleniyor.` });
       onAdded?.(r);
     } catch (e: any) {
-      setMsg({ ok: false, text: e?.message || "Link eklenemedi." });
+      setMsg({ ok: false, text: e?.message || "Link eklenemedi; adresi kontrol edip tekrar dene." });
     } finally { setBusy(false); }
   }
 
@@ -59,9 +68,10 @@ export default function YoutubeAdd({ collectionId, onAdded, compact }: {
                onKeyDown={(e) => { if (e.key === "Enter") add(); }}
                onPaste={(e) => { const t = e.clipboardData.getData("text"); if (isYoutubeUrl(t)) setMsg(null); }}
                placeholder="Link yapıştır: YouTube, web sayfası ya da PDF linki…" disabled={busy}
+               aria-label="Link: YouTube, web sayfası ya da PDF linki" autoFocus={autoFocus} inputMode="url"
                className="min-w-0 flex-1 rounded-lg border bg-surface px-3 py-2 text-sm outline-none focus:border-sky-500" />
         <button onClick={add} disabled={busy || !url.trim()}
-                className="shrink-0 rounded-lg bg-sky-600 px-3 py-2 text-sm font-medium text-white hover:bg-sky-700 disabled:opacity-50">
+                className="min-h-[40px] shrink-0 rounded-lg bg-sky-700 px-3 py-2 text-sm font-medium text-white hover:bg-sky-700 disabled:opacity-50">
           {busy ? "Ekleniyor…" : "Ekle"}
         </button>
       </div>
@@ -71,7 +81,7 @@ export default function YoutubeAdd({ collectionId, onAdded, compact }: {
         </p>
       )}
       {msg && (
-        <p className={"mt-1.5 pl-11 text-xs " + (msg.ok ? "text-green-600" : "text-red-600")}>{msg.text}</p>
+        <p role={msg.ok ? "status" : "alert"} className={"mt-1.5 pl-11 text-xs " + (msg.ok ? "text-green-700 dark:text-green-300" : "text-red-700 dark:text-red-300")}>{msg.text}</p>
       )}
     </div>
   );

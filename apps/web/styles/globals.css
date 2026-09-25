@@ -2,24 +2,46 @@
 @tailwind components;
 @tailwind utilities;
 
+/*
+ * Renkler WCAG AA'ya gore ayarlandi (normal metin >= 4.5:1, metin disi >= 3:1).
+ * Acik tema: vurgu renkleri hem metin olarak (--bg/--surface ve kendi %10-15 tonlu zemininde)
+ * hem de beyaz yazili dolgu olarak >= 4.5:1.
+ *   --accent-purple #5A48D8: beyaz 6.26 · --bg 5.90 · /10 zemin 5.41 · /15 zemin 5.02
+ *   --danger #B3402D: beyaz 5.69 · --bg 5.37      --success #28784A: beyaz 5.42 · --bg 5.11
+ *   --warning/--accent-amber #8A5A00: beyaz 5.93 · /15 zemin 4.78
+ * Koyu tema: vurgu renkleri acik ton (metin >= 5:1); bu tonlar beyaz yaziyi tasiyamaz,
+ * bu yuzden koyu temada dolgulu dugmelerde yazi rengi --on-accent (koyu) olur (asagida).
+ */
 :root{
   --bg:#FAF8F4; --surface:#FFFFFF; --surface-muted:#F3F1EC; --border:#E7E3DA;
+  --border-strong:#8F8A7E;
   --text-primary:#1B2233; --text-secondary:#5B6172;
-  --accent-purple:#7C6BF0; --accent-teal:#2FB4A6; --accent-amber:#E0A233;
-  --accent-coral:#E5735B; --success:#3FA96A; --warning:#D9962B; --danger:#D4553F;
+  --accent-purple:#5A48D8; --accent-teal:#17756B; --accent-amber:#8A5A00;
+  --accent-coral:#B3452C; --success:#28784A; --warning:#8A5A00; --danger:#B3402D;
+  --on-accent:#FFFFFF;
+  /* bildirimler sohbet kutusu / yuzen dugme yuksekliginin ustunde dursun */
+  --toast-lift:64px;
   --font-mono:ui-monospace;
   --ease:cubic-bezier(.2,.7,.2,1);
 }
 .dark{
   --bg:#0F1420; --surface:#161C2B; --surface-muted:#1E2637; --border:#293246;
+  --border-strong:#606B85;
   --text-primary:#EDEFF5; --text-secondary:#A5AEC2;
-  --accent-purple:#9C8CFF; --accent-teal:#48C9BA; --accent-amber:#EDB652;
-  --accent-coral:#F08A72; --success:#4FB877; --warning:#E7AC4C; --danger:#EA6A52;
+  --accent-purple:#A99BFF; --accent-teal:#48C9BA; --accent-amber:#EDB652;
+  --accent-coral:#F08A72; --success:#4FB877; --warning:#E7AC4C; --danger:#F08A76;
+  --on-accent:#0F1420;
 }
 html,body{background:var(--bg);color:var(--text-primary);font-family:var(--font-body),system-ui,sans-serif;}
 * { border-color: var(--border); }
 html{scroll-behavior:smooth;-webkit-text-size-adjust:100%;}
 body{-webkit-font-smoothing:antialiased;-moz-osx-font-smoothing:grayscale;text-rendering:optimizeLegibility;}
+
+@layer base {
+  /* Form alani sinirlari yuzeyden ayirt edilebilsin (1.4.11, >= 3:1). Utility siniflari (focus:border-...) yine gecerli. */
+  input:not([type="checkbox"]):not([type="radio"]):not([type="range"]):not([type="color"]),
+  textarea, select { border-color: var(--border-strong); }
+}
 
 /* Basliklar: Fraunces — optik boyut ve yumusaklik ekseni */
 .font-heading{
@@ -30,10 +52,40 @@ body{-webkit-font-smoothing:antialiased;-moz-osx-font-smoothing:grayscale;text-r
 }
 
 button,a,[role="button"]{-webkit-tap-highlight-color:transparent;touch-action:manipulation;}
-:focus-visible{outline:2px solid var(--accent-purple);outline-offset:2px;border-radius:6px;}
+:focus-visible{outline:2px solid var(--accent-purple);outline-offset:2px;}
 select,input,textarea{color:inherit;}
 @media (max-width:767px){ input,select,textarea{font-size:16px;} }
 body{padding-left:env(safe-area-inset-left);padding-right:env(safe-area-inset-right);}
+
+/* --- Kontrast guvenlik agi ---
+ * Koyu temada mor/kirmizi/yesil dolgulu dugmelerin beyaz yazisi yetersiz kaliyordu (2.5-3.1:1):
+ * dolgu acik tonda kalir, yazi koyu olur (>= 5.8:1). */
+.dark .bg-accent-purple.text-white, .dark .bg-danger.text-white, .dark .bg-success.text-white,
+.dark .bg-warning.text-white, .dark .bg-accent-teal.text-white, .dark .bg-accent-coral.text-white,
+.dark .bg-accent-amber.text-white,
+.dark .bg-accent-purple .text-white{ color:var(--on-accent); }
+.dark .hover\:bg-accent-purple:hover.hover\:text-white:hover{ color:var(--on-accent); }
+
+/* Tailwind hazir paletinden metin tonlari: acikta 500/600 amber-turuncu-yesil tonlari zayif,
+ * koyu temada 600-800 tonlari koyu zeminde okunmuyordu. Tek yerden duzeltilir. */
+.text-amber-500, .text-amber-600, .text-yellow-600 { color:#92400E; }
+.text-orange-500, .text-orange-600 { color:#C2410C; }
+.text-green-500, .text-green-600 { color:#15803D; }
+.text-emerald-500, .text-emerald-600 { color:#047857; }
+.text-sky-500, .text-sky-600 { color:#0369A1; }
+.text-red-500 { color:#B91C1C; }
+.dark .text-red-500, .dark .text-red-600, .dark .text-red-700, .dark .text-red-800 { color:#FCA5A5; }
+.dark .text-green-500, .dark .text-green-600, .dark .text-green-700, .dark .text-green-800 { color:#86EFAC; }
+.dark .text-emerald-500, .dark .text-emerald-600, .dark .text-emerald-700 { color:#6EE7B7; }
+.dark .text-amber-500, .dark .text-amber-600, .dark .text-amber-700, .dark .text-amber-800, .dark .text-yellow-600 { color:#FCD34D; }
+.dark .text-orange-500, .dark .text-orange-600, .dark .text-orange-700 { color:#FDBA74; }
+.dark .text-blue-600, .dark .text-blue-700 { color:#93C5FD; }
+.dark .text-sky-500, .dark .text-sky-600, .dark .text-sky-700 { color:#7DD3FC; }
+.dark .text-violet-600, .dark .text-violet-700, .dark .text-purple-600 { color:#C4B5FD; }
+.dark .text-fuchsia-600 { color:#F0ABFC; }
+
+/* 11px altinda yazi kalmasin (dagilmis text-[10px]/[9px] kullanimlari icin alt sinir). */
+.text-\[9px\], .text-\[10px\], .text-\[10\.5px\] { font-size:11px; }
 
 /* --- Ince gecisler --- */
 @keyframes pageIn{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:none}}
@@ -54,6 +106,12 @@ button:active:not(:disabled){transform:scale(.985);}
 .h-full.bg-accent-purple, .h-full.rounded-full.bg-accent-purple{transition:width .5s var(--ease);}
 
 /* secim rengi */
-::selection{background:rgba(124,107,240,.28);}
+::selection{background:rgba(90,72,216,.25);}
+.dark ::selection{background:rgba(169,155,255,.35);}
 
-@media (prefers-reduced-motion: reduce){ *{animation:none!important;transition:none!important;} }
+/* Hareketi azalt: animasyon ve gecisler kapanir; yukleme simgeleri yavas doner (mesgul oldugu anlasilsin). */
+@media (prefers-reduced-motion: reduce){
+  html{scroll-behavior:auto;}
+  *{animation:none!important;transition:none!important;}
+  .animate-spin{animation:spin 1.6s linear infinite!important;}
+}

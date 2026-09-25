@@ -1,8 +1,9 @@
 "use client";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
-import { api } from "@/lib/api";
+import { api, API, getToken } from "@/lib/api";
 import { ArrowUp, ArrowDown, X, Plus, ExternalLink, Sparkles, Quote, RefreshCw, Heading2, Wand2, Loader2, Check, ShieldCheck } from "lucide-react";
+import { Cost, costTitle, isUsageLimit } from "@/components/CostBadge";
 
 /* ---------- blok modeli ---------- */
 export type Block =
@@ -60,14 +61,29 @@ export default function DraftEditor({ notebookId, title, initial, material, onRe
   onSaved?: (serialized: string) => void;
 }) {
   const router = useRouter();
-  const [blocks, setBlocks] = useState<Block[]>(() => parseDraft(initial));
+  // Kaydedilemeden kalan son surum cihazda yedeklenir; geri gelince oradan devam edilir (veri kaybi olmasin).
+  const BACKUP_KEY = "draft.pending." + notebookId;
+  const [restored] = useState<string | null>(() => {
+    try { const b = localStorage.getItem(BACKUP_KEY); return b && b !== (initial || "") ? b : null; } catch { return null; }
+  });
+  const [blocks, setBlocks] = useState<Block[]>(() => parseDraft(restored ?? initial));
   const [focusIdx, setFocusIdx] = useState<number>(-1);
   const [status, setStatus] = useState<"idle" | "saving" | "saved" | "error">("idle");
   const [savedAt, setSavedAt] = useState<Date | null>(null);
+  const [retryIn, setRetryIn] = useState(0);            // hata sonrasi otomatik tekrar (sn)
   const [matQ, setMatQ] = useState("");
   const [flash, setFlash] = useState("");
-  const timer = useRef<any>(null);
+  const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const retryTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const dirty = useRef(false);
+  const latest = useRef<Block[]>(blocks);                // en son icerik (unmount'ta gonderilir)
+  const version = useRef(0);                             // her degisiklikte artar
+  const savedVersion = useRef(0);                        // sunucuya ulasan son surum
+  const failures = useRef(0);
+  const onSavedRef = useRef(onSaved);
+  onSavedRef.current = onSaved;
+  const mounted = useRef(true);
+  const inflight = useRef<Promise<boolean> | null>(null);   // kayitlar sirayla gider (eski surum yenisini ezmesin)
 
   // AI ile duzenle
   type Assist = { idx: number; action: string; busy: boolean; text?: string; suggestions?: any[]; why?: string; error?: string; menu?: boolean };
@@ -87,7 +103,10 @@ export default function DraftEditor({ notebookId, title, initial, material, onRe
     try {
       const r = await api(`/collections/${notebookId}/draft-assist`, { method: "POST", body: JSON.stringify({ action, text, instruction }) });
       setAssist({ idx, action, busy: false, text: r.text, suggestions: r.suggestions, why: r.why || r.note });
-    } catch (e: any) { setAssist({ idx, action, busy: false, error: e?.message || "Olmadı." }); }
+    } catch (e: any) {
+      setAssist({ idx, action, busy: false, error: isUsageLimit(e) ? (e?.message || "Bugünkü yapay zekâ kullanımın doldu.")
+        : (e?.message || "Öneri hazırlanamadı; birazdan tekrar dene.") });
+    }
   }
   function applyAssist() {
     if (!assist || !assist.text) return;
@@ -124,7 +143,7 @@ export default function DraftEditor({ notebookId, title, initial, material, onRe
     try {
       const r = await api(`/collections/${notebookId}/verify`, { method: "POST", body: JSON.stringify({ items }) }, 1);
       setVer({ busy: false, open: true, results: r.results, counts: r.counts, cached: r.from_cache });
-    } catch (e: any) { setVer({ busy: false, open: true, error: e?.message || "Doğrulama yapılamadı." }); }
+    } catch (e: any) { setVer({ busy: false, open: true, error: e?.message || "Doğrulama yapılamadı; birazdan tekrar dene." }); }
   }
   const worst = useMemo(() => {
     const m: Record<string, string> = {};
@@ -139,17 +158,89 @@ export default function DraftEditor({ notebookId, title, initial, material, onRe
       page: r.evidence.page ?? null, document_id: r.evidence.document_id, note: undefined, color: "#16a34a" } as Block);
   }
 
-  // otomatik kayit
+  // otomatik kayit: 1 sn bekler; sekme degisince/bilesen kalkinca bekleyen kayit IPTAL EDILMEZ, hemen gonderilir.
+  function persist(v: number): Promise<boolean> {
+    const prev = inflight.current;
+    const p = (async () => {
+      if (prev) { try { await prev; } catch {} }
+      // Beklerken daha yeni bir surum kaydedildiyse bu eski surumu gonderme
+      if (savedVersion.current >= v) return true;
+      return send(serializeDraft(latest.current), version.current);
+    })();
+    inflight.current = p;
+    p.finally(() => { if (inflight.current === p) inflight.current = null; });
+    return p;
+  }
+  async function send(ser: string, v: number): Promise<boolean> {
+    try {
+      await api(`/collections/${notebookId}`, { method: "PATCH", body: JSON.stringify({ draft: ser }) }, 1);
+      if (v > savedVersion.current) savedVersion.current = v;
+      failures.current = 0;
+      if (savedVersion.current >= version.current) { try { localStorage.removeItem(BACKUP_KEY); } catch {} }
+      onSavedRef.current?.(ser);
+      if (mounted.current) {
+        setRetryIn(0);
+        if (savedVersion.current >= version.current) { setStatus("saved"); setSavedAt(new Date()); }
+      }
+      return true;
+    } catch {
+      failures.current++;
+      if (mounted.current) {
+        setStatus("error");
+        // artan beklemeyle otomatik tekrar: 3, 6, 12, 24, 30 sn
+        const wait = Math.min(30, 3 * 2 ** Math.min(4, failures.current - 1));
+        setRetryIn(wait);
+        if (retryTimer.current) clearTimeout(retryTimer.current);
+        retryTimer.current = setTimeout(() => { if (savedVersion.current < version.current) saveNow(); }, wait * 1000);
+      }
+      return false;
+    }
+  }
+  function saveNow() {
+    if (timer.current) { clearTimeout(timer.current); timer.current = null; }
+    if (retryTimer.current) { clearTimeout(retryTimer.current); retryTimer.current = null; }
+    if (savedVersion.current >= version.current) return;
+    if (mounted.current) { setStatus("saving"); setRetryIn(0); }
+    return persist(version.current);
+  }
   useEffect(() => {
+    latest.current = blocks;
     if (!dirty.current) return;
+    version.current++;
+    try { localStorage.setItem(BACKUP_KEY, serializeDraft(blocks)); } catch {}
     setStatus("saving");
     if (timer.current) clearTimeout(timer.current);
-    timer.current = setTimeout(async () => {
-      try { const ser = serializeDraft(blocks); await api(`/collections/${notebookId}`, { method: "PATCH", body: JSON.stringify({ draft: ser }) }); setStatus("saved"); setSavedAt(new Date()); onSaved?.(ser); }
-      catch { setStatus("error"); }
-    }, 1000);
-    return () => { if (timer.current) clearTimeout(timer.current); };
+    timer.current = setTimeout(() => { timer.current = null; saveNow(); }, 1000);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [blocks, notebookId]);
+  useEffect(() => {
+    mounted.current = true;
+    if (restored) { dirty.current = true; version.current++; setFlash("Kaydedilmemiş son değişikliklerin geri yüklendi"); saveNow(); }
+    // Baglanti gelince bekleyen kaydi hemen dene
+    const onOnline = () => { if (savedVersion.current < version.current) saveNow(); };
+    // Kaydedilmemis degisiklik varken sayfadan cikista tarayici uyarisi + son bir deneme
+    const onUnload = (e: BeforeUnloadEvent) => {
+      if (savedVersion.current >= version.current) return;
+      try {
+        fetch(`${API}/collections/${notebookId}`, { method: "PATCH", keepalive: true,
+          headers: { "Content-Type": "application/json", Authorization: "Bearer " + (getToken() || "") },
+          body: JSON.stringify({ draft: serializeDraft(latest.current) }) });
+      } catch {}
+      e.preventDefault(); e.returnValue = "";
+    };
+    window.addEventListener("online", onOnline);
+    window.addEventListener("beforeunload", onUnload);
+    return () => {
+      window.removeEventListener("online", onOnline);
+      window.removeEventListener("beforeunload", onUnload);
+      mounted.current = false;
+      // Sekme degisti / bilesen kalkti: bekleyen kaydi gonder (iptal etme)
+      if (timer.current) { clearTimeout(timer.current); timer.current = null; }
+      if (retryTimer.current) { clearTimeout(retryTimer.current); retryTimer.current = null; }
+      if (savedVersion.current < version.current) persist(version.current);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [notebookId]);
 
   function update(next: Block[]) { dirty.current = true; setBlocks(next); }
   function insertAfter(idx: number, b: Block) {
@@ -182,6 +273,7 @@ export default function DraftEditor({ notebookId, title, initial, material, onRe
   }
 
   const words = useMemo(() => ownWords(blocks), [blocks]);
+  const verifyN = Math.max(1, blocks.filter((b) => b.type === "p" && b.text.trim().split(/\s+/).length >= 6).length);
   const quotes = blocks.filter((b) => b.type === "quote").length;
   const used = new Set(blocks.filter((b) => b.type === "quote").map((b: any) => b.text.trim()));
   const mats = (material || []).filter((n: any) => !matQ.trim() || (n.selected_text || "").toLowerCase().includes(matQ.toLowerCase()) || (n.note_content || "").toLowerCase().includes(matQ.toLowerCase()));
@@ -194,17 +286,21 @@ export default function DraftEditor({ notebookId, title, initial, material, onRe
           <span>·</span>
           <span>{quotes} alıntı</span>
           <span>·</span>
-          <span className={status === "error" ? "text-danger" : ""}>
-            {status === "saving" ? "defterde kaydediliyor…" : status === "saved" && savedAt ? `defterde kaydedildi · ${savedAt.toLocaleTimeString("tr-TR", { hour: "2-digit", minute: "2-digit" })}` : status === "error" ? "kaydedilemedi — bağlantıyı kontrol et" : "değişiklik yok"}
+          <span role="status" className={status === "error" ? "text-danger" : ""}>
+            {status === "saving" ? "defterde kaydediliyor…" : status === "saved" && savedAt ? `defterde kaydedildi · ${savedAt.toLocaleTimeString("tr-TR", { hour: "2-digit", minute: "2-digit" })}` : status === "error" ? `kaydedilemedi — bağlantıyı kontrol et${retryIn ? ` · ${retryIn} sn içinde yeniden denenecek` : ""}` : "değişiklik yok"}
           </span>
+          {status === "error" && (
+            <button onClick={() => saveNow()} className="min-h-[32px] rounded-lg border border-danger/40 px-2 text-danger hover:bg-danger/5">Şimdi dene</button>
+          )}
           {flash && <span className="text-accent-purple">{flash}</span>}
           <span className="ml-auto flex gap-1.5">
-            <button onClick={runVerify} disabled={ver?.busy} title="Yazdığın her iddiayı defterin kaynaklarıyla karşılaştır"
-                    className="flex items-center gap-1 rounded-lg border border-green-600/40 bg-green-500/5 px-2.5 py-1 text-green-800 hover:bg-green-500/10 disabled:opacity-60">
-              {ver?.busy ? <Loader2 size={12} className="animate-spin" /> : <ShieldCheck size={12} />} Kaynaklarla doğrula
+            <button onClick={runVerify} disabled={ver?.busy}
+                    title={`Yazdığın her iddiayı defterin kaynaklarıyla karşılaştır · ${costTitle(verifyN)} (daha önce kontrol edilen cümleler ücretsiz)`}
+                    className="flex min-h-[36px] items-center gap-1 rounded-lg border border-green-600/40 bg-green-500/5 px-2.5 py-1 text-green-800 hover:bg-green-500/10 disabled:opacity-60 dark:text-green-300">
+              {ver?.busy ? <Loader2 size={12} className="animate-spin" /> : <ShieldCheck size={12} />} Kaynaklarla doğrula <Cost n={verifyN} />
             </button>
-            <button onClick={() => download("md")} className="rounded-lg border bg-surface px-2.5 py-1 hover:border-accent-purple/50">Markdown</button>
-            <button onClick={() => download("doc")} className="rounded-lg border bg-surface px-2.5 py-1 hover:border-accent-purple/50">Word</button>
+            <button onClick={() => download("md")} className="min-h-[36px] rounded-lg border bg-surface px-2.5 py-1 hover:border-accent-purple/50">Markdown</button>
+            <button onClick={() => download("doc")} className="min-h-[36px] rounded-lg border bg-surface px-2.5 py-1 hover:border-accent-purple/50">Word</button>
           </span>
         </div>
 
@@ -215,14 +311,14 @@ export default function DraftEditor({ notebookId, title, initial, material, onRe
               {ver.counts && Object.entries(VMETA).map(([k, m]) => (
                 <span key={k} className={cx("rounded-full border px-2 py-0.5 text-[11px]", m.c)}>{m.t}: {ver.counts?.[k] || 0}</span>
               ))}
-              <button onClick={() => setVer(null)} aria-label="Kapat" className="ml-auto rounded-md p-1 text-text-secondary hover:bg-surface-muted"><X size={14} /></button>
+              <button onClick={() => setVer(null)} aria-label="Doğrulama sonuçlarını kapat" className="ml-auto flex h-9 w-9 items-center justify-center rounded-md text-text-secondary hover:bg-surface-muted"><X size={15} /></button>
             </div>
             {ver.busy && <p className="mt-2 flex items-center gap-2 text-sm text-text-secondary"><Loader2 size={14} className="animate-spin" /> Her cümle için kanıt aranıyor…</p>}
             {ver.error && <p className="mt-2 text-sm text-danger">{ver.error}</p>}
             {!!ver.results?.length && (
               <>
                 <p className="mt-1 text-[11px] text-text-secondary">
-                  Yalnız defterindeki kaynaklara göre değerlendirildi{ver.cached ? ` · ${ver.cached} cümle daha önce kontrol edilmişti (kota harcanmadı)` : ""}.
+                  Yalnız defterindeki kaynaklara göre değerlendirildi{ver.cached ? ` · ${ver.cached} cümle daha önce kontrol edilmişti (ücretsiz)` : ""}.
                 </p>
                 <ul className="mt-3 max-h-[50vh] space-y-2 overflow-y-auto pr-1">
                   {[...ver.results].sort((a, b) => RANK[b.verdict] - RANK[a.verdict]).map((r, k) => (
@@ -258,21 +354,29 @@ export default function DraftEditor({ notebookId, title, initial, material, onRe
         <div className="rounded-2xl border bg-surface p-4 md:p-6">
           {blocks.map((b, i) => (
             <div key={b.id} className="group relative" onFocus={() => setFocusIdx(i)} onClick={() => setFocusIdx(i)}>
-              {/* AI menusu (sag ust) */}
+              {/* Yapay zekayla duzenle (sag ust): odaktaki blokta, dokunmatikte ve klavye odaginda gorunur */}
               {(b.type === "p" || b.type === "h" || b.type === "quote") && (
-                <div className="absolute right-0 top-1 z-10 opacity-0 transition group-hover:opacity-100 focus-within:opacity-100">
+                <div className={cx("absolute right-0 top-1 z-10 transition",
+                  focusIdx === i || (assist?.idx === i && assist.menu) ? "opacity-100"
+                    : "pointer-events-none opacity-0 focus-within:pointer-events-auto focus-within:opacity-100 md:pointer-events-auto md:group-hover:opacity-100 md:group-focus-within:opacity-100")}>
                   <button onClick={(e) => { e.stopPropagation(); setAssist(assist?.idx === i && assist.menu ? null : { idx: i, action: "", busy: false, menu: true }); }}
-                          title="AI ile düzenle" className="flex items-center gap-1 rounded-full border bg-surface px-2 py-0.5 text-[11px] text-text-secondary hover:border-accent-purple/50 hover:text-accent-purple">
-                    <Wand2 size={11} /> AI
+                          aria-haspopup="menu" aria-expanded={assist?.idx === i && !!assist.menu}
+                          title={"Yapay zekâyla düzenle · " + costTitle(1)}
+                          className="flex min-h-[32px] items-center gap-1 rounded-full border bg-surface px-2.5 py-1 text-xs text-text-secondary hover:border-accent-purple/50 hover:text-accent-purple focus-visible:opacity-100">
+                    <Wand2 size={12} /> Düzenle <Cost n={1} />
                   </button>
                   {assist?.idx === i && assist.menu && (
-                    <div onClick={(e) => e.stopPropagation()} className="absolute right-0 top-7 w-64 overflow-hidden rounded-xl border bg-surface shadow-lg">
+                    <div role="menu" onClick={(e) => e.stopPropagation()}
+                         onKeyDown={(e) => { if (e.key === "Escape") setAssist(null); }}
+                         className="absolute right-0 top-9 w-64 overflow-hidden rounded-xl border bg-surface shadow-lg">
                       {(b.type === "quote"
                         ? [["paraphrase", "Kendi cümlemle yeniden yaz", "Parafraz; alıntının altına paragraf olarak girer"]]
-                        : ACTIONS).map(([k, label, desc]) => (
-                        <button key={k} onClick={() => { if (k === "custom") setAssist({ idx: i, action: "custom", busy: false, menu: false }); else runAssist(i, k); }}
-                                className="block w-full px-3 py-2 text-left hover:bg-surface-muted">
-                          <span className="block text-sm">{label}</span>
+                        : ACTIONS).map(([k, label, desc], mi) => (
+                        <button key={k} role="menuitem" autoFocus={mi === 0}
+                                onClick={() => { if (k === "custom") setAssist({ idx: i, action: "custom", busy: false, menu: false }); else runAssist(i, k); }}
+                                title={costTitle(1)}
+                                className="block w-full px-3 py-2 text-left hover:bg-surface-muted focus-visible:bg-surface-muted">
+                          <span className="flex items-center text-sm">{label} <Cost n={1} /></span>
                           <span className="block text-[11px] text-text-secondary">{desc}</span>
                         </button>
                       ))}
@@ -280,12 +384,6 @@ export default function DraftEditor({ notebookId, title, initial, material, onRe
                   )}
                 </div>
               )}
-              {/* blok araclari */}
-              <div className="absolute -left-1 top-1 hidden -translate-x-full flex-col gap-0.5 pr-2 group-hover:flex md:flex md:opacity-0 md:group-hover:opacity-100">
-                <button onClick={() => move(i, -1)} aria-label="Yukarı" className="rounded p-0.5 text-text-secondary hover:bg-surface-muted"><ArrowUp size={12} /></button>
-                <button onClick={() => move(i, 1)} aria-label="Aşağı" className="rounded p-0.5 text-text-secondary hover:bg-surface-muted"><ArrowDown size={12} /></button>
-                <button onClick={() => removeAt(i)} aria-label="Kaldır" className="rounded p-0.5 text-text-secondary hover:bg-surface-muted hover:text-danger"><X size={12} /></button>
-              </div>
 
               {b.type === "p" && worst[b.id] && (
                 <span title={"Doğrulama: " + VMETA[worst[b.id]].t}
@@ -296,11 +394,11 @@ export default function DraftEditor({ notebookId, title, initial, material, onRe
                               onChange={(v) => setText(i, v)}
                               onEnterNew={() => addParagraph(i)}
                               placeholder={i === 0 && blocks.length === 1 ? "Buraya yaz. Sağdaki alıntıları tıklayarak araya kart olarak ekle; Ctrl+Enter yeni paragraf." : "Yaz…"}
-                              className="w-full resize-none bg-transparent py-1.5 text-[15px] leading-[1.8] outline-none placeholder:text-text-secondary/60" />
+                              className={cx("w-full resize-none bg-transparent py-1.5 text-[15px] leading-[1.8] outline-none placeholder:text-text-secondary/60", focusIdx === i && "pr-32")} />
               )}
               {b.type === "h" && (
                 <AutoTextarea value={b.text} focus={focusIdx === i} onChange={(v) => setText(i, v)} onEnterNew={() => addParagraph(i)}
-                              placeholder="Başlık" className="w-full resize-none bg-transparent py-2 font-heading text-2xl leading-tight outline-none placeholder:text-text-secondary/60" />
+                              placeholder="Başlık" className={cx("w-full resize-none bg-transparent py-2 font-heading text-2xl leading-tight outline-none placeholder:text-text-secondary/60", focusIdx === i && "pr-32")} />
               )}
               {b.type === "quote" && (
                 <div className="my-2 rounded-xl border bg-surface-muted/50 p-3" style={{ borderLeft: `4px solid ${b.color || "#E0A233"}` }}>
@@ -336,11 +434,11 @@ export default function DraftEditor({ notebookId, title, initial, material, onRe
                 <div className="my-2 rounded-xl border border-accent-purple/40 bg-accent-purple/5 p-3 text-sm">
                   {assist.action === "custom" && assist.text === undefined && !assist.busy && (
                     <div className="flex gap-2">
-                      <input autoFocus value={customInstr} onChange={(e) => setCustomInstr(e.target.value)}
+                      <input autoFocus value={customInstr} aria-label="Düzenleme talimatı" onChange={(e) => setCustomInstr(e.target.value)}
                              onKeyDown={(e) => { if (e.key === "Enter" && customInstr.trim()) runAssist(i, "custom", customInstr.trim()); if (e.key === "Escape") setAssist(null); }}
                              placeholder="Örn: iki cümleye indir ve daha net bir iddiayla başla"
                              className="flex-1 rounded-lg border bg-surface px-3 py-1.5 outline-none focus:border-accent-purple" />
-                      <button onClick={() => customInstr.trim() && runAssist(i, "custom", customInstr.trim())} className="rounded-lg bg-accent-purple px-3 py-1.5 text-white">Uygula</button>
+                      <button onClick={() => customInstr.trim() && runAssist(i, "custom", customInstr.trim())} title={costTitle(1)} className="flex min-h-[40px] items-center rounded-lg bg-accent-purple px-3 py-1.5 text-white">Uygula <Cost n={1} className="bg-white/20" /></button>
                       <button onClick={() => setAssist(null)} className="rounded-lg border px-2 py-1.5 text-text-secondary">Vazgeç</button>
                     </div>
                   )}
@@ -352,7 +450,7 @@ export default function DraftEditor({ notebookId, title, initial, material, onRe
                       <p className="whitespace-pre-wrap leading-relaxed">{assist.text}</p>
                       <div className="mt-2 flex gap-2">
                         <button onClick={applyAssist} className="flex items-center gap-1 rounded-lg bg-accent-purple px-3 py-1.5 text-white"><Check size={13} /> {assist.action === "paraphrase" ? "Altına paragraf olarak ekle" : "Uygula"}</button>
-                        <button onClick={() => runAssist(i, assist.action, customInstr.trim() || undefined)} className="rounded-lg border px-3 py-1.5 text-text-secondary">Tekrar dene</button>
+                        <button onClick={() => runAssist(i, assist.action, customInstr.trim() || undefined)} title={costTitle(1)} className="flex min-h-[40px] items-center rounded-lg border px-3 py-1.5 text-text-secondary">Tekrar dene <Cost n={1} /></button>
                         <button onClick={() => setAssist(null)} className="rounded-lg border px-3 py-1.5 text-text-secondary">Vazgeç</button>
                       </div>
                     </>
@@ -368,7 +466,7 @@ export default function DraftEditor({ notebookId, title, initial, material, onRe
                             <button key={sg.id} onClick={() => addSuggested(sg)} title="Alıntı kartı olarak ekle"
                                     className="block w-full rounded-lg border bg-surface p-2 text-left hover:border-accent-purple/50">
                               <p className="line-clamp-2 text-xs leading-relaxed" style={{ borderLeft: "3px solid " + (sg.color || "#FFE78A"), paddingLeft: 8 }}>[{k + 1}] {sg.text}</p>
-                              <p className="mt-0.5 text-[10px] text-text-secondary">{sg.document_title}{sg.page ? " · s." + sg.page : ""} · uyum %{Math.round((sg.score || 0) * 100)}</p>
+                              <p className="mt-0.5 text-[11px] text-text-secondary">{sg.document_title}{sg.page ? " · s." + sg.page : ""} · uyum %{Math.round((sg.score || 0) * 100)}</p>
                             </button>
                           ))}
                           {assist.why && <p className="whitespace-pre-wrap pt-1 text-[11px] text-text-secondary">{assist.why}</p>}
@@ -380,32 +478,45 @@ export default function DraftEditor({ notebookId, title, initial, material, onRe
                 </div>
               )}
 
-              {/* araya ekle */}
-              <div className="flex h-3 items-center justify-center opacity-0 transition group-hover:opacity-100">
-                <button onClick={() => addParagraph(i)} title="Paragraf ekle" className="rounded-full border bg-surface p-0.5 text-text-secondary hover:text-accent-purple"><Plus size={11} /></button>
-                <button onClick={() => addParagraph(i, "h")} title="Başlık ekle" className="ml-1 rounded-full border bg-surface p-0.5 text-text-secondary hover:text-accent-purple"><Heading2 size={11} /></button>
+              {/* blok araclari: odaktaki blokta her zaman; masaustunde uzerine gelince/klavye odaginda */}
+              <div className={cx("items-center justify-center gap-1 transition",
+                focusIdx === i ? "flex py-1" : "hidden md:flex md:h-3 md:opacity-0 md:group-hover:h-auto md:group-hover:opacity-100 md:group-focus-within:h-auto md:group-focus-within:opacity-100")}>
+                {([
+                  [() => addParagraph(i), "Altına paragraf ekle", Plus],
+                  [() => addParagraph(i, "h"), "Altına başlık ekle", Heading2],
+                  [() => move(i, -1), "Bloğu yukarı taşı", ArrowUp],
+                  [() => move(i, 1), "Bloğu aşağı taşı", ArrowDown],
+                  [() => removeAt(i), "Bloğu kaldır", X],
+                ] as const).map(([fn, label, Icon]) => (
+                  <button key={label} type="button" onClick={(e) => { e.stopPropagation(); fn(); }} aria-label={label} title={label}
+                          className={cx("flex h-10 w-10 items-center justify-center rounded-full border bg-surface text-text-secondary md:h-8 md:w-8",
+                            label === "Bloğu kaldır" ? "hover:text-danger" : "hover:text-accent-purple")}>
+                    <Icon size={14} />
+                  </button>
+                ))}
               </div>
             </div>
           ))}
         </div>
         <p className="mt-2 text-[11px] text-text-secondary">
-          Düz metin senin; renkli kenarlı kartlar PDF'ten alıntı, mor kartlar sohbet cevabı. Kartların içine yazılmaz; altına paragraf açılır. Blok üstüne gelince ↑ ↓ ✕.
+          Kendi yazdıkların düz metin olarak görünür. Renkli kenarlı kartlar kaynaklardan alıntı, mor kartlar sohbet cevabıdır; kartların içine yazılmaz, altına paragraf açılır.
+          Bir bloğa dokun ya da üzerine gel: taşı, sil, araya paragraf ekle.
         </p>
       </div>
 
       <aside className="lg:sticky lg:top-4 lg:self-start">
         <div className="rounded-2xl border bg-surface p-3">
           <div className="mb-2 flex items-center justify-between px-1">
-            <p className="text-xs font-semibold uppercase tracking-wide text-text-secondary">PDF vurguların</p>
-            <button onClick={onReloadMaterial} title="Yenile" className="rounded-md p-1 text-text-secondary hover:bg-surface-muted"><RefreshCw size={13} /></button>
+            <p className="text-xs font-semibold uppercase tracking-wide text-text-secondary">Vurguların</p>
+            <button onClick={onReloadMaterial} title="Vurguları yenile" aria-label="Vurguları yenile" className="flex h-9 w-9 items-center justify-center rounded-md text-text-secondary hover:bg-surface-muted"><RefreshCw size={14} /></button>
           </div>
-          <input value={matQ} onChange={(e) => setMatQ(e.target.value)} placeholder="Vurgularda ara…"
+          <input value={matQ} onChange={(e) => setMatQ(e.target.value)} placeholder="Vurgularda ara…" aria-label="Vurgularda ara"
                  className="mb-2 w-full rounded-lg border bg-surface-muted px-2.5 py-1.5 text-sm outline-none focus:border-accent-purple" />
           <div className="max-h-[60vh] space-y-1.5 overflow-y-auto pr-1">
             {material === null ? (
               <p className="p-3 text-xs text-text-secondary">Yükleniyor…</p>
             ) : mats.length === 0 ? (
-              <p className="p-3 text-xs text-text-secondary">Bu defterin kaynaklarında vurgu yok. PDF'te metin seç, renk ver — burada belirir.</p>
+              <p className="p-3 text-xs text-text-secondary">Bu defterin kaynaklarında vurgu yok. Bir kaynakta metin seç, renk ver — burada belirir.</p>
             ) : mats.map((n: any) => {
               const inUse = used.has((n.selected_text || "").trim());
               return (
@@ -419,7 +530,7 @@ export default function DraftEditor({ notebookId, title, initial, material, onRe
                         className={cx("block w-full rounded-lg border bg-surface p-2.5 text-left hover:border-accent-purple/50", inUse && "opacity-50")}>
                   {n.selected_text && <p className="line-clamp-3 text-xs leading-relaxed" style={{ borderLeft: "3px solid " + (n.highlight_color || "#FFE78A"), paddingLeft: 8 }}>{n.selected_text}</p>}
                   {n.note_content && <p className="mt-1 line-clamp-2 text-xs italic text-text-secondary">{n.note_content}</p>}
-                  <p className="mt-1 text-[10px] text-text-secondary">{n.document_title}{n.page_number ? " · s." + n.page_number : ""}{inUse ? " · taslakta" : ""}</p>
+                  <p className="mt-1 text-[11px] text-text-secondary">{n.document_title}{n.page_number ? " · s." + n.page_number : ""}{inUse ? " · taslakta" : ""}</p>
                 </button>
               );
             })}

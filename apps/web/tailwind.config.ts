@@ -1,7 +1,7 @@
 import type { Config } from "tailwindcss";
 const config: Config = {
   darkMode: "class",
-  content: ["./app/**/*.{ts,tsx}", "./components/**/*.{ts,tsx}"],
+  content: ["./app/**/*.{ts,tsx}", "./components/**/*.{ts,tsx}", "./hooks/**/*.{ts,tsx}", "./lib/**/*.{ts,tsx}"],
   theme: {
     extend: {
       colors: {
@@ -9,6 +9,7 @@ const config: Config = {
         surface: "var(--surface)",
         "surface-muted": "var(--surface-muted)",
         border: "var(--border)",
+        "border-strong": "var(--border-strong)",
         "text-primary": "var(--text-primary)",
         "text-secondary": "var(--text-secondary)",
         "accent-purple": "var(--accent-purple)",
@@ -18,7 +19,11 @@ const config: Config = {
         success: "var(--success)",
         warning: "var(--warning)",
         danger: "var(--danger)",
+        /** Dolgulu vurgu dugmesinin yazi rengi (acikta beyaz, koyuda koyu lacivert) */
+        "on-accent": "var(--on-accent)",
       },
+      // 11px en kucuk yazi boyutu (text-2xs); daha kucugu kullanilmaz.
+      fontSize: { "2xs": ["11px", "16px"] },
       borderRadius: { sm: "6px", md: "10px", lg: "14px", xl: "20px" },
       boxShadow: {
         soft: "0 1px 2px rgba(20,25,40,.06), 0 2px 8px rgba(20,25,40,.05)",

@@ -42,6 +42,17 @@ CREATE TABLE IF NOT EXISTS documents (
     updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 CREATE INDEX IF NOT EXISTS idx_documents_user ON documents(user_id);
+ALTER TABLE documents ADD COLUMN IF NOT EXISTS file_hash TEXT;
+CREATE INDEX IF NOT EXISTS documents_user_hash_idx ON documents (user_id, file_hash) WHERE file_hash IS NOT NULL;
+
+-- Kaynak <-> defter coka-cok (dogruluk kaynagi). documents.collection_id yalniz geriye uyum ("ilk bag").
+CREATE TABLE IF NOT EXISTS document_collections (
+    document_id UUID NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
+    collection_id UUID NOT NULL REFERENCES collections(id) ON DELETE CASCADE,
+    added_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    PRIMARY KEY (document_id, collection_id)
+);
+CREATE INDEX IF NOT EXISTS document_collections_col_idx ON document_collections (collection_id, document_id);
 
 CREATE TABLE IF NOT EXISTS document_chunks (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),

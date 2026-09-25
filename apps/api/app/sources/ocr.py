@@ -87,8 +87,9 @@ def _call(pdf_part: bytes, n: int) -> str:
                 usage.mark_limited(m, "PerDay" in r.text)
         time.sleep(15 * (attempt + 1))
     if "PerDay" in last:
-        raise AppError("Günlük yapay zekâ kotası doldu; taranmış sayfalar yarın 'Yeniden işle' ile okunabilir.")
-    raise AppError("Taranmış sayfalar şu an okunamadı (model yoğun); biraz sonra 'Yeniden işle' dene.")
+        raise AppError("Yapay zekâ bugünlük kapasitesini doldurdu; taranmış sayfalar yarın 'Yeniden işle' ile okunabilir.")
+    raise AppError("Taranmış sayfalar şu an okunamadı; yapay zekâ yoğun. Biraz sonra 'Yeniden işle' ile tekrar dene.",
+                   detail=last[:200])
 
 
 def _parse(text: str, first: int, n: int) -> dict[int, str]:

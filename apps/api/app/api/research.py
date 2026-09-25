@@ -18,6 +18,9 @@ from app.config import settings
 
 router = APIRouter(tags=["research"])
 
+COL_MISSING = "Defter bulunamadı; silinmiş olabilir. Defterler sayfasına dön."
+NO_READY = "Bu defterde henüz hazır kaynak yok. Kaynak ekle ya da işlenmelerini bekle."
+
 VERDICTS = {"destek": "Destekleniyor", "kismi": "Kısmen", "yok": "Kaynakta yok", "celiski": "Çelişiyor"}
 
 VERIFY_SCHEMA = {"name": "verify", "schema": {"type": "object", "properties": {"items": {"type": "array", "items": {
@@ -45,11 +48,12 @@ COMPARE_SCHEMA = {"name": "compare", "schema": {"type": "object", "properties": 
 async def _ready_docs(conn, cid, user):
     col = await conn.fetchrow("SELECT id FROM collections WHERE id=$1 AND user_id=$2", cid, user["id"])
     if not col:
-        raise NotFound("Defter bulunamadı.")
+        raise NotFound(COL_MISSING)
     rows = await conn.fetch(
-        "SELECT id, title FROM documents WHERE user_id=$1 AND collection_id=$2 AND status='ready'", user["id"], cid)
+        """SELECT d.id, d.title FROM documents d JOIN document_collections l ON l.document_id = d.id
+           WHERE d.user_id=$1 AND l.collection_id=$2 AND d.status='ready'""", user["id"], cid)
     if not rows:
-        raise AppError("Bu defterde hazır kaynak yok.")
+        raise AppError(NO_READY)
     ids = [str(r["id"]) for r in rows]
     return ids, {str(r["id"]): r["title"] for r in rows}, hashlib.sha1(",".join(sorted(ids)).encode()).hexdigest()[:16]
 
@@ -282,10 +286,11 @@ async def topics(cid: str, refresh: bool = False, conn=Depends(db), user=Depends
     sonuc doner. Her kaynagin konu etiketi Kutuphane etiketlerine de yazilir (filtrelenebilir)."""
     col = await conn.fetchrow("SELECT id, topics FROM collections WHERE id=$1 AND user_id=$2", cid, user["id"])
     if not col:
-        raise NotFound("Defter bulunamadı.")
+        raise NotFound(COL_MISSING)
     rows = await conn.fetch(
-        """SELECT id, title, short_summary, key_concepts, tags FROM documents
-           WHERE user_id=$1 AND collection_id=$2 AND status='ready' ORDER BY created_at""", user["id"], cid)
+        """SELECT d.id, d.title, d.short_summary, d.key_concepts, d.tags
+           FROM documents d JOIN document_collections l ON l.document_id = d.id
+           WHERE d.user_id=$1 AND l.collection_id=$2 AND d.status='ready' ORDER BY d.created_at""", user["id"], cid)
     if len(rows) < 3:
         return {"groups": [], "reason": "Konu grupları en az 3 hazır kaynakla oluşur."}
     ids = [str(r["id"]) for r in rows]
@@ -380,43 +385,115 @@ def _jd(v):
     return v
 
 
-@router.get("/collections/{cid}/bibliography")
-async def bibliography(cid: str, refresh: bool = False, conn=Depends(db), user=Depends(current_user)):
+NO_AI_KINDS = ("youtube", "web", "html")
+CITE_BATCH = 8
+
+
+def _placeholder(title: str) -> dict:
+    """Kunyesi henuz cikarilmamis kaynak icin dosya adina dayali yer tutucu (kaydedilmez)."""
+    return _clean_meta({"type": "other", "authors": [], "year": "", "title": title})
+
+
+async def _bib_rows(conn, cid, user):
     col = await conn.fetchrow("SELECT id FROM collections WHERE id=$1 AND user_id=$2", cid, user["id"])
     if not col:
-        raise NotFound("Defter bulunamadı.")
-    rows = await conn.fetch(
-        """SELECT id, title, source_type, source_url, media, created_at FROM documents
-           WHERE user_id=$1 AND collection_id=$2 AND status='ready' ORDER BY title""", user["id"], cid)
-    metas: dict[str, dict] = {}
-    edited: set[str] = set()
-    for r in await conn.fetch("SELECT document_id, payload FROM doc_extracts WHERE kind='cite' AND document_id = ANY($1::uuid[])",
-                              [r["id"] for r in rows]):
-        p = _jd(r["payload"]) or {}
-        metas[str(r["document_id"])] = p
-        if p.get("edited"):
-            edited.add(str(r["document_id"]))
+        raise NotFound(COL_MISSING)
+    return await conn.fetch(
+        """SELECT d.id, d.title, d.source_type, d.source_url, d.media, d.created_at
+           FROM documents d JOIN document_collections l ON l.document_id = d.id
+           WHERE d.user_id=$1 AND l.collection_id=$2 AND d.status='ready' ORDER BY d.title""", user["id"], cid)
 
+
+async def _bib_payloads(conn, rows) -> dict[str, dict]:
+    out: dict[str, dict] = {}
+    if not rows:
+        return out
+    for r in await conn.fetch(
+            "SELECT document_id, payload FROM doc_extracts WHERE kind='cite' AND document_id = ANY($1::uuid[])",
+            [r["id"] for r in rows]):
+        out[str(r["document_id"])] = _jd(r["payload"]) or {}
+    return out
+
+
+async def _bib_listing(conn, rows) -> dict:
+    """Yapay zekaya GITMEDEN kaynakca: saklanan kunyeler + video/web kunyeleri (ucretsiz, hemen kaydedilir)
+    + kunyesi olmayanlar icin dosya adina dayali yer tutucu (pending)."""
+    saved = await _bib_payloads(conn, rows)
+    out, pending, failed = [], 0, 0
+    for r in rows:
+        did = str(r["id"])
+        kind = r["source_type"] or "pdf"
+        p = saved.get(did)
+        if p is None and kind in NO_AI_KINDS:
+            media = _jd(r["media"]) or {}
+            who = media.get("channel") or media.get("author")
+            p = _clean_meta({
+                "type": "video" if kind == "youtube" else "web",
+                "authors": [who] if who else [],
+                "year": "", "title": r["title"], "container": "YouTube" if kind == "youtube" else (media.get("site") or ""),
+            })
+            await _save_cite(conn, did, p)
+        is_pending = p is None
+        is_failed = bool(p and p.get("failed"))
+        pending += int(is_pending)
+        failed += int(is_failed)
+        m = _clean_meta(p) if p else _placeholder(r["title"])
+        if not m["title"]:
+            m["title"] = r["title"]
+        out.append({"document_id": did, "file_title": r["title"], "kind": kind,
+                    "url": r["source_url"], "accessed": r["created_at"].date().isoformat() if r["created_at"] else None,
+                    "edited": bool(p and p.get("edited")), "pending": is_pending, "failed": is_failed, "meta": m})
+    return {"items": out, "pending": pending, "failed": failed,
+            # "Kunyeleri cikar" dugmesinin maliyeti (8 kaynak = 1 kullanim)
+            "extract_cost": -(-pending // CITE_BATCH) if pending else 0,
+            "retry_cost": -(-failed // CITE_BATCH) if failed else 0}
+
+
+@router.get("/collections/{cid}/bibliography")
+async def bibliography(cid: str, refresh: bool = False, conn=Depends(db), user=Depends(current_user)):
+    """Kaynakca. Acilista yapay zeka CAGRISI YAPMAZ: saklanan kunyeler ve kunyesi cikarilmamis
+    kaynaklar icin dosya adina dayali yer tutucu doner; `pending` = kunyesi cikarilmamis kaynak sayisi.
+    Kunye cikarmak icin POST /collections/{cid}/bibliography/extract.
+    (Geriye uyum: refresh=1 acikca istenirse extract(refresh) calisir.)"""
+    if refresh:
+        return await extract_bibliography(cid, None, True, conn, user)
+    rows = await _bib_rows(conn, cid, user)
+    return await _bib_listing(conn, rows)
+
+
+class BibExtractIn(BaseModel):
+    document_ids: list[str] | None = None     # verilirse yalniz bu kaynaklar (satirdaki "Tekrar dene")
+
+
+@router.post("/collections/{cid}/bibliography/extract")
+async def extract_bibliography(cid: str, body: BibExtractIn | None = None, refresh: bool = False,
+                               conn=Depends(db), user=Depends(current_user)):
+    """Kunyesi olmayan PDF/Office kaynaklarinin kunyesini ilk sayfadan cikarir (8'li gruplar, grup basina 1 kullanim).
+    Varsayilan: yalniz hic denenmemis (pending) kaynaklar. refresh=1: elle duzenlenmemis TUM kunyeler
+    (otomatik cikarilamamis olanlar dahil) yeniden cikarilir. document_ids verilirse yalniz onlar.
+    Basarisiz grup `failed: true` isaretiyle saklanir; bir daha kendiliginden denenmez."""
+    from app.core.errors import UsageLimit
+    rows = await _bib_rows(conn, cid, user)
+    saved = await _bib_payloads(conn, rows)
+    only = {str(x) for x in (body.document_ids if body and body.document_ids else [])}
     todo = []
     for r in rows:
         did = str(r["id"])
-        if did in edited or (did in metas and not refresh):
+        if (r["source_type"] or "pdf") in NO_AI_KINDS:
             continue
-        kind = r["source_type"] or "pdf"
-        media = _jd(r["media"]) or {}
-        if kind in ("youtube", "web", "html"):
-            m = _clean_meta({
-                "type": "video" if kind == "youtube" else "web",
-                "authors": [media.get("channel") or media.get("author")] if (media.get("channel") or media.get("author")) else [],
-                "year": "", "title": r["title"], "container": "YouTube" if kind == "youtube" else (media.get("site") or ""),
-            })
-            metas[did] = m
-            await _save_cite(conn, did, m)
-        else:
+        p = saved.get(did)
+        if p and p.get("edited"):
+            continue
+        if only:
+            if did in only:
+                todo.append(r)
+        elif p is None or refresh:
             todo.append(r)
 
-    for i in range(0, len(todo), 8):
-        part = todo[i:i + 8]
+    done = failed = 0
+    stopped = None
+    for i in range(0, len(todo), CITE_BATCH):
+        part = todo[i:i + CITE_BATCH]
         blocks = []
         for n, r in enumerate(part, 1):
             txt = await conn.fetchval(
@@ -436,30 +513,35 @@ async def bibliography(cid: str, refresh: bool = False, conn=Depends(db), user=D
         try:
             raw = await asyncio.to_thread(get_llm().structured, messages, CITE_SCHEMA, settings.active_llm_model)
             items = (json.loads(raw) or {}).get("items") or []
-        except Exception:  # noqa - kota vb.: bu grup dosya adiyla kalir
-            items = []
-        got = {int(x.get("i", 0)): x for x in items if isinstance(x, dict)}
+        except UsageLimit as e:
+            # kisisel kullanim doldu: isaretleme yapma (kullanicinin hatasi degil); hic is yapilmadiysa hatayi ilet
+            if not done and not failed:
+                raise
+            stopped = {"code": e.code, "user_message": e.user_message}
+            break
+        except Exception:  # noqa - servis yogun / bozuk cevap: grup "otomatik cikarilamadi" olarak saklanir
+            items = None
+        got = {int(x.get("i", 0)): x for x in (items or []) if isinstance(x, dict)}
         for n, r in enumerate(part, 1):
-            m = _clean_meta(got.get(n) or {"type": "other", "authors": [], "year": "", "title": r["title"]})
-            if not m["title"]:
-                m["title"] = r["title"]
             did = str(r["id"])
-            metas[did] = m
-            if got.get(n):
+            x = got.get(n)
+            if x and (x.get("title") or x.get("authors")):
+                m = _clean_meta(x)
+                if not m["title"]:
+                    m["title"] = r["title"]
                 await _save_cite(conn, did, m)
+                done += 1
+            else:
+                await _save_cite(conn, did, _placeholder(r["title"]), failed=True)
+                failed += 1
 
-    out = []
-    for r in rows:
-        did = str(r["id"])
-        m = _clean_meta(metas.get(did) or {"type": "other", "title": r["title"]})
-        out.append({"document_id": did, "file_title": r["title"], "kind": r["source_type"] or "pdf",
-                    "url": r["source_url"], "accessed": r["created_at"].date().isoformat() if r["created_at"] else None,
-                    "edited": did in edited, "meta": m})
-    return {"items": out}
+    out = await _bib_listing(conn, rows)
+    out.update({"extracted": done, "failed_now": failed, "stopped": stopped})
+    return out
 
 
-async def _save_cite(conn, did: str, m: dict, edited: bool = False):
-    p = {**m, **({"edited": True} if edited else {})}
+async def _save_cite(conn, did: str, m: dict, edited: bool = False, failed: bool = False):
+    p = {**m, **({"edited": True} if edited else {}), **({"failed": True} if failed else {})}
     await conn.execute(
         """INSERT INTO doc_extracts (document_id, kind, input_hash, payload, created_at)
            VALUES ($1,'cite','v1',$2,now())
@@ -475,7 +557,7 @@ class CiteIn(BaseModel):
 async def save_cite(doc_id: str, body: CiteIn, conn=Depends(db), user=Depends(current_user)):
     ok = await conn.fetchval("SELECT 1 FROM documents WHERE id=$1 AND user_id=$2", doc_id, user["id"])
     if not ok:
-        raise NotFound("Belge bulunamadı.")
+        raise NotFound("Kaynak bulunamadı; silinmiş olabilir.")
     m = _clean_meta(body.meta)
     await _save_cite(conn, doc_id, m, edited=True)
     return {"meta": m, "edited": True}

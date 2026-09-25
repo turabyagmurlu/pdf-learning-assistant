@@ -26,21 +26,22 @@ export function applyTheme(mode: ThemeMode) {
     document.head.appendChild(link);
   }
   link.href = dark ? "/brand-night.svg" : "/brand-day.svg";
-  // durum cubugu rengi
-  let meta = document.querySelector<HTMLMetaElement>('meta[name="theme-color"][data-brand]');
-  if (!meta) {
-    meta = document.createElement("meta");
-    meta.name = "theme-color"; meta.setAttribute("data-brand", "1");
+  // durum cubugu rengi: layout'taki (media'li) etiketler dahil hepsi secilen temaya uysun
+  const color = dark ? "#1c1747" : "#f6b45c";
+  const metas = document.querySelectorAll<HTMLMetaElement>('meta[name="theme-color"]');
+  if (metas.length) metas.forEach((m) => { m.content = color; });
+  else {
+    const meta = document.createElement("meta");
+    meta.name = "theme-color"; meta.setAttribute("data-brand", "1"); meta.content = color;
     document.head.appendChild(meta);
   }
-  meta.content = dark ? "#1c1747" : "#f6b45c";
 }
 
 export function readTheme(): ThemeMode {
   try {
     const v = localStorage.getItem(KEY);
     if (v === "light" || v === "dark" || v === "system") return v;
-  } catch {}
+  } catch { /* localStorage kapali olabilir */ }
   return "system";
 }
 
@@ -58,23 +59,26 @@ export function useTheme() {
     return () => { mq?.removeEventListener?.("change", onChange); window.removeEventListener("themechange", onLocal); };
   }, []);
   function set(m: ThemeMode) {
-    try { localStorage.setItem(KEY, m); } catch {}
+    try { localStorage.setItem(KEY, m); } catch { /* gizli sekme vb. */ }
     setMode(m); setDark(resolveDark(m)); applyTheme(m);
     window.dispatchEvent(new Event("themechange"));
   }
   return { mode, dark, set };
 }
 
+export const THEME_LABEL: Record<ThemeMode, string> = { light: "Açık", dark: "Koyu", system: "Sistem" };
+
 /** Sol menudeki tema dugmesi: acik → koyu → sistem dongusu. */
 export default function ThemeToggle({ className = "" }: { className?: string }) {
   const { mode, set } = useTheme();
   const next: Record<ThemeMode, ThemeMode> = { light: "dark", dark: "system", system: "light" };
-  const label = mode === "light" ? "Gündüz" : mode === "dark" ? "Gece" : "Sistem";
+  const label = THEME_LABEL[mode];
   const Icon = mode === "light" ? Sun : mode === "dark" ? Moon : MonitorSmartphone;
   return (
-    <button onClick={() => set(next[mode])} title={"Tema: " + label + " (tıkla: değiştir)"}
+    <button type="button" onClick={() => set(next[mode])}
+            aria-label={`Tema: ${label}. ${THEME_LABEL[next[mode]]} temaya geçmek için tıkla`}
             className={"flex items-center gap-2 rounded-md px-3 py-2 text-text-secondary hover:bg-surface-muted " + className}>
-      <Icon size={18} /> {label}
+      <Icon size={18} aria-hidden="true" /> Tema: {label}
     </button>
   );
 }

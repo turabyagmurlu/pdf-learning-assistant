@@ -30,7 +30,13 @@ class Settings(BaseSettings):
     # Auth
     jwt_secret: str = "dev-secret-change-me"
     jwt_expire_minutes: int = 10080
-    reset_secret: str = ""
+    reset_secret: str = ""          # KULLANILMIYOR (eski ortak kurtarma kodu kaldirildi)
+
+    # E-posta (sifre sifirlama baglantisi) — Resend HTTP API
+    resend_api_key: str = ""
+    mail_from: str = ""             # ör. "TY PDF <noreply@alanadin.com>" (Resend'de dogrulanmis alan)
+    web_url: str = ""               # ör. "https://typdf.vercel.app" (sifirlama baglantisinin koku)
+    reset_token_minutes: int = 30
 
     # DB / Redis
     database_url: str = "postgresql://pdfapp:pdfapp@db:5432/pdfapp"

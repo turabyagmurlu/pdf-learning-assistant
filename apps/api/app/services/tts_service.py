@@ -101,10 +101,10 @@ def _quota_from_response(r: httpx.Response) -> "TtsQuota":
     if "PerDay" in msg or "per day" in msg.lower():
         daily = True
     if daily:
-        return TtsQuota("Günlük ses kotası doldu. Yarın yenilenir; o zamana kadar "
-                        "tarayıcı sesiyle dinleyebilirsin.", retry_after=3600, daily=True)
+        return TtsQuota("Seslendirme bugünlük doldu, yarın yeniden açılır. "
+                        "Şimdilik cihaz sesiyle dinleyebilirsin.", retry_after=3600, daily=True)
     delay = max(5, min(delay, 90))
-    return TtsQuota(f"Ses kotası şu an dolu; {delay} saniye sonra otomatik denenecek.",
+    return TtsQuota(f"Seslendirme şu an yoğun; {delay} saniye sonra kendiliğinden yeniden denenecek.",
                     retry_after=delay)
 
 
@@ -145,7 +145,9 @@ def synthesize_pcm(text: str, voice: str = DEFAULT_VOICE, style: str = "") -> by
     """Metni ham PCM baytlarina cevirir (tek Gemini cagrisi)."""
     key = (settings.gemini_api_key or "").strip()
     if not key:
-        raise AiUnavailable("Gemini API anahtarı tanımlı değil.")
+        # yapilandirma eksik (GEMINI_API_KEY); ayrinti kullaniciya degil loga
+        raise AiUnavailable("Seslendirme şu an kullanılamıyor. Cihaz sesiyle dinleyebilirsin.",
+                            detail="GEMINI_API_KEY tanimli degil")
     if voice not in FEMALE_VOICES:
         voice = DEFAULT_VOICE
 
@@ -182,18 +184,19 @@ def synthesize_pcm(text: str, voice: str = DEFAULT_VOICE, style: str = "") -> by
             break
         if r is None:
             if quota_err is None and any(usage.status(m) == "gunluk_doldu" for m in _tts_models()):
-                quota_err = TtsQuota("Bugünkü seslendirme kotası doldu; yarın yenilenir. "
-                                     "Şimdilik tarayıcı sesiyle dinleyebilirsin.", daily=True)
-            raise quota_err or TtsQuota("Seslendirme kotası şu an dolu.")
+                quota_err = TtsQuota("Seslendirme bugünlük doldu, yarın yeniden açılır. "
+                                     "Şimdilik cihaz sesiyle dinleyebilirsin.", daily=True)
+            raise quota_err or TtsQuota("Seslendirme şu an yoğun; biraz sonra tekrar dene ya da cihaz sesiyle dinle.")
         if r.status_code in (500, 502, 503, 504):
-            raise TtsBusy("Ses motoru şu an yoğun; birkaç saniye içinde tekrar denenecek.")
+            raise TtsBusy("Seslendirme şu an yoğun; birkaç saniye içinde yeniden denenecek.")
         if r.status_code >= 400:
             detail = ""
             try:
                 detail = (r.json().get("error") or {}).get("message", "")[:160]
             except Exception:
                 pass
-            raise AiUnavailable(f"Seslendirme başarısız (kod {r.status_code}). {detail}".strip())
+            raise AiUnavailable("Seslendirme şu an yapılamadı; biraz sonra tekrar dene ya da cihaz sesiyle dinle.",
+                                detail=f"tts {r.status_code}: {detail}")
         usage.record(model, "ses", len(text) // 4)
         data = r.json()
         parts = data["candidates"][0]["content"]["parts"]
@@ -204,14 +207,15 @@ def synthesize_pcm(text: str, voice: str = DEFAULT_VOICE, style: str = "") -> by
                 b64 = inline["data"]
                 break
         if not b64:
-            raise AiUnavailable("Ses verisi alınamadı.")
+            raise AiUnavailable("Seslendirme şu an yapılamadı; biraz sonra tekrar dene ya da cihaz sesiyle dinle.",
+                                detail="tts: bos ses verisi")
         return base64.b64decode(b64)
     except AiUnavailable:
         raise
     except httpx.TimeoutException:
         raise AiUnavailable("Seslendirme çok uzun sürdü. Metni kısaltıp tekrar dene.")
     except Exception:  # noqa
-        raise AiUnavailable("Seslendirme servisi şu an yanıt vermiyor.")
+        raise AiUnavailable("Seslendirme şu an yapılamadı; biraz sonra tekrar dene ya da cihaz sesiyle dinle.")
 
 
 def synthesize(text: str, voice: str = DEFAULT_VOICE, style: str = "") -> bytes:
@@ -227,4 +231,4 @@ def synthesize(text: str, voice: str = DEFAULT_VOICE, style: str = "") -> bytes:
                 _time.sleep(e.retry_after)
         except Exception as e:  # noqa - kota ve diger hatalar dogrudan yukari
             raise
-    raise last or AiUnavailable("Seslendirme başarısız.")
+    raise last or AiUnavailable("Seslendirme şu an yapılamadı; biraz sonra tekrar dene ya da cihaz sesiyle dinle.")

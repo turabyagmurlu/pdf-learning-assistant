@@ -3,7 +3,8 @@
  * Uyaniklik ve senkron:
  *  - Uygulama acilir acilmaz /health'e dokunur; sunucu uyuyorsa ilk gercek istek
  *    gelmeden uyanmaya baslar (Render ucretsiz plan ~50 sn).
- *  - Sunucu yavas cevap veriyorsa ustte ince bir "sunucu uyanıyor" seridi gosterir.
+ *  - Sunucu yavas cevap veriyorsa ustte ince bir "uygulama hazirlaniyor" seridi gosterir.
+ *  - Internet baglantisi yoksa ustte "Internet baglantin yok" seridi gosterir (sunucu uyaniyor denmez).
  *  - Sekme/uygulama one gelince (telefonda geri donunce) "typdf:refresh" olayi yayar;
  *    sayfalar bunu dinleyip verisini tazeler. 20 sn'den kisa aralari yok sayar.
  */
@@ -14,13 +15,22 @@ export const REFRESH_EVENT = "typdf:refresh";
 
 export default function Wake() {
   const [waking, setWaking] = useState(false);
+  const [offline, setOffline] = useState(false);
+
+  useEffect(() => {
+    const upd = () => setOffline(navigator.onLine === false);
+    upd();
+    window.addEventListener("online", upd);
+    window.addEventListener("offline", upd);
+    return () => { window.removeEventListener("online", upd); window.removeEventListener("offline", upd); };
+  }, []);
 
   useEffect(() => {
     let cancelled = false;
     const t0 = Date.now();
-    const slow = setTimeout(() => { if (!cancelled) setWaking(true); }, 2500);
+    const slow = setTimeout(() => { if (!cancelled && navigator.onLine !== false) setWaking(true); }, 3000);
     fetch(`${API}/health`, { cache: "no-store" })
-      .catch(() => {})
+      .catch(() => { /* cevrimdisi ya da sunucu kapali: seridi kapat, sayfa kendi hatasini gosterir */ })
       .finally(() => { cancelled = true; clearTimeout(slow); setWaking(false); void t0; });
 
     let last = Date.now();
@@ -28,7 +38,7 @@ export default function Wake() {
       if (document.visibilityState !== "visible") return;
       if (Date.now() - last < 20000) return;
       last = Date.now();
-      fetch(`${API}/health`, { cache: "no-store" }).catch(() => {});
+      fetch(`${API}/health`, { cache: "no-store" }).catch(() => { /* yalniz isitma */ });
       window.dispatchEvent(new Event(REFRESH_EVENT));
     };
     document.addEventListener("visibilitychange", onVis);
@@ -42,12 +52,20 @@ export default function Wake() {
     };
   }, []);
 
+  if (offline) {
+    return (
+      <div role="status" className="fixed inset-x-0 top-0 z-[60] flex items-center justify-center gap-2 bg-text-primary px-3 py-1.5 text-xs text-background"
+           style={{ paddingTop: "max(env(safe-area-inset-top), 6px)" }}>
+        İnternet bağlantın yok. Bağlantın gelince kaldığın yerden devam edebilirsin.
+      </div>
+    );
+  }
   if (!waking) return null;
   return (
-    <div className="fixed inset-x-0 top-0 z-[60] flex items-center justify-center gap-2 bg-accent-purple px-3 py-1 text-[12px] text-white"
-         style={{ paddingTop: "max(env(safe-area-inset-top), 4px)" }}>
-      <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-white" />
-      Sunucu uyanıyor, birkaç saniye…
+    <div role="status" className="fixed inset-x-0 top-0 z-[60] flex items-center justify-center gap-2 bg-accent-purple px-3 py-1.5 text-xs text-white"
+         style={{ paddingTop: "max(env(safe-area-inset-top), 6px)" }}>
+      <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-current" aria-hidden="true" />
+      Uygulama hazırlanıyor; ilk açılış 30 saniyeyi bulabilir…
     </div>
   );
 }

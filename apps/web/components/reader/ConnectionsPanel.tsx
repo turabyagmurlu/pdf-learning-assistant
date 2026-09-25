@@ -13,7 +13,7 @@ export default function ConnectionsPanel({
 }: {
   documentId: string;
   page: number;
-  onOpen: (docId: string) => void;
+  onOpen: (docId: string, page?: number) => void;
 }) {
   const [items, setItems] = useState<Conn[]>([]);
   const [busy, setBusy] = useState(false);
@@ -36,31 +36,32 @@ export default function ConnectionsPanel({
 
   return (
     <div className="flex h-full flex-col overflow-auto p-4">
-      <div className="mb-3 flex items-center gap-2">
-        <Link2 size={15} className="text-accent-purple" />
-        <p className="text-sm font-medium">Bu sayfayla bağlantılı yerler</p>
+      <div className="mb-1 flex items-center gap-2">
+        <Link2 size={15} className="text-accent-purple" aria-hidden />
+        <h2 className="text-sm font-medium">Bu sayfayla bağlantılı yerler</h2>
       </div>
+      <p className="mb-3 text-xs text-text-secondary">Kütüphanendeki diğer kaynaklardan · ücretsiz</p>
 
       {busy && (
         <p className="flex items-center gap-2 text-sm text-text-secondary">
-          <Loader2 size={14} className="animate-spin" /> Diğer belgelerin taranıyor…
+          <Loader2 size={14} className="animate-spin" aria-hidden /> Diğer kaynakların taranıyor…
         </p>
       )}
 
       {!busy && loadedPage === page && items.length === 0 && (
         <p className="text-sm text-text-secondary">
-          Bu sayfa için başka belgelerinde belirgin bir bağlantı bulamadım.
-          Daha fazla belge yükledikçe burası zenginleşir.
+          Bu sayfa için diğer kaynaklarında belirgin bir bağlantı bulamadım.
+          Daha fazla kaynak ekledikçe burası zenginleşir.
         </p>
       )}
 
       <div className="space-y-2.5">
         {items.map((c, i) => (
-          <button key={i} onClick={() => onOpen(c.document_id)}
+          <button key={i} type="button" onClick={() => onOpen(c.document_id, c.page)}
                   className="w-full rounded-xl border bg-surface p-3 text-left transition hover:border-accent-purple/50 hover:shadow-sm">
             <div className="flex items-center justify-between gap-2">
               <span className="truncate text-sm font-medium">{c.title}</span>
-              <span className="shrink-0 rounded-full bg-accent-purple/10 px-2 py-0.5 text-[11px] text-accent-purple">
+              <span className="shrink-0 rounded-full bg-accent-purple/10 px-2 py-0.5 text-xs text-accent-purple">
                 s.{c.page}
               </span>
             </div>
@@ -73,7 +74,7 @@ export default function ConnectionsPanel({
       {items.length > 0 && (
         <p className="mt-4 text-xs text-text-secondary">
           Aynı fikrin başka kaynaklarda nasıl anlatıldığını görmek, konuyu tek bir
-          kitaptan öğrenmekten daha kalıcıdır.
+          kaynaktan öğrenmekten daha kalıcıdır.
         </p>
       )}
     </div>

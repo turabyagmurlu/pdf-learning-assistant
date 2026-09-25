@@ -13,8 +13,12 @@ from app.services.analysis_service import (generate_study_items, feynman_review,
 from app.ai.factory import get_embeddings, get_llm
 from app.core.errors import NotFound, AppError
 from app.config import settings
+from app.services import membership
 
 router = APIRouter(tags=["collections/search/graph"])
+
+COL_MISSING = "Defter bulunamadı; silinmiş olabilir. Defterler sayfasına dön."
+NO_READY = "Bu defterde henüz hazır kaynak yok. Kaynak ekle ya da işlenmelerini bekle."
 
 
 class CollectionIn(BaseModel):
@@ -24,9 +28,18 @@ class CollectionIn(BaseModel):
 
 @router.post("/collections")
 async def create_collection(body: CollectionIn, conn=Depends(db), user=Depends(current_user)):
+    title = (body.title or "").strip()
+    if not title:
+        raise AppError("Deftere bir ad ver.")
+    # Cift kayit korumasi: ayni ad ~20 sn icinde tekrar gelirse (cift tiklama / ag tekrari) yenisini acma
+    recent = await conn.fetchval(
+        """SELECT id FROM collections WHERE user_id=$1 AND title=$2 AND created_at > now() - interval '20 seconds'
+           ORDER BY created_at DESC LIMIT 1""", user["id"], title[:300])
+    if recent:
+        return {"id": str(recent), "existing": True}
     cid = str(uuid.uuid4())
     await conn.execute("INSERT INTO collections (id, user_id, title, description) VALUES ($1,$2,$3,$4)",
-                       cid, user["id"], body.title, body.description)
+                       cid, user["id"], title[:300], body.description)
     return {"id": cid}
 
 
@@ -36,31 +49,49 @@ async def list_collections(conn=Depends(db), user=Depends(current_user)):
     rows = await conn.fetch(
         """SELECT c.id, c.title, c.description, c.created_at, c.draft_at,
                   (c.draft IS NOT NULL AND length(c.draft) > 60) AS has_draft,
-                  (SELECT COUNT(*) FROM documents d WHERE d.collection_id=c.id AND d.user_id=c.user_id) AS doc_count,
-                  (SELECT COALESCE(SUM(d.page_count),0) FROM documents d WHERE d.collection_id=c.id AND d.user_id=c.user_id) AS page_count,
-                  (SELECT COUNT(*) FROM notes n JOIN documents d ON d.id=n.document_id
-                     WHERE d.collection_id=c.id AND n.user_id=c.user_id) AS note_count,
+                  (SELECT COUNT(*) FROM document_collections l JOIN documents d ON d.id=l.document_id
+                     WHERE l.collection_id=c.id AND d.user_id=c.user_id) AS doc_count,
+                  (SELECT COUNT(*) FROM document_collections l JOIN documents d ON d.id=l.document_id
+                     WHERE l.collection_id=c.id AND d.user_id=c.user_id AND d.status='ready') AS ready_count,
+                  (SELECT COALESCE(SUM(d.page_count),0) FROM document_collections l JOIN documents d ON d.id=l.document_id
+                     WHERE l.collection_id=c.id AND d.user_id=c.user_id) AS page_count,
+                  (SELECT COUNT(*) FROM notes n JOIN document_collections l ON l.document_id=n.document_id
+                     WHERE l.collection_id=c.id AND n.user_id=c.user_id) AS note_count,
+                  (SELECT COUNT(*) FROM collection_chats ch WHERE ch.collection_id=c.id) AS chat_count,
                   (c.glossary IS NOT NULL) AS has_glossary,
                   (c.timeline IS NOT NULL) AS has_timeline,
                   (c.concept_map IS NOT NULL) AS has_concept_map,
                   c.topics AS topics_raw,
                   (SELECT json_agg(json_build_array(t.k, t.n)) FROM (
-                     SELECT COALESCE(d.source_type,'pdf') AS k, COUNT(*) AS n FROM documents d
-                     WHERE d.collection_id=c.id AND d.user_id=c.user_id GROUP BY 1 ORDER BY 2 DESC) t) AS types,
+                     SELECT COALESCE(d.source_type,'pdf') AS k, COUNT(*) AS n
+                     FROM document_collections l JOIN documents d ON d.id=l.document_id
+                     WHERE l.collection_id=c.id AND d.user_id=c.user_id GROUP BY 1 ORDER BY 2 DESC) t) AS types,
                   (SELECT ch.title FROM collection_chats ch WHERE ch.collection_id=c.id ORDER BY ch.updated_at DESC LIMIT 1) AS last_chat,
                   (SELECT MAX(ch.updated_at) FROM collection_chats ch WHERE ch.collection_id=c.id) AS last_chat_at,
                   GREATEST(COALESCE((SELECT MAX(ch.updated_at) FROM collection_chats ch WHERE ch.collection_id=c.id), c.created_at),c.created_at, COALESCE(c.draft_at, c.created_at), COALESCE(c.glossary_at, c.created_at),
                            COALESCE(c.timeline_at, c.created_at), COALESCE(c.concept_map_at, c.created_at),
-                           COALESCE((SELECT MAX(d.created_at) FROM documents d WHERE d.collection_id=c.id), c.created_at)) AS last_activity
+                           COALESCE((SELECT MAX(l.added_at) FROM document_collections l WHERE l.collection_id=c.id), c.created_at)) AS last_activity
            FROM collections c WHERE c.user_id=$1 ORDER BY last_activity DESC""",
         user["id"])
+    # Konu gruplari: yalniz defterde HALA bagli olan kaynaklar sayilir (bag tablosu)
+    members: dict[str, set[str]] = {}
+    for m in await conn.fetch(
+            """SELECT l.collection_id, l.document_id FROM document_collections l
+               JOIN collections c ON c.id = l.collection_id WHERE c.user_id=$1""", user["id"]):
+        members.setdefault(str(m["collection_id"]), set()).add(str(m["document_id"]))
     out = []
     for r in rows:
         d = dict(r)
         t = d.pop("topics_raw", None)
+        mem = members.get(str(d["id"]), set())
         try:
             t = json.loads(t) if isinstance(t, str) else t
-            d["topics"] = [{"label": g["label"], "n": len(g.get("docs") or [])} for g in (t or {}).get("groups", [])]
+            topics = []
+            for g in (t or {}).get("groups", []):
+                n = sum(1 for x in (g.get("docs") or []) if str(x) in mem)
+                if n:
+                    topics.append({"label": g["label"], "n": n})
+            d["topics"] = topics
         except Exception:  # noqa
             d["topics"] = []
         ty = d.get("types")
@@ -74,17 +105,25 @@ async def get_collection(cid: str, conn=Depends(db), user=Depends(current_user))
     """Defter: bilgiler, kaynaklar, notlar ve studyo durumu."""
     col = await conn.fetchrow("SELECT * FROM collections WHERE id=$1 AND user_id=$2", cid, user["id"])
     if not col:
-        raise NotFound("Defter bulunamadı.")
+        raise NotFound(COL_MISSING)
     docs = await conn.fetch(
-        """SELECT id, title, status, page_count, short_summary, category, tags,
-                  is_favorite, difficulty_level, created_at,
-                  processing_stage, progress_done, progress_total, error_message,
-                  source_type, source_url, media
-           FROM documents WHERE user_id=$1 AND collection_id=$2
-           ORDER BY created_at DESC""",
+        """SELECT d.id, d.title, d.status, d.page_count, d.short_summary, d.category, d.tags,
+                  d.is_favorite, d.difficulty_level, d.created_at, l.added_at,
+                  d.processing_stage, d.progress_done, d.progress_total, d.error_message,
+                  d.source_type, d.source_url, d.media,
+                  COALESCE((SELECT array_agg(l2.collection_id::text ORDER BY l2.added_at, l2.collection_id)
+                            FROM document_collections l2 WHERE l2.document_id = d.id), ARRAY[]::text[]) AS collection_ids
+           FROM documents d JOIN document_collections l ON l.document_id = d.id
+           WHERE d.user_id=$1 AND l.collection_id=$2
+           ORDER BY l.added_at DESC, d.created_at DESC""",
         user["id"], cid)
     docs = [dict(d) for d in docs]
+    for d in docs:
+        d["collection_ids"] = list(d.get("collection_ids") or [])
+        d["other_collections"] = max(0, len(d["collection_ids"]) - 1)   # "· 2 defterde" rozeti icin
     ids = [str(d["id"]) for d in docs]
+    chat_count = await conn.fetchval(
+        "SELECT COUNT(*) FROM collection_chats WHERE collection_id=$1 AND user_id=$2", cid, user["id"]) or 0
     notes = 0
     if ids:
         notes = await conn.fetchval(
@@ -126,6 +165,7 @@ async def get_collection(cid: str, conn=Depends(db), user=Depends(current_user))
             "pages": sum((d.get("page_count") or 0) for d in docs),
             "notes": notes,
             "draft_words": draft_words,
+            "chat_count": int(chat_count),
         },
     }
 
@@ -140,7 +180,7 @@ class CollectionPatch(BaseModel):
 async def update_collection(cid: str, body: CollectionPatch, conn=Depends(db), user=Depends(current_user)):
     col = await conn.fetchrow("SELECT id FROM collections WHERE id=$1 AND user_id=$2", cid, user["id"])
     if not col:
-        raise NotFound("Çalışma kitabı bulunamadı.")
+        raise NotFound(COL_MISSING)
     if body.title is not None:
         await conn.execute("UPDATE collections SET title=$1 WHERE id=$2 AND user_id=$3",
                            body.title, cid, user["id"])
@@ -153,29 +193,99 @@ async def update_collection(cid: str, body: CollectionPatch, conn=Depends(db), u
     return {"ok": True}
 
 
-@router.delete("/collections/{cid}")
-async def delete_collection(cid: str, with_sources: bool = False, conn=Depends(db), user=Depends(current_user)):
-    """Defteri siler. Varsayilan: icindeki kaynaklar Kutuphane'de deftersiz kalir.
-    with_sources=1: kaynaklar da (dosyalari ve turetilmis verileriyle) kalici silinir."""
+async def _source_split(conn, cid: str, user) -> tuple[list, list]:
+    """Defterin kaynaklari: (yalniz bu defterde olanlar, baska defterlerde de olanlar)."""
+    rows = await conn.fetch(
+        """SELECT d.id, d.file_path,
+                  EXISTS (SELECT 1 FROM document_collections o
+                          WHERE o.document_id = d.id AND o.collection_id <> $1) AS shared
+           FROM documents d JOIN document_collections l ON l.document_id = d.id
+           WHERE l.collection_id=$1 AND d.user_id=$2""", cid, user["id"])
+    return [r for r in rows if not r["shared"]], [r for r in rows if r["shared"]]
+
+
+@router.get("/collections/{cid}/delete-preview")
+async def delete_preview(cid: str, conn=Depends(db), user=Depends(current_user)):
+    """Silme onayi icin: kac kaynak yalniz bu defterde (with_sources=1 ile silinir),
+    kac kaynak baska defterlerde de var (silinmez, yalniz bagi kalkar)."""
     col = await conn.fetchrow("SELECT id FROM collections WHERE id=$1 AND user_id=$2", cid, user["id"])
     if not col:
-        raise NotFound("Çalışma kitabı bulunamadı.")
-    if with_sources:
+        raise NotFound(COL_MISSING)
+    only, shared = await _source_split(conn, cid, user)
+    chats = await conn.fetchval("SELECT COUNT(*) FROM collection_chats WHERE collection_id=$1", cid) or 0
+    return {"sources": len(only) + len(shared), "exclusive": len(only), "shared": len(shared), "chats": int(chats)}
+
+
+@router.delete("/collections/{cid}")
+async def delete_collection(cid: str, with_sources: bool = False, conn=Depends(db), user=Depends(current_user)):
+    """Defteri siler. Varsayilan: kaynaklar Kutuphane'de kalir (yalniz baglar kalkar).
+    with_sources=1: YALNIZ BASKA DEFTERE BAGLI OLMAYAN kaynaklar (dosyalari ve turetilmis verileriyle)
+    kalici silinir; baska defterlerde de olanlar korunur."""
+    col = await conn.fetchrow("SELECT id FROM collections WHERE id=$1 AND user_id=$2", cid, user["id"])
+    if not col:
+        raise NotFound(COL_MISSING)
+    only, shared = await _source_split(conn, cid, user)
+    deleted = 0
+    if with_sources and only:
         from app.storage.object_store import delete_object
-        rows = await conn.fetch("SELECT id, file_path FROM documents WHERE collection_id=$1 AND user_id=$2",
-                                cid, user["id"])
-        for r in rows:
+        for r in only:
             for k in (r["file_path"], r["file_path"] + ".pages.json", r["file_path"] + ".ocr.json",
                       r["file_path"] + ".transcript.json"):
                 try:
                     await asyncio.to_thread(delete_object, k)
                 except Exception:  # noqa
                     pass
-        await conn.execute("DELETE FROM documents WHERE collection_id=$1 AND user_id=$2", cid, user["id"])
-    await conn.execute("UPDATE documents SET collection_id=NULL WHERE collection_id=$1 AND user_id=$2",
-                       cid, user["id"])
-    await conn.execute("DELETE FROM collections WHERE id=$1 AND user_id=$2", cid, user["id"])
-    return {"ok": True}
+        await conn.execute("DELETE FROM documents WHERE id = ANY($1::uuid[]) AND user_id=$2",
+                           [str(r["id"]) for r in only], user["id"])
+        deleted = len(only)
+    all_ids = [str(r["id"]) for r in only + shared]
+    async with conn.transaction():
+        await conn.execute("DELETE FROM collections WHERE id=$1 AND user_id=$2", cid, user["id"])  # baglar CASCADE
+        # geriye uyum sutunu: kalan ilk bag ya da NULL
+        await membership._sync_legacy(conn, all_ids)
+    return {"ok": True, "deleted_sources": deleted,
+            "kept_sources": len(all_ids) - deleted, "kept_shared": len(shared)}
+
+
+class LinkIn(BaseModel):
+    document_ids: list[str]
+
+
+@router.post("/collections/{cid}/documents")
+async def add_documents(cid: str, body: LinkIn, conn=Depends(db), user=Depends(current_user)):
+    """Kutuphanedeki kaynaklari deftere EKLER (baska defterlerden cikarmaz)."""
+    col = await conn.fetchrow("SELECT id FROM collections WHERE id=$1 AND user_id=$2", cid, user["id"])
+    if not col:
+        raise NotFound(COL_MISSING)
+    ids = []
+    for x in body.document_ids or []:
+        try:
+            ids.append(str(uuid.UUID(str(x))))
+        except Exception:  # noqa
+            continue
+    if not ids:
+        return {"added": 0, "already": 0}
+    own = [str(r["id"]) for r in await conn.fetch(
+        "SELECT id FROM documents WHERE user_id=$1 AND id = ANY($2::uuid[])", user["id"], ids)]
+    added = await membership.link(conn, own, cid)
+    return {"added": added, "already": len(own) - added, "not_found": len(ids) - len(own)}
+
+
+@router.delete("/collections/{cid}/documents/{doc_id}")
+async def remove_document(cid: str, doc_id: str, conn=Depends(db), user=Depends(current_user)):
+    """Kaynagi defterden cikarir: yalniz bag silinir, kaynak Kutuphane'de (ve diger defterlerde) kalir."""
+    col = await conn.fetchrow("SELECT id FROM collections WHERE id=$1 AND user_id=$2", cid, user["id"])
+    if not col:
+        raise NotFound(COL_MISSING)
+    try:
+        doc_id = str(uuid.UUID(doc_id))
+    except Exception:  # noqa
+        raise NotFound("Kaynak bulunamadı; silinmiş olabilir.")
+    own = await conn.fetchval("SELECT 1 FROM documents WHERE id=$1 AND user_id=$2", doc_id, user["id"])
+    if not own:
+        raise NotFound("Kaynak bulunamadı; silinmiş olabilir.")
+    removed = await membership.unlink(conn, doc_id, cid)
+    return {"ok": True, "removed": removed}
 
 
 class AskIn(BaseModel):
@@ -252,19 +362,19 @@ async def delete_chat(cid: str, chat_id: str, conn=Depends(db), user=Depends(cur
 
 
 async def _ask_core(cid: str, body: AskIn, conn, user):
-    """Calisma kitabindaki TUM belgelere birden soru sorar."""
+    """Defterdeki TUM hazir kaynaklara birden soru sorar."""
     col = await conn.fetchrow("SELECT id, title FROM collections WHERE id=$1 AND user_id=$2", cid, user["id"])
     if not col:
-        raise NotFound("Çalışma kitabı bulunamadı.")
+        raise NotFound(COL_MISSING)
     q = (body.question or "").strip()
     if len(q) < 3:
-        raise AppError("Soru çok kısa.")
+        raise AppError("Soru çok kısa; en az birkaç kelime yaz.")
     rows = await conn.fetch(
-        "SELECT id FROM documents WHERE user_id=$1 AND collection_id=$2 AND status='ready'",
+        "SELECT id FROM documents d JOIN document_collections l ON l.document_id = d.id WHERE d.user_id=$1 AND l.collection_id=$2 AND status='ready'",
         user["id"], cid)
     ids = [str(r["id"]) for r in rows]
     if not ids:
-        raise AppError("Bu çalışma kitabında hazır belge yok.")
+        raise AppError(NO_READY)
     # Cevap onbellegi: ayni kaynak kumesinde ayni/cok benzer soru -> kayitli cevap (0 kota)
     import hashlib
     docs_hash = hashlib.sha1(",".join(sorted(ids)).encode()).hexdigest()[:16]
@@ -287,7 +397,8 @@ async def _ask_core(cid: str, body: AskIn, conn, user):
             return {**(hit["payload"] or {}), "cached": True, "cached_question": hit["question"]}
     chunks = await rag_service.retrieve_many(conn, ids, q, get_embeddings(), q_emb=q_emb)
     if not chunks:
-        return {"answer": "Bu soruya bu çalışma kitabındaki belgelerde karşılık bulamadım.",
+        return {"answer": "Bu soruya defterdeki kaynaklarda karşılık bulamadım. Soruyu farklı kelimelerle sor "
+                          "ya da yeni kaynak ekle.",
                 "sources": []}
     ctx = rag_service.build_context(chunks)
     llm = get_llm()
@@ -400,10 +511,10 @@ async def suggestions(cid: str, refresh: bool = False, conn=Depends(db), user=De
         "SELECT id, title, suggestions, suggestions_hash, suggestions_at FROM collections WHERE id=$1 AND user_id=$2",
         cid, user["id"])
     if not col:
-        raise NotFound("Defter bulunamadı.")
+        raise NotFound(COL_MISSING)
     docs = await conn.fetch(
         """SELECT id, title, short_summary, purpose, key_concepts, difficult_concepts
-           FROM documents WHERE user_id=$1 AND collection_id=$2 AND status='ready' ORDER BY created_at""",
+           FROM documents d JOIN document_collections l ON l.document_id = d.id WHERE d.user_id=$1 AND l.collection_id=$2 AND status='ready' ORDER BY created_at""",
         user["id"], cid)
     if not docs:
         return {"theme": "", "groups": [], "source": "bos", "documents": 0}
@@ -419,9 +530,11 @@ async def suggestions(cid: str, refresh: bool = False, conn=Depends(db), user=De
         if not data.get("groups"):
             raise ValueError("bos")
         data["source"] = "ai"
-    except Exception:  # noqa - kota/yogunluk: sablona dus, onbellege YAZMA (sonra tekrar denensin)
+    except Exception as e:  # noqa - kullanim/yogunluk: sablona dus, onbellege YAZMA (sonra tekrar denensin)
         data = template_suggestions(freq, [d["title"] for d in docs])
-        return {**data, "source": "sablon", "cached": False, "documents": len(docs), "generated_at": None}
+        # reason: USAGE_LIMIT (kisinin hakki bitti) | AI_BUSY (servis yogun) | ... -> web dogru metni secer
+        return {**data, "source": "sablon", "reason": getattr(e, "code", None) or "AI_UNAVAILABLE",
+                "cached": False, "documents": len(docs), "generated_at": None}
     now = datetime.now(timezone.utc)
     await conn.execute(
         "UPDATE collections SET suggestions=$1, suggestions_hash=$2, suggestions_at=$3 WHERE id=$4",
@@ -439,7 +552,7 @@ async def feynman(cid: str, body: FeynmanIn, conn=Depends(db), user=Depends(curr
     """Anlat Bakalim: kullanicinin anlatimini kaynakla karsilastirir."""
     col = await conn.fetchrow("SELECT id FROM collections WHERE id=$1 AND user_id=$2", cid, user["id"])
     if not col:
-        raise NotFound("Çalışma kitabı bulunamadı.")
+        raise NotFound(COL_MISSING)
     concept = (body.concept or "").strip()
     expl = (body.explanation or "").strip()
     if len(concept) < 2:
@@ -447,11 +560,11 @@ async def feynman(cid: str, body: FeynmanIn, conn=Depends(db), user=Depends(curr
     if len(expl) < 20:
         raise AppError("Biraz daha uzun anlat; en az birkaç cümle olsun.")
     rows = await conn.fetch(
-        "SELECT id FROM documents WHERE user_id=$1 AND collection_id=$2 AND status='ready'",
+        "SELECT id FROM documents d JOIN document_collections l ON l.document_id = d.id WHERE d.user_id=$1 AND l.collection_id=$2 AND status='ready'",
         user["id"], cid)
     ids = [str(r["id"]) for r in rows]
     if not ids:
-        raise AppError("Bu çalışma kitabında hazır belge yok.")
+        raise AppError(NO_READY)
     chunks = await rag_service.retrieve_many(conn, ids, concept + "\n" + expl[:500], get_embeddings(), k=10)
     if not chunks:
         raise AppError("Bu kavramla ilgili kaynak bulamadım. Farklı bir kavram dene.")
@@ -472,18 +585,18 @@ async def lecture(cid: str, refresh: bool = False, conn=Depends(db), user=Depend
     col = await conn.fetchrow("SELECT id, title, lecture, lecture_at FROM collections "
                               "WHERE id=$1 AND user_id=$2", cid, user["id"])
     if not col:
-        raise NotFound("Çalışma kitabı bulunamadı.")
+        raise NotFound(COL_MISSING)
     if not refresh and (col["lecture"] or "").strip():
         n = await conn.fetchval(
-            "SELECT count(*) FROM documents WHERE user_id=$1 AND collection_id=$2 AND status='ready'",
+            "SELECT count(*) FROM documents d JOIN document_collections l ON l.document_id = d.id WHERE d.user_id=$1 AND l.collection_id=$2 AND status='ready'",
             user["id"], cid)
         return {"script": col["lecture"], "title": col["title"], "documents": n,
                 "cached": True, "at": col["lecture_at"].isoformat() if col["lecture_at"] else None}
     docs = await conn.fetch(
-        "SELECT id, title, short_summary FROM documents WHERE user_id=$1 AND collection_id=$2 AND status='ready'",
+        "SELECT id, title, short_summary FROM documents d JOIN document_collections l ON l.document_id = d.id WHERE d.user_id=$1 AND l.collection_id=$2 AND status='ready'",
         user["id"], cid)
     if not docs:
-        raise AppError("Bu çalışma kitabında hazır belge yok.")
+        raise AppError(NO_READY)
     ids = [str(d["id"]) for d in docs]
     rows = await conn.fetch(
         """SELECT content FROM document_chunks WHERE document_id = ANY($1::uuid[])
@@ -491,7 +604,7 @@ async def lecture(cid: str, refresh: bool = False, conn=Depends(db), user=Depend
     parts = [f"{d['title']}: {d['short_summary']}" for d in docs if d["short_summary"]]
     context = "\n".join(parts) + "\n\n" + "\n\n".join(r["content"] for r in rows)
     if len(context) < 200:
-        raise AppError("Ders oluşturmak için yeterli içerik yok.")
+        raise AppError("Sesli özet için yeterli içerik yok; deftere biraz daha kaynak ekle.")
     script = await asyncio.to_thread(lecture_script, context, col["title"])
     await conn.execute("UPDATE collections SET lecture=$1, lecture_at=now() WHERE id=$2", script, cid)
     return {"script": script, "title": col["title"], "documents": len(docs), "cached": False}
@@ -523,7 +636,7 @@ async def get_glossary(cid: str, conn=Depends(db), user=Depends(current_user)):
     col = await conn.fetchrow("SELECT id, glossary, glossary_at FROM collections WHERE id=$1 AND user_id=$2",
                               cid, user["id"])
     if not col:
-        raise NotFound("Çalışma kitabı bulunamadı.")
+        raise NotFound(COL_MISSING)
     g = col["glossary"]
     if isinstance(g, str):
         try:
@@ -567,6 +680,14 @@ async def _extract_cached(conn, doc_id, kind: str, ctx: str, extra: str, fn, *ar
              payload=EXCLUDED.payload, created_at=now()""",
         doc_id, kind, h, out)
     return out, False
+
+
+def _raise_if_empty(err, produced: int):
+    """Hic kaynak islenemediyse ve sebep yapay zeka ise (kisisel limit / servis yogun) hatayi ilet;
+    boylece bos sonuc sessizce kaydedilmez ve web `code` ile dogru mesaji gosterir."""
+    from app.core.errors import AiUnavailable
+    if produced == 0 and isinstance(err, AiUnavailable):
+        raise err
 
 
 def _jload(v):
@@ -643,9 +764,9 @@ async def extract_status(cid: str, conn=Depends(db), user=Depends(current_user))
     Eski defterlerde onbellegi mevcut sonuctan tohumlar (kota harcamadan)."""
     col = await conn.fetchrow("SELECT id FROM collections WHERE id=$1 AND user_id=$2", cid, user["id"])
     if not col:
-        raise NotFound("Defter bulunamadı.")
+        raise NotFound(COL_MISSING)
     docs = await conn.fetch(
-        "SELECT id FROM documents WHERE user_id=$1 AND collection_id=$2 AND status='ready'", user["id"], cid)
+        "SELECT id FROM documents d JOIN document_collections l ON l.document_id = d.id WHERE d.user_id=$1 AND l.collection_id=$2 AND status='ready'", user["id"], cid)
     ids = [d["id"] for d in docs]
     try:
         await _seed_from_collection(conn, cid, docs)
@@ -665,15 +786,16 @@ async def build_glossary(cid: str, force: bool = False, conn=Depends(db), user=D
     force=1 -> onbellegi yok say, her belgeyi yeniden uret (kota harcar)."""
     col = await conn.fetchrow("SELECT id, title FROM collections WHERE id=$1 AND user_id=$2", cid, user["id"])
     if not col:
-        raise NotFound("Çalışma kitabı bulunamadı.")
+        raise NotFound(COL_MISSING)
     docs = await conn.fetch(
-        "SELECT id, title FROM documents WHERE user_id=$1 AND collection_id=$2 AND status='ready' ORDER BY created_at",
+        "SELECT id, title FROM documents d JOIN document_collections l ON l.document_id = d.id WHERE d.user_id=$1 AND l.collection_id=$2 AND status='ready' ORDER BY created_at",
         user["id"], cid)
     if not docs:
-        raise AppError("Bu çalışma kitabında hazır belge yok.")
+        raise AppError(NO_READY)
 
     merged: dict[str, dict] = {}
     cached_n = fresh_n = 0
+    last_err = None
     for d in docs:
         rows = await conn.fetch(
             "SELECT content, page_number FROM document_chunks WHERE document_id=$1 ORDER BY chunk_index", d["id"])
@@ -685,7 +807,8 @@ async def build_glossary(cid: str, force: bool = False, conn=Depends(db), user=D
                 await conn.execute("DELETE FROM doc_extracts WHERE document_id=$1 AND kind='glossary'", d["id"])
             items, hit = await _extract_cached(conn, d["id"], "glossary", ctx, "", extract_glossary, ctx, d["title"])
             cached_n += int(hit); fresh_n += int(not hit)
-        except Exception:
+        except Exception as e:  # noqa - bu kaynak atlanir; yapay zeka hatasi sonda bildirilir
+            last_err = e
             continue
         for it in items:
             key = _norm_term(it["term"])
@@ -697,6 +820,7 @@ async def build_glossary(cid: str, force: bool = False, conn=Depends(db), user=D
                 entry["definition"] = it["definition"]
             entry["mentions"].append({"document_id": str(d["id"]), "title": d["title"], "pages": it["pages"]})
 
+    _raise_if_empty(last_err, cached_n + fresh_n)
     items = sorted(merged.values(), key=lambda x: _norm_term(x["term"]))
     payload = {"items": items}
     now = datetime.now(timezone.utc)
@@ -710,7 +834,7 @@ async def get_concept_map(cid: str, conn=Depends(db), user=Depends(current_user)
     col = await conn.fetchrow("SELECT id, concept_map, concept_map_at FROM collections WHERE id=$1 AND user_id=$2",
                               cid, user["id"])
     if not col:
-        raise NotFound("Çalışma kitabı bulunamadı.")
+        raise NotFound(COL_MISSING)
     m = col["concept_map"]
     if isinstance(m, str):
         try:
@@ -728,7 +852,7 @@ async def build_concept_map(cid: str, force: bool = False, conn=Depends(db), use
     Sozluk yoksa once onu uretir. force=1 -> belge onbellegini yok say."""
     col = await conn.fetchrow("SELECT id, title, glossary FROM collections WHERE id=$1 AND user_id=$2", cid, user["id"])
     if not col:
-        raise NotFound("Çalışma kitabı bulunamadı.")
+        raise NotFound(COL_MISSING)
     g = col["glossary"]
     if isinstance(g, str):
         try:
@@ -741,16 +865,17 @@ async def build_concept_map(cid: str, force: bool = False, conn=Depends(db), use
         items = r["items"]
     cached_n = fresh_n = 0
     if not items:
-        raise AppError("Sözlük boş; önce belge ekle.")
+        raise AppError("Sözlük boş; önce deftere kaynak ekle ve işlenmesini bekle.")
     terms = [it["term"] for it in items]
     nodes = [{"id": it["term"], "kind": it["kind"], "definition": it["definition"], "mentions": it["mentions"]}
              for it in items]
 
     docs = await conn.fetch(
-        "SELECT id, title FROM documents WHERE user_id=$1 AND collection_id=$2 AND status='ready' ORDER BY created_at",
+        "SELECT id, title FROM documents d JOIN document_collections l ON l.document_id = d.id WHERE d.user_id=$1 AND l.collection_id=$2 AND status='ready' ORDER BY created_at",
         user["id"], cid)
     edges: list[dict] = []
     seen: set[tuple] = set()
+    last_err = None
     for d in docs:
         rows = await conn.fetch(
             "SELECT content, page_number FROM document_chunks WHERE document_id=$1 ORDER BY chunk_index", d["id"])
@@ -767,7 +892,8 @@ async def build_concept_map(cid: str, force: bool = False, conn=Depends(db), use
             rels, hit = await _extract_cached(conn, d["id"], "relations", ctx, "|".join(sorted(doc_terms)),
                                               extract_relations, ctx, d["title"], doc_terms)
             cached_n += int(hit); fresh_n += int(not hit)
-        except Exception:
+        except Exception as e:  # noqa - bu kaynak atlanir; yapay zeka hatasi sonda bildirilir
+            last_err = e
             continue
         for r in rels:
             key = (r["source"], r["target"], r["label"].lower())
@@ -776,6 +902,7 @@ async def build_concept_map(cid: str, force: bool = False, conn=Depends(db), use
             seen.add(key)
             r["document_id"] = str(d["id"]); r["document_title"] = d["title"]
             edges.append(r)
+    _raise_if_empty(last_err, cached_n + fresh_n)
     # kenari olmayan dugumleri de tut ama sona koy
     payload = {"nodes": nodes, "edges": edges}
     now = datetime.now(timezone.utc)
@@ -789,7 +916,7 @@ async def get_timeline(cid: str, conn=Depends(db), user=Depends(current_user)):
     col = await conn.fetchrow("SELECT id, timeline, timeline_at FROM collections WHERE id=$1 AND user_id=$2",
                               cid, user["id"])
     if not col:
-        raise NotFound("Çalışma kitabı bulunamadı.")
+        raise NotFound(COL_MISSING)
     t = col["timeline"]
     if isinstance(t, str):
         try:
@@ -805,15 +932,16 @@ async def build_timeline(cid: str, force: bool = False, conn=Depends(db), user=D
     """Kitaptaki belgelerden tarihli olaylari cikarip kronolojik birlestirir. force=1 -> onbellegi yok say."""
     col = await conn.fetchrow("SELECT id, title FROM collections WHERE id=$1 AND user_id=$2", cid, user["id"])
     if not col:
-        raise NotFound("Çalışma kitabı bulunamadı.")
+        raise NotFound(COL_MISSING)
     docs = await conn.fetch(
-        "SELECT id, title FROM documents WHERE user_id=$1 AND collection_id=$2 AND status='ready' ORDER BY created_at",
+        "SELECT id, title FROM documents d JOIN document_collections l ON l.document_id = d.id WHERE d.user_id=$1 AND l.collection_id=$2 AND status='ready' ORDER BY created_at",
         user["id"], cid)
     if not docs:
-        raise AppError("Bu çalışma kitabında hazır belge yok.")
+        raise AppError(NO_READY)
     events: list[dict] = []
     seen: set[tuple] = set()
     cached_n = fresh_n = 0
+    last_err = None
     for d in docs:
         rows = await conn.fetch(
             "SELECT content, page_number FROM document_chunks WHERE document_id=$1 ORDER BY chunk_index", d["id"])
@@ -825,7 +953,8 @@ async def build_timeline(cid: str, force: bool = False, conn=Depends(db), user=D
                 await conn.execute("DELETE FROM doc_extracts WHERE document_id=$1 AND kind='timeline'", d["id"])
             evs, hit = await _extract_cached(conn, d["id"], "timeline", ctx, "", extract_timeline, ctx, d["title"])
             cached_n += int(hit); fresh_n += int(not hit)
-        except Exception:
+        except Exception as e:  # noqa - bu kaynak atlanir; yapay zeka hatasi sonda bildirilir
+            last_err = e
             continue
         for ev in evs:
             key = (ev["year"], ev["month"], _norm_term(ev["title"])[:40])
@@ -834,6 +963,7 @@ async def build_timeline(cid: str, force: bool = False, conn=Depends(db), user=D
             seen.add(key)
             ev["document_id"] = str(d["id"]); ev["document_title"] = d["title"]
             events.append(ev)
+    _raise_if_empty(last_err, cached_n + fresh_n)
     events.sort(key=lambda e: (e["year"], e["month"] or 0, e["day"] or 0))
     payload = {"events": events}
     now = datetime.now(timezone.utc)
@@ -853,10 +983,10 @@ async def draft_assist(cid: str, body: DraftAssistIn, conn=Depends(db), user=Dep
     """Taslaktaki bir blok icin AI yardimi. Metni degistirmez, oneri dondurur; kullanici uygular."""
     col = await conn.fetchrow("SELECT id, title FROM collections WHERE id=$1 AND user_id=$2", cid, user["id"])
     if not col:
-        raise NotFound("Defter bulunamadı.")
+        raise NotFound(COL_MISSING)
     text = (body.text or "").strip()
     if len(text) < 8:
-        raise AppError("Metin çok kısa.")
+        raise AppError("Metin çok kısa; en az birkaç kelime yaz.")
     llm = get_llm()
     base = ("Sen titiz bir editörsün. Yalnızca Türkçe yaz. Metnin anlamını, iddialarını ve olgularını değiştirme; "
             "yeni bilgi, tarih ya da isim ekleme. Başlık, açıklama, tırnak ya da 'İşte' gibi girişler yazma; "
@@ -882,7 +1012,8 @@ async def draft_assist(cid: str, body: DraftAssistIn, conn=Depends(db), user=Dep
             """SELECT n.id, n.selected_text, n.note_content, n.page_number, n.highlight_color,
                       d.id AS document_id, d.title AS document_title
                FROM notes n JOIN documents d ON d.id = n.document_id
-               WHERE n.user_id=$1 AND d.collection_id=$2 AND n.selected_text IS NOT NULL AND length(n.selected_text) > 20""",
+               JOIN document_collections l ON l.document_id = d.id AND l.collection_id = $2
+               WHERE n.user_id=$1 AND n.selected_text IS NOT NULL AND length(n.selected_text) > 20""",
             user["id"], cid)
         if not rows:
             return {"action": body.action, "suggestions": [], "note": "Bu defterin kaynaklarında henüz vurgu yok."}
@@ -915,7 +1046,7 @@ async def draft_assist(cid: str, body: DraftAssistIn, conn=Depends(db), user=Dep
             pass
         return {"action": body.action, "suggestions": top, "why": why}
     else:
-        raise AppError("Bilinmeyen işlem.")
+        raise AppError("Bu işlem yapılamadı; sayfayı yenileyip tekrar dene.")
     out = await asyncio.to_thread(llm.complete, [{"role": "system", "content": sysm}, {"role": "user", "content": usr}], model=settings.active_llm_model)
     return {"action": body.action, "text": (out or "").strip()}
 
@@ -927,23 +1058,23 @@ class ColStudyIn(BaseModel):
 
 @router.post("/collections/{cid}/study/generate")
 async def collection_study(cid: str, body: ColStudyIn, conn=Depends(db), user=Depends(current_user)):
-    """Calisma kitabindaki tum belgelerden karisik kart/quiz uretir."""
+    """Defterdeki tum kaynaklardan karisik kart/quiz uretir."""
     col = await conn.fetchrow("SELECT id FROM collections WHERE id=$1 AND user_id=$2", cid, user["id"])
     if not col:
-        raise NotFound("Çalışma kitabı bulunamadı.")
+        raise NotFound(COL_MISSING)
     docs = await conn.fetch(
-        "SELECT id FROM documents WHERE user_id=$1 AND collection_id=$2 AND status='ready'",
+        "SELECT id FROM documents d JOIN document_collections l ON l.document_id = d.id WHERE d.user_id=$1 AND l.collection_id=$2 AND status='ready'",
         user["id"], cid)
     ids = [str(d["id"]) for d in docs]
     if not ids:
-        raise AppError("Bu çalışma kitabında hazır belge yok.")
+        raise AppError(NO_READY)
     per = max(3, min(12, (body.count or 10)))
     rows = await conn.fetch(
         """SELECT content, document_id FROM document_chunks
            WHERE document_id = ANY($1::uuid[]) ORDER BY random() LIMIT 30""", ids)
     context = "\n\n".join(r["content"] for r in rows)
     if len(context) < 100:
-        raise AppError("Kart üretmek için yeterli içerik bulunamadı.")
+        raise AppError("Kaynaklarda bunun için yeterli içerik bulunamadı; deftere biraz daha kaynak ekle.")
     items = await asyncio.to_thread(generate_study_items, context, body.type, per)
     created = 0
     first_doc = ids[0]
@@ -1018,9 +1149,9 @@ async def search_collection(cid: str, q: str, mode: str = "hybrid",
         raise AppError("En az 2 karakter yaz.")
     col = await conn.fetchrow("SELECT id FROM collections WHERE id=$1 AND user_id=$2", cid, user["id"])
     if not col:
-        raise NotFound("Defter bulunamadı.")
+        raise NotFound(COL_MISSING)
     docs = await conn.fetch(
-        "SELECT id, title FROM documents WHERE user_id=$1 AND collection_id=$2 AND status='ready'",
+        "SELECT id, title FROM documents d JOIN document_collections l ON l.document_id = d.id WHERE d.user_id=$1 AND l.collection_id=$2 AND status='ready'",
         user["id"], cid)
     if not docs:
         return {"query": q, "groups": [], "total": 0, "mode": mode}
@@ -1082,7 +1213,7 @@ async def search_collection(cid: str, q: str, mode: str = "hybrid",
         top = lst[:6]
         top.sort(key=lambda x: (x["page_number"] or 0))
         groups.append({
-            "document_id": did, "title": titles.get(did, "Belge"),
+            "document_id": did, "title": titles.get(did, "Kaynak"),
             "best": max(x["score"] for x in lst), "count": len(lst),
             "hits": [{"page": x["page_number"], "section": x.get("section_title"),
                       "snippet": _snippet(x["content"], q), "how": x["how"],
@@ -1098,7 +1229,7 @@ async def connections(doc_id: str, page: int, conn=Depends(db), user=Depends(cur
     """Baglanti Kesfi: bu sayfadaki icerigin DIGER belgelerdeki karsiliklarini bulur."""
     doc = await conn.fetchrow("SELECT id FROM documents WHERE id=$1 AND user_id=$2", doc_id, user["id"])
     if not doc:
-        raise NotFound("Belge bulunamadı.")
+        raise NotFound("Kaynak bulunamadı; silinmiş olabilir.")
     src = await conn.fetch(
         """SELECT content, embedding FROM document_chunks
            WHERE document_id=$1 AND page_number=$2 AND embedding IS NOT NULL
@@ -1156,9 +1287,9 @@ async def discover_sources(cid: str, body: DiscoverIn, conn=Depends(db), user=De
     col = await conn.fetchrow("SELECT id, title, suggestions FROM collections WHERE id=$1 AND user_id=$2",
                               cid, user["id"])
     if not col:
-        raise NotFound("Defter bulunamadı.")
+        raise NotFound(COL_MISSING)
     docs = await conn.fetch(
-        "SELECT title, short_summary, source_url FROM documents WHERE user_id=$1 AND collection_id=$2",
+        "SELECT title, short_summary, source_url FROM documents d JOIN document_collections l ON l.document_id = d.id WHERE d.user_id=$1 AND l.collection_id=$2",
         user["id"], cid)
     theme = ""
     try:

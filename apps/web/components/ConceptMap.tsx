@@ -481,7 +481,7 @@ export default function ConceptMap({ nodes, edges, height = 560 }: { nodes: CMNo
                     <div className="flex items-center gap-2 pr-6">
                       <span className="h-2.5 w-2.5 rounded-full" style={{ background: KIND_COLOR[selNode.kind] || KIND_COLOR.kavram }} />
                       <h4 className="font-medium">{selNode.id}</h4>
-                      <span className="text-[10px] uppercase tracking-wide text-text-secondary">{KIND_LABEL[selNode.kind] || selNode.kind}</span>
+                      <span className="text-[11px] uppercase tracking-wide text-text-secondary">{KIND_LABEL[selNode.kind] || selNode.kind}</span>
                     </div>
                     <p className="mt-1.5 text-sm leading-relaxed text-text-secondary">{selNode.definition}</p>
                     <div className="mt-2 flex flex-wrap gap-1">
@@ -516,10 +516,11 @@ export default function ConceptMap({ nodes, edges, height = 560 }: { nodes: CMNo
               </div>
             )}
           </div>
-          <p className="mt-2 text-[11px] text-text-secondary">
-            Bir maddeye çift tıkla: yalnız onu ve komşularını gör · Çizginin üstüne gel: ilişkinin tamamı ·
-            Tıkla: geçtiği cümle ve sayfa · Küçük nokta: yazısı sığmamış ilişki, tıkla
-          </p>
+          <ul className="mt-2 list-disc space-y-0.5 pl-4 text-xs text-text-secondary">
+            <li>Bir maddeye çift tıkla (ya da dokun, sonra “Bunu merkeze al”): yalnız onu ve komşularını gör.</li>
+            <li>Bir çizgiye tıkla ya da dokun: ilişkinin geçtiği cümle ve sayfa açılır.</li>
+            <li>Küçük nokta, yazısı sığmamış bir ilişkidir; tıklayınca görünür. Grafik yerine “Liste” görünümünü de seçebilirsin.</li>
+          </ul>
         </>
       )}
     </div>

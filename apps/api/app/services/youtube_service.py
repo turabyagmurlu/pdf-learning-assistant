@@ -141,8 +141,9 @@ def _gemini_clip(vid: str, start: int | None, end: int | None) -> str:
         raise AppError("Bu video işlenemedi; video gizli, yaş sınırlı ya da bölgeye kapalı olabilir. "
                        "Birkaç dakika sonra 'Yeniden işle' ile tekrar deneyebilirsin.")
     if isinstance(last, _ModelBusy):
-        raise AppError("Yapay zekâ modelleri şu an yoğun; birkaç dakika sonra 'Yeniden işle' ile tekrar dene.")
-    raise AppError("Video işleyebilecek bir yapay zekâ modeli bulunamadı." + (f" ({last})" if last else ""))
+        raise AppError("Video şu an işlenemedi; yapay zekâ yoğun. Birkaç dakika sonra 'Yeniden işle' ile tekrar dene.")
+    raise AppError("Video şu an işlenemedi; birkaç dakika sonra 'Yeniden işle' ile tekrar dene.",
+                   detail=str(last) if last else None)
 
 
 class _ModelGone(Exception):
@@ -185,7 +186,7 @@ def _gemini_clip_model(model: str, vid: str, start: int | None, end: int | None)
                 raise AppError("Video içeriği okunamadı (video gizli, yaş sınırlı ya da bölgeye kapalı olabilir).")
         last = r.text[:300]
         if r.status_code == 429 and "PerDay" in last:
-            raise AppError("Günlük video işleme kotası doldu; yarın 'Yeniden işle' ile devam edebilirsin.")
+            raise AppError("Video işleme bugünlük kapasitesini doldurdu; yarın 'Yeniden işle' ile devam edebilirsin.")
         if r.status_code in (429, 500, 502, 503, 504) and attempt < len(waits):
             time.sleep(waits[attempt]); continue
         if r.status_code == 404:
@@ -198,8 +199,10 @@ def _gemini_clip_model(model: str, vid: str, start: int | None, end: int | None)
             raise _ModelBusy(f"{model}: 400 {last[:120]}")
         if r.status_code in (429, 500, 502, 503, 504):
             raise _ModelBusy(f"{model}: {r.status_code}")
-        raise AppError(f"Video işlenemedi ({r.status_code}); biraz sonra tekrar dene.")
-    raise AppError("Video işlenemedi: " + last[:120])
+        raise AppError("Video şu an işlenemedi; birkaç dakika sonra 'Yeniden işle' ile tekrar dene.",
+                       detail=f"{model} {r.status_code}: {last[:200]}")
+    raise AppError("Video şu an işlenemedi; birkaç dakika sonra 'Yeniden işle' ile tekrar dene.",
+                   detail=last[:200])
 
 
 def _gemini_transcript(vid: str, duration: int | None, progress=None) -> list[dict]:

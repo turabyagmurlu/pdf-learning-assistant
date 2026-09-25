@@ -67,7 +67,7 @@ def _upload(data: bytes, mime: str, name: str) -> dict:
         "Content-Type": "application/json"}, json={"file": {"display_name": name}})
     url = r.headers.get("x-goog-upload-url")
     if not url:
-        raise AppError("Ses dosyası yapay zekâya yüklenemedi.")
+        raise AppError("Ses kaydı şu an işlenemedi; biraz sonra 'Yeniden işle' ile tekrar dene.")
     r = httpx.post(url, content=data, timeout=300, headers={
         "Content-Length": str(len(data)), "X-Goog-Upload-Offset": "0", "X-Goog-Upload-Command": "upload, finalize"})
     f = (r.json() or {}).get("file") or {}
@@ -77,7 +77,7 @@ def _upload(data: bytes, mime: str, name: str) -> dict:
         time.sleep(2)
         f = httpx.get(f"{BASE}/v1beta/{f['name']}?key={key}", timeout=20).json()
     if f.get("state") == "FAILED":
-        raise AppError("Ses dosyası işlenemedi.")
+        raise AppError("Ses kaydı şu an işlenemedi; biraz sonra 'Yeniden işle' ile tekrar dene.")
     return f
 
 
@@ -119,8 +119,9 @@ def _transcribe(seg: bytes, idx: int) -> str:
                     usage.mark_limited(m, "PerDay" in r.text)
             time.sleep(15 * (attempt + 1))
         if "PerDay" in last:
-            raise AppError("Günlük yapay zekâ kotası doldu; kayıt yarın 'Yeniden işle' ile dökülebilir.")
-        raise AppError("Kayıt şu an dökülemedi (model yoğun); biraz sonra 'Yeniden işle' dene.")
+            raise AppError("Yapay zekâ bugünlük kapasitesini doldurdu; kayıt yarın 'Yeniden işle' ile yazıya dökülebilir.")
+        raise AppError("Kayıt şu an yazıya dökülemedi; yapay zekâ yoğun. Biraz sonra 'Yeniden işle' ile tekrar dene.",
+                       detail=last[:200])
     finally:
         _delete(f)
 

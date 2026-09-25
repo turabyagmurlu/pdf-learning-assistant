@@ -15,7 +15,7 @@ PREFIX = "backups/"
 KEEP = 8
 EVERY = timedelta(days=7)
 # yedeklenecek tablolar (varsa)
-TABLES = ["users", "collections", "documents", "notes", "chat_sessions", "chat_messages",
+TABLES = ["users", "collections", "documents", "document_collections", "notes", "chat_sessions", "chat_messages",
           "collection_chats", "collection_messages", "doc_extracts", "study_items"]
 
 
@@ -51,6 +51,9 @@ async def _dump(conn, where_user: str | None = None) -> dict:
                 q = f'SELECT {sel} FROM chat_messages WHERE session_id IN (SELECT id FROM chat_sessions WHERE user_id=$1)'
             elif t == "collection_messages":
                 q = f'SELECT {sel} FROM collection_messages WHERE chat_id IN (SELECT id FROM collection_chats WHERE user_id=$1)'
+            elif t == "document_collections":
+                q = (f'SELECT {sel} FROM document_collections WHERE collection_id IN '
+                     f'(SELECT id FROM collections WHERE user_id=$1)')
             elif t == "doc_extracts":
                 q = f'SELECT {sel} FROM doc_extracts WHERE document_id IN (SELECT id FROM documents WHERE user_id=$1)'
             else:

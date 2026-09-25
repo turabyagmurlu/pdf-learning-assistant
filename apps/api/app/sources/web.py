@@ -24,7 +24,7 @@ def _safe_host(url: str):
     for info in infos:
         ip = ipaddress.ip_address(info[4][0])
         if ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_reserved or ip.is_multicast:
-            raise AppError("Bu adres eklenemez.")
+            raise AppError("Bu adres güvenlik nedeniyle eklenemiyor; herkese açık bir web sayfası dene.")
 
 
 def fetch(url: str) -> dict:
@@ -41,9 +41,9 @@ def fetch(url: str) -> dict:
                 if r.status_code in (401, 403):
                     raise AppError("Site bu sayfaya erişime izin vermiyor (giriş/abonelik gerekiyor olabilir).")
                 if r.status_code == 404:
-                    raise AppError("Sayfa bulunamadı (404).")
+                    raise AppError("Sayfa bulunamadı; adresi kontrol et.")
                 if r.status_code >= 400:
-                    raise AppError(f"Sayfa açılamadı ({r.status_code}).")
+                    raise AppError("Sayfa şu an açılamadı; adresi kontrol et ya da biraz sonra tekrar dene.")
                 buf = bytearray()
                 for chunk in r.iter_bytes():
                     buf += chunk

@@ -20,14 +20,14 @@ export default function DocumentError({ error, reset }: { error: Error & { diges
   }
 
   return (
-    <div className="flex h-screen flex-col items-center justify-center gap-4 p-8 text-center">
+    <div className="flex h-dvh flex-col items-center justify-center gap-4 p-8 text-center">
       <div className="max-w-sm">
-        <h2 className="font-heading text-xl">Görüntüleyici hazırlanıyor…</h2>
-        <p className="mt-2 text-sm text-text-secondary">PDF motoru bazen ilk açılışta biraz gecikir. Otomatik olarak yeniden deniyorum; olmazsa aşağıdan tekrar dene.</p>
+        <h2 className="font-heading text-xl" role="status">Görüntüleyici hazırlanıyor…</h2>
+        <p className="mt-2 text-sm text-text-secondary">Belge görüntüleyici ilk açılışta biraz gecikebilir. Otomatik olarak yeniden deniyorum; olmazsa aşağıdan tekrar dene.</p>
       </div>
       <div className="flex gap-2">
-        <button onClick={manual} className="rounded-lg bg-accent-purple px-4 py-2 text-sm text-white">Tekrar dene</button>
-        <a href="/library" className="rounded-lg border px-4 py-2 text-sm text-text-secondary">Kütüphaneye dön</a>
+        <button type="button" onClick={manual} className="min-h-[44px] rounded-lg bg-accent-purple px-4 text-sm text-white">Tekrar dene</button>
+        <a href="/library" className="flex min-h-[44px] items-center rounded-lg border px-4 text-sm text-text-secondary">Kütüphane'ye dön</a>
       </div>
     </div>
   );

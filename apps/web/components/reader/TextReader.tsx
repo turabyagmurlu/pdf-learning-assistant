@@ -6,11 +6,14 @@
  */
 import { useEffect, useRef, useState } from "react";
 import { api } from "@/lib/api";
+import { usePoll } from "@/hooks/usePoll";
 import { ChatPanel } from "@/components/chat/ChatPanel";
+import ReaderHeader, { useNotebookContext, notebookHref, useMedia } from "@/components/reader/ReaderHeader";
+import Modal from "@/components/Modal";
 import SourceIcon from "@/components/SourceIcon";
 import { KIND_LABEL } from "@/lib/sources";
 import { stageInfo } from "@/lib/docstage";
-import { ExternalLink, Loader2, Search } from "lucide-react";
+import { ExternalLink, Loader2, Search, ListTree, MessageSquare } from "lucide-react";
 
 type Page = { page_number: number; title?: string | null; text: string;
   table?: { header: string[]; rows: string[][]; first_row: number } };
@@ -47,25 +50,27 @@ export default function TextReader({ id, doc }: { id: string; doc: any }) {
   const [q, setQ] = useState("");
   const box = useRef<HTMLDivElement>(null);
   const unit = UNIT[kind] || "Bölüm";
+  const plural = unit === "Slayt" ? "Slaytlar" : unit === "Tablo" ? "Tablolar" : "Bölümler";
+  const ctx = useNotebookContext(doc);
+  const isLg = useMedia("(min-width: 1024px)");
+  const isXl = useMedia("(min-width: 1280px)");
+  const [tocOpen, setTocOpen] = useState(false);
+  const [chatOpen, setChatOpen] = useState(false);
 
-  useEffect(() => {
-    let alive = true, t: any;
-    async function load() {
-      try {
-        const r = await api(`/documents/${id}/content`);
-        if (!alive) return;
-        if (r.ready) setPages(r.pages || []);
-        else t = setTimeout(load, 4000);
-      } catch { if (alive) t = setTimeout(load, 8000); }
-    }
-    load();
-    return () => { alive = false; clearTimeout(t); };
-  }, [id, doc.status]);
+  // icerik: hazir olana kadar yokla (sekme gizliyken / cevrimdisiyken durur)
+  async function loadContent(): Promise<boolean> {
+    const r = await api(`/documents/${id}/content`, {}, 1);
+    if (r.ready) { setPages(r.pages || []); return true; }
+    return false;
+  }
+  useEffect(() => { setPages(null); loadContent().catch(() => {}); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [id, doc.status]);
+  usePoll(loadContent, { active: pages === null && doc.status !== "failed", base: 4000, max: 15000 });
 
   function go(n: number, smooth = true) {
     setActive(n);
     const el = box.current?.querySelector(`[data-page="${n}"]`) as HTMLElement | null;
-    if (el && box.current) box.current.scrollTo({ top: el.offsetTop - 8, behavior: smooth ? "smooth" : "auto" });
+    const reduce = typeof window !== "undefined" && window.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
+    if (el && box.current) box.current.scrollTo({ top: el.offsetTop - 8, behavior: smooth && !reduce ? "smooth" : "auto" });
   }
   // ?page=N (atif / arama tiklamasi)
   useEffect(() => {
@@ -87,10 +92,34 @@ export default function TextReader({ id, doc }: { id: string; doc: any }) {
   const view = (pages || []).filter((p) => !needle || p.text.toLowerCase().includes(needle));
   const st = stageInfo(doc);
 
+  const sectionList = (
+    <nav aria-label={`${unit} listesi`} className="min-h-0 flex-1 overflow-y-auto p-2">
+      {(pages || []).map((p) => (
+        <button key={p.page_number} type="button" onClick={() => { go(p.page_number); setTocOpen(false); }}
+                aria-current={p.page_number === active ? "location" : undefined}
+                className={"flex min-h-[40px] w-full items-start gap-2 rounded-lg px-2 py-1.5 text-left text-sm " +
+                  (p.page_number === active ? "bg-accent-purple/10 font-medium text-text-primary" : "text-text-secondary hover:bg-surface-muted")}>
+          <span className="w-6 shrink-0 text-right text-xs opacity-80">{p.page_number}</span>
+          <span className="line-clamp-2">{p.title || p.text.slice(0, 60)}</span>
+        </button>
+      ))}
+      {pages !== null && !pages.length && <p className="p-2 text-sm text-text-secondary">Bölüm yok.</p>}
+    </nav>
+  );
+
   return (
-    <div className="flex h-screen flex-col lg:flex-row">
+    <div className="flex h-dvh flex-col">
+    <ReaderHeader doc={doc} ctx={ctx}>
+      {!isXl && (
+        <button type="button" onClick={() => setTocOpen(true)} aria-haspopup="dialog"
+                className="flex h-11 shrink-0 items-center gap-1.5 rounded-lg px-2.5 text-sm text-text-secondary hover:bg-surface-muted">
+          <ListTree size={18} aria-hidden /> <span className="hidden sm:inline">{plural}</span><span className="sr-only sm:hidden">{plural}</span>
+        </button>
+      )}
+    </ReaderHeader>
+    <div className="flex min-h-0 flex-1 flex-col lg:flex-row">
       {/* sol: bolumler */}
-      <aside className="hidden w-72 shrink-0 flex-col border-r bg-surface xl:flex">
+      <aside className="hidden w-72 shrink-0 flex-col border-r bg-surface xl:flex" aria-label="Kaynak bilgisi ve bölümler">
         <div className="border-b p-4">
           <div className="flex items-center gap-2 text-xs text-text-secondary">
             <SourceIcon kind={kind} size={14} /> {KIND_LABEL[kind] || "Kaynak"}
@@ -107,43 +136,42 @@ export default function TextReader({ id, doc }: { id: string; doc: any }) {
           )}
           {doc.short_summary && <p className="mt-3 text-sm leading-relaxed text-text-secondary">{doc.short_summary}</p>}
         </div>
-        <nav className="min-h-0 flex-1 overflow-y-auto p-2">
-          {(pages || []).map((p) => (
-            <button key={p.page_number} onClick={() => go(p.page_number)}
-                    className={"flex w-full items-start gap-2 rounded-lg px-2 py-1.5 text-left text-sm " +
-                      (p.page_number === active ? "bg-accent-purple/10 text-accent-purple" : "text-text-secondary hover:bg-surface-muted")}>
-              <span className="w-6 shrink-0 text-right text-[11px] opacity-70">{p.page_number}</span>
-              <span className="line-clamp-2">{p.title || p.text.slice(0, 60)}</span>
-            </button>
-          ))}
-        </nav>
+        {isXl && sectionList}
       </aside>
 
       {/* orta: icerik */}
-      <main className="flex min-h-0 min-w-0 flex-1 flex-col">
-        <div className="flex shrink-0 items-center gap-2 border-b px-4 py-2">
-          <SourceIcon kind={kind} size={16} className="xl:hidden" />
-          <h3 className="truncate text-sm font-medium xl:hidden">{doc.title}</h3>
-          <div className="ml-auto flex items-center gap-1.5 rounded-lg border bg-surface px-2 py-1">
-            <Search size={14} className="text-text-secondary" />
-            <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Bu kaynakta ara…"
-                   className="w-40 bg-transparent text-sm outline-none" />
-          </div>
+      <section aria-label="Kaynak metni" className="flex min-h-0 min-w-0 flex-1 flex-col">
+        <div className="flex shrink-0 items-center gap-2 border-b px-3 py-1.5 sm:px-4">
+          <span className="flex min-w-0 items-center gap-1.5 text-xs text-text-secondary xl:hidden">
+            <SourceIcon kind={kind} size={14} /> <span className="truncate">{KIND_LABEL[kind] || "Kaynak"}</span>
+          </span>
+          {doc.source_url && (
+            <a href={doc.source_url} target="_blank" rel="noreferrer"
+               className="flex min-h-[40px] shrink-0 items-center gap-1 text-xs text-accent-purple hover:underline xl:hidden">
+              Orijinali <ExternalLink size={12} aria-hidden /><span className="sr-only"> (yeni sekmede açılır)</span>
+            </a>
+          )}
+          <label className="ml-auto flex min-h-[40px] min-w-0 items-center gap-1.5 rounded-lg border bg-surface px-2">
+            <Search size={14} className="shrink-0 text-text-secondary" aria-hidden />
+            <span className="sr-only">Bu kaynakta ara</span>
+            <input type="search" value={q} onChange={(e) => setQ(e.target.value)} placeholder="Bu kaynakta ara…"
+                   className="w-32 min-w-0 bg-transparent text-sm outline-none sm:w-40" />
+          </label>
         </div>
         <div ref={box} onScroll={onScroll} className="relative min-h-0 flex-1 overflow-y-auto">
           <div className="mx-auto max-w-3xl px-5 py-6">
             {pages === null ? (
               <div className="flex items-center gap-2 text-sm text-text-secondary">
-                {doc.status === "failed" ? <span className="text-red-600">⚠️ {doc.error_message}</span>
-                  : <><Loader2 size={16} className="animate-spin" /> Hazırlanıyor · {st.label}</>}
+                {doc.status === "failed" ? <span className="text-red-700 dark:text-red-300">⚠️ {doc.error_message || "Bu kaynak işlenemedi."}</span>
+                  : <span role="status" className="flex items-center gap-2"><Loader2 size={16} className="animate-spin" aria-hidden /> Hazırlanıyor · {st.label}</span>}
               </div>
             ) : !view.length ? (
-              <p className="text-sm text-text-secondary">{needle ? "Eşleşme yok." : "İçerik boş."}</p>
+              <p className="text-sm text-text-secondary">{needle ? "Eşleşme yok. Farklı bir kelime dene." : "Bu kaynaktan metin çıkarılamadı. Kaynağı Kütüphane'den yeniden işlemeyi dene."}</p>
             ) : view.map((p) => (
               <section key={p.page_number} data-page={p.page_number}
                        className={"mb-6 scroll-mt-4 rounded-2xl border p-5 transition " +
                          (p.page_number === active ? "border-accent-purple/40 bg-accent-purple/[0.03]" : "bg-surface")}>
-                <p className="mb-2 text-[11px] font-semibold uppercase tracking-wide text-text-secondary">
+                <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-text-secondary">
                   {unit} {p.page_number}{p.title ? " · " : ""}<span className="normal-case">{p.title}</span>
                 </p>
                 {p.table ? (
@@ -151,14 +179,14 @@ export default function TextReader({ id, doc }: { id: string; doc: any }) {
                     <table className="w-full border-collapse text-sm">
                       <thead>
                         <tr>
-                          <th className="border-b px-2 py-1.5 text-left text-[11px] font-medium text-text-secondary">#</th>
+                          <th className="border-b px-2 py-1.5 text-left text-xs font-medium text-text-secondary">#</th>
                           {p.table.header.map((h, i) => <th key={i} className="border-b px-2 py-1.5 text-left font-medium">{h}</th>)}
                         </tr>
                       </thead>
                       <tbody>
                         {p.table.rows.filter((r) => !needle || r.join(" ").toLowerCase().includes(needle)).map((r, i) => (
                           <tr key={i} className="odd:bg-surface-muted/40">
-                            <td className="px-2 py-1 text-[11px] text-text-secondary">{p.table!.first_row + p.table!.rows.indexOf(r)}</td>
+                            <td className="px-2 py-1 text-xs text-text-secondary">{p.table!.first_row + p.table!.rows.indexOf(r)}</td>
                             {r.map((c, j) => <td key={j} className="px-2 py-1 align-top">{c}</td>)}
                           </tr>
                         ))}
@@ -172,14 +200,41 @@ export default function TextReader({ id, doc }: { id: string; doc: any }) {
             ))}
           </div>
         </div>
-      </main>
+      </section>
 
-      {/* sag: sohbet */}
-      <aside className="flex h-[45vh] shrink-0 flex-col border-t bg-surface lg:h-auto lg:w-[400px] lg:border-l lg:border-t-0">
-        <div className="min-h-0 flex-1">
-          <ChatPanel documentId={id} onGoPage={(n) => go(n)} generic />
+      {/* sag: sohbet (genis ekran) */}
+      {isLg && (
+        <aside className="flex w-[400px] shrink-0 flex-col border-l bg-surface" aria-label="Bu kaynağa sor">
+          <div className="min-h-0 flex-1">
+            <ChatPanel documentId={id} onGoPage={(n) => go(n)} generic notebookHref={ctx.id ? notebookHref(ctx) : null} />
+          </div>
+        </aside>
+      )}
+    </div>
+
+    {/* dar ekran: sohbet alttan acilan tabakada */}
+    {!isLg && (
+      <div className="shrink-0 border-t bg-surface px-3 pt-2" style={{ paddingBottom: "max(0.5rem, env(safe-area-inset-bottom))" }}>
+        <button type="button" onClick={() => setChatOpen(true)} aria-haspopup="dialog"
+                className="flex min-h-[48px] w-full items-center justify-center gap-2 rounded-xl bg-accent-purple px-4 text-sm font-medium text-white">
+          <MessageSquare size={17} aria-hidden /> Bu kaynağa sor
+        </button>
+      </div>
+    )}
+    {!isLg && (
+      <Modal open={chatOpen} onClose={() => setChatOpen(false)} ariaLabel="Bu kaynağa sor" size="lg" className="h-[85dvh] p-0">
+        <div className="flex min-h-0 flex-1 flex-col">
+          <ChatPanel documentId={id} onGoPage={(n) => { setChatOpen(false); go(n); }} generic notebookHref={ctx.id ? notebookHref(ctx) : null}
+                     onClose={() => setChatOpen(false)} />
         </div>
-      </aside>
+      </Modal>
+    )}
+    {!isXl && (
+      <Modal open={tocOpen} onClose={() => setTocOpen(false)} title={plural} size="md" className="p-4">
+        {doc.short_summary && <p className="mb-3 text-sm leading-relaxed text-text-secondary">{doc.short_summary}</p>}
+        {sectionList}
+      </Modal>
+    )}
     </div>
   );
 }
