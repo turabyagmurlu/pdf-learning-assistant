@@ -19,6 +19,8 @@ export default function manifest(): MetadataRoute.Manifest {
       { src: "/apple-icon", sizes: "180x180", type: "image/png" },
     ],
     // Android: baska uygulamadan "Paylaş → TY PDF" (PDF, gorsel, link ya da metin) → /share (T-6)
+    // Next'in manifest tipi Web App Manifest standardiyla birebir degil (params'i dizi sanir);
+    // tarayicinin okudugu JSON standarda uygun kalsin diye tipi burada gevsetiyoruz.
     share_target: {
       action: "/share",
       method: "POST",
@@ -31,7 +33,7 @@ export default function manifest(): MetadataRoute.Manifest {
           { name: "files", accept: ["application/pdf", ".pdf", "image/*"] },
         ],
       },
-    },
+    } as unknown as MetadataRoute.Manifest["share_target"],
     shortcuts: [
       { name: "Defterler", url: "/notebooks" },
       { name: "Kütüphane", url: "/library" },
