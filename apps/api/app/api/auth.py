@@ -207,8 +207,20 @@ class DeleteMeIn(BaseModel):
 
 
 # ---------------------------------------------------------------- uclar
+@router.get("/config")
+async def auth_config():
+    """Giris ekrani icin: yeni kayit acik mi?"""
+    from app.config import settings as _s
+    return {"registration_open": bool(_s.allow_registration)}
+
+
 @router.post("/register")
 async def register(body: RegisterIn, request: Request, conn=Depends(db)):
+    from app.config import settings as _s
+    if not _s.allow_registration:
+        err = AppError("Yeni kayıtlar şu an kapalı. Hesabın varsa giriş yapabilirsin.")
+        err.code, err.status = "REGISTRATION_CLOSED", 403
+        raise err
     email = _email(body.email)
     rate_limit("register", request, email)
     name = (body.name or "").strip()[:80]

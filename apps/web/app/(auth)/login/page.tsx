@@ -23,10 +23,13 @@ export default function LoginPage() {
   const [waking, setWaking] = useState(false);     // ön-ısıtma 4 sn'den uzun sürdü
   const [slowSubmit, setSlowSubmit] = useState(false);
   const slowTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const [regOpen, setRegOpen] = useState(false);
 
   useEffect(() => {
     const q = new URLSearchParams(window.location.search);
-    if (q.get("mode") === "register") setMode("register");
+    fetch(`${API}/auth/config`, { cache: "no-store" }).then((r) => r.json())
+      .then((c) => { setRegOpen(!!c?.registration_open); if (c?.registration_open && q.get("mode") === "register") setMode("register"); })
+      .catch(() => {});
     if (q.get("expired")) setInfo("Oturumun kapandı; kaldığın yere dönmek için tekrar giriş yap.");
     if (q.get("reset")) setInfo("Şifren güncellendi. Yeni şifrenle giriş yapabilirsin.");
     if (q.get("deleted")) setInfo("Hesabın ve tüm verilerin silindi.");
@@ -167,10 +170,14 @@ export default function LoginPage() {
             {mode === "login" ? (
               <>
                 <a href="/forgot" className="inline-flex min-h-[44px] items-center text-text-secondary hover:text-text-primary">Şifremi unuttum</a>
-                <button type="button" onClick={() => switchMode("register")}
-                        className="inline-flex min-h-[44px] items-center text-text-secondary hover:text-text-primary">
-                  Hesabın yok mu?&nbsp;<span className="font-medium text-text-primary underline underline-offset-2">Ücretsiz kayıt ol</span>
-                </button>
+                {regOpen ? (
+                  <button type="button" onClick={() => switchMode("register")}
+                          className="inline-flex min-h-[44px] items-center text-text-secondary hover:text-text-primary">
+                    Hesabın yok mu?&nbsp;<span className="font-medium text-text-primary underline underline-offset-2">Ücretsiz kayıt ol</span>
+                  </button>
+                ) : (
+                  <span className="inline-flex min-h-[44px] items-center text-text-secondary">Yeni kayıtlar şu an kapalı</span>
+                )}
               </>
             ) : (
               <>

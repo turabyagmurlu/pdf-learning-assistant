@@ -56,6 +56,8 @@ class Settings(BaseSettings):
     user_daily_ai_limit: int = 60
     # Sahip hesap(lar)in id'si (virgulle). Bossa ilk kayit olan hesap sahip sayilir.
     owner_user_ids: str = ""
+    # Yeni kayitlar acik mi? Kapaliyken yalniz mevcut hesaplar giris yapabilir (env: ALLOW_REGISTRATION=true ile acilir).
+    allow_registration: bool = False
     cors_origins: str = "http://localhost:3000"
 
     @property
