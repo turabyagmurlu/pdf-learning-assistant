@@ -6,7 +6,7 @@ from app.config import settings
 from app.core.errors import AppError
 from app.db.session import close_pool
 from app.storage.object_store import ensure_bucket
-from app.api import auth, documents, chat, notes, study, collections, research
+from app.api import auth, documents, chat, notes, study, collections, research, drafts
 from app.deps import current_user
 
 
@@ -36,6 +36,8 @@ async def lifespan(app: FastAPI):
             await conn.execute("ALTER TABLE collections ADD COLUMN IF NOT EXISTS concept_map_at timestamptz")
             await conn.execute("ALTER TABLE collections ADD COLUMN IF NOT EXISTS draft text")
             await conn.execute("ALTER TABLE collections ADD COLUMN IF NOT EXISTS draft_at timestamptz")
+            # Taslak surumu: her yazimda +1 (okuyucudan eklenen bloklar acik taslak sayfasinda ezilmesin)
+            await conn.execute("ALTER TABLE collections ADD COLUMN IF NOT EXISTS draft_rev int NOT NULL DEFAULT 0")
             await conn.execute("ALTER TABLE collections ADD COLUMN IF NOT EXISTS lecture text")
             await conn.execute("ALTER TABLE collections ADD COLUMN IF NOT EXISTS lecture_at timestamptz")
             # Sohbet soru onerileri (kaynak kumesi degismedikce onbellekten)
@@ -380,3 +382,4 @@ app.include_router(notes.router)
 app.include_router(study.router)
 app.include_router(collections.router)
 app.include_router(research.router)
+app.include_router(drafts.router)

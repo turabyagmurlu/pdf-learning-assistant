@@ -672,9 +672,10 @@ function CollectionPage({ id }: { id: string }) {
 
         {tab === "taslak" && (
           <DraftEditor notebookId={id} title={col.title} initial={col.draft}
+                       initialRev={typeof col.draft_rev === "number" ? col.draft_rev : null}
                        material={material} onReloadMaterial={loadMaterial}
                        inbox={inbox} onInboxConsumed={() => setInbox([])}
-                       onSaved={(ser) => setData((d: any) => d ? { ...d, collection: { ...d.collection, draft: ser } } : d)} />
+                       onSaved={(ser, rev) => setData((d: any) => d ? { ...d, collection: { ...d.collection, draft: ser, ...(typeof rev === "number" ? { draft_rev: rev } : {}) } } : d)} />
         )}
 
         {tab === "kaynakca" && <Bibliography notebookId={id} />}

@@ -2,8 +2,9 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { api, API, getToken } from "@/lib/api";
-import { ArrowUp, ArrowDown, X, Plus, ExternalLink, Sparkles, Quote, RefreshCw, Heading2, Wand2, Loader2, Check, ShieldCheck } from "lucide-react";
+import { ArrowUp, ArrowDown, X, Plus, ExternalLink, Sparkles, Quote, RefreshCw, Heading2, Wand2, Loader2, Check, ShieldCheck, Copy, AlertTriangle } from "lucide-react";
 import { Cost, costTitle, isUsageLimit } from "@/components/CostBadge";
+import { toast } from "@/components/Toast";
 
 /* ---------- blok modeli ---------- */
 export type Block =
@@ -49,24 +50,71 @@ export function toWordHtml(title: string, blocks: Block[]) {
   }).join("\n");
   return `<html xmlns:o="urn:schemas-microsoft-com:office:office" xmlns:w="urn:schemas-microsoft-com:office:word"><head><meta charset="utf-8"><title>${esc(title)}</title><style>body{font-family:Georgia,serif;font-size:12pt;line-height:1.5}h1{font-size:20pt}h2{font-size:15pt}</style></head><body><h1>${esc(title)}</h1>${body}</body></html>`;
 }
+/**
+ * Sunucudaki taslakla birlestirme (3 yollu, blok kimligine gore):
+ * sunucuda olup yerelde OLMAYAN ve son esitlenen surumde de (base) OLMAYAN bloklar
+ * baska yerden eklenmistir (okuyucudan "Taslağa ekle", baska sekme) -> yerel taslagin SONUNA eklenir.
+ * Yerelde silinen bloklar (base'de var, yerelde yok) geri gelmez. Ayni metinli blok tekrar eklenmez
+ * (eski duz metin taslaklarda kimlikler her okumada degisir).
+ */
+export function mergeRemote(local: Block[], remote: Block[], base: Set<string>): { blocks: Block[]; added: number } {
+  const ids = new Set(local.map((b) => b.id));
+  const sig = (b: Block) => b.type + "|" + ((b as { text?: string }).text || "").trim();
+  const sigs = new Set(local.map(sig));
+  const extra = remote.filter((b) => !ids.has(b.id) && !base.has(b.id) && !sigs.has(sig(b))
+    && !(b.type === "p" && !b.text.trim()));
+  if (!extra.length) return { blocks: local, added: 0 };
+  const next = [...local];
+  while (next.length && next[next.length - 1].type === "p" && !(next[next.length - 1] as { text: string }).text.trim()) next.pop();
+  next.push(...extra, { id: uid(), type: "p", text: "" });
+  return { blocks: next, added: extra.length };
+}
+
+/** "%35'i", "%20'si", "%40'ı" gibi Turkce iyelik eki. */
+function pctPoss(n: number) {
+  const last = n % 10;
+  const ONES = ["", "i", "si", "ü", "ü", "i", "sı", "si", "i", "u"];
+  if (n === 0) return "ı";
+  if (n === 100) return "ü";
+  if (last) return ONES[last];
+  const TENS: Record<number, string> = { 1: "u", 2: "si", 3: "u", 4: "ı", 5: "si", 6: "ı", 7: "i", 8: "i", 9: "ı" };
+  return TENS[Math.floor(n / 10) % 10] || "i";
+}
+const wordCount = (t: string) => t.trim().split(/\s+/).filter(Boolean).length;
+
 export function ownWords(blocks: Block[]) {
   return blocks.filter((b) => b.type === "p" || b.type === "h").map((b: any) => b.text.trim()).filter(Boolean).join(" ").split(/\s+/).filter(Boolean).length;
 }
 
 /* ---------- editor ---------- */
-export default function DraftEditor({ notebookId, title, initial, material, onReloadMaterial, inbox, onInboxConsumed, onSaved }: {
+export default function DraftEditor({ notebookId, title, initial, initialRev, material, onReloadMaterial, inbox, onInboxConsumed, onSaved }: {
   notebookId: string; title: string; initial: string | null | undefined;
+  /** collections.draft_rev: sunucudaki taslak surumu (yoksa kosulsuz kayit — eski API) */
+  initialRev?: number | null;
   material: any[] | null; onReloadMaterial: () => void;
   inbox: Block[]; onInboxConsumed: () => void;
-  onSaved?: (serialized: string) => void;
+  onSaved?: (serialized: string, rev?: number) => void;
 }) {
   const router = useRouter();
   // Kaydedilemeden kalan son surum cihazda yedeklenir; geri gelince oradan devam edilir (veri kaybi olmasin).
   const BACKUP_KEY = "draft.pending." + notebookId;
+  const BASE_KEY = "draft.base." + notebookId;          // yedegin dayandigi sunucu bloklari (birlestirme icin)
   const [restored] = useState<string | null>(() => {
     try { const b = localStorage.getItem(BACKUP_KEY); return b && b !== (initial || "") ? b : null; } catch { return null; }
   });
-  const [blocks, setBlocks] = useState<Block[]>(() => parseDraft(restored ?? initial));
+  const [blocks, setBlocks] = useState<Block[]>(() => {
+    if (!restored) return parseDraft(initial);
+    // Yedek geri yuklenirken sunucuya bu arada eklenmis bloklar (okuyucudan "Taslağa ekle") kaybolmasin
+    const local = parseDraft(restored);
+    let base: string[] | null = null;
+    try { base = JSON.parse(localStorage.getItem(BASE_KEY) || "null"); } catch {}
+    return mergeRemote(local, parseDraft(initial), new Set(Array.isArray(base) ? base : local.map((b) => b.id))).blocks;
+  });
+  // Eszamanlilik: sunucudaki surum (draft_rev) ve o surumun blok kimlikleri. Kayit bu surume
+  // kosullu gider; arada baska yerden yazildiysa sunucu yazmaz, guncel taslagi dondurur -> birlestirilir.
+  const rev = useRef<number>(typeof initialRev === "number" ? initialRev : -1);
+  const baseIds = useRef<Set<string>>(new Set(parseDraft(initial).map((b) => b.id)));
+  const skipSave = useRef(false);                        // sunucudan gelen tazeleme kayit tetiklemesin
   const [focusIdx, setFocusIdx] = useState<number>(-1);
   const [status, setStatus] = useState<"idle" | "saving" | "saved" | "error">("idle");
   const [savedAt, setSavedAt] = useState<Date | null>(null);
@@ -158,6 +206,60 @@ export default function DraftEditor({ notebookId, title, initial, material, onRe
       page: r.evidence.page ?? null, document_id: r.evidence.document_id, note: undefined, color: "#16a34a" } as Block);
   }
 
+  // Benzerlik (intihal) kontrolu: yapay zekasiz, ucretsiz. Kendi paragraflarinin kaynaklardaki
+  // cumlelerle ne kadar ayni oldugunu olcer (Kaynaklarla doğrula ise iddianin desteklenip desteklenmedigine bakar).
+  type SRes = { id: string; level: "yuksek" | "orta"; score: number; longest: number; match: string;
+    source: { document_id: string; title: string; page: number | null; source_type?: string } };
+  const [sim, setSim] = useState<{ busy: boolean; open: boolean; results?: SRes[]; quoted?: string[]; checked?: number;
+    note?: string; error?: string; snap?: Record<string, string> } | null>(null);
+  const [simHidden, setSimHidden] = useState<Set<string>>(new Set());
+  const simCandidates = () => blocks.filter((b) => b.type === "p" && wordCount(b.text) >= 12).slice(0, 60)
+    .map((b) => ({ id: b.id, text: (b as { text: string }).text }));
+  async function runSimilarity() {
+    const paragraphs = simCandidates();
+    if (!paragraphs.length) { setSim({ busy: false, open: true, error: "Kontrol edilecek paragraf yok. En az 12 kelimelik kendi paragrafların kontrol edilir." }); return; }
+    setSim({ busy: true, open: true }); setSimHidden(new Set());
+    try {
+      const r = await api(`/collections/${notebookId}/similarity`, { method: "POST", body: JSON.stringify({ paragraphs }) }, 1);
+      setSim({ busy: false, open: true, results: r.results || [], quoted: r.quoted || [], checked: r.checked ?? paragraphs.length, note: r.note,
+        snap: Object.fromEntries(paragraphs.map((x) => [x.id, x.text])) });
+    } catch (e: any) { setSim({ busy: false, open: true, error: e?.message || "Benzerlik kontrolü yapılamadı; birazdan tekrar dene." }); }
+  }
+  // Etkin isaretler: yoksayilmamis ve paragrafi kontrolden sonra degismemis olanlar
+  const simById = useMemo(() => {
+    const m: Record<string, SRes> = {};
+    for (const r of sim?.results || []) {
+      if (simHidden.has(r.id)) continue;
+      const b = blocks.find((x) => x.id === r.id);
+      if (b && b.type === "p" && sim?.snap?.[r.id] === b.text) m[r.id] = r;
+    }
+    return m;
+  }, [sim, simHidden, blocks]);
+  const simActive = Object.values(simById);
+  const simHigh = simActive.filter((r) => r.level === "yuksek").length;
+  const simMid = simActive.length - simHigh;
+  function hideSim(id: string) { setSimHidden((h) => new Set(h).add(id)); }
+  function toQuote(idx: number, r: SRes) {
+    const b = blocks[idx];
+    if (!b || b.type !== "p") return;
+    const text = b.text.trim().replace(/^["“«„]+\s*/, "").replace(/\s*["”»]+$/, "").replace(/\s+/g, " ");
+    const n = [...blocks];
+    n[idx] = { id: b.id, type: "quote", text, source: r.source.title, page: r.source.page ?? null, document_id: r.source.document_id, color: "#E0A233" };
+    if (idx + 1 >= n.length || n[idx + 1].type !== "p") n.splice(idx + 1, 0, { id: uid(), type: "p", text: "" });
+    update(n); hideSim(r.id);
+    setFlash("Alıntıya çevrildi"); setTimeout(() => setFlash(""), 1500);
+  }
+  function jumpTo(id: string) {
+    const i = blocks.findIndex((b) => b.id === id);
+    if (i < 0) return;
+    setFocusIdx(i);
+    document.getElementById("blk-" + id)?.scrollIntoView({ block: "center", behavior: "smooth" });
+  }
+  const SMETA = {
+    yuksek: { t: "Yüksek benzerlik", card: "border-red-600/40 bg-red-500/5", bar: "bg-red-500", ink: "text-red-800 dark:text-red-300" },
+    orta: { t: "Orta benzerlik", card: "border-orange-500/40 bg-orange-500/5", bar: "bg-orange-400", ink: "text-orange-800 dark:text-orange-300" },
+  } as const;
+
   // otomatik kayit: 1 sn bekler; sekme degisince/bilesen kalkinca bekleyen kayit IPTAL EDILMEZ, hemen gonderilir.
   function persist(v: number): Promise<boolean> {
     const prev = inflight.current;
@@ -171,13 +273,33 @@ export default function DraftEditor({ notebookId, title, initial, material, onRe
     p.finally(() => { if (inflight.current === p) inflight.current = null; });
     return p;
   }
-  async function send(ser: string, v: number): Promise<boolean> {
+  async function send(ser: string, v: number, depth = 0): Promise<boolean> {
     try {
-      await api(`/collections/${notebookId}`, { method: "PATCH", body: JSON.stringify({ draft: ser }) }, 1);
+      const payload: { draft: string; draft_rev?: number } = { draft: ser };
+      if (rev.current >= 0) payload.draft_rev = rev.current;
+      const r = await api(`/collections/${notebookId}`, { method: "PATCH", body: JSON.stringify(payload) }, 1);
+      if (r && r.conflict && depth < 3) {
+        // Taslak baska yerden guncellenmis: sunucudaki yeni bloklari yerel taslagin sonuna ekle, sonra yeniden kaydet
+        const remote = parseDraft(r.draft);
+        if (typeof r.draft_rev === "number") rev.current = r.draft_rev;
+        const m = mergeRemote(latest.current, remote, baseIds.current);
+        baseIds.current = new Set(remote.map((b) => b.id));
+        if (m.added) {
+          latest.current = m.blocks;
+          if (mounted.current) {
+            skipSave.current = true;
+            setBlocks(m.blocks);
+            toast.info(m.added === 1 ? "Taslak başka yerden güncellendi; eklenen alıntı sona kondu." : `Taslak başka yerden güncellendi; eklenen ${m.added} parça sona kondu.`);
+          }
+        }
+        return send(serializeDraft(m.blocks), v, depth + 1);
+      }
+      if (typeof r?.draft_rev === "number") rev.current = r.draft_rev;
+      baseIds.current = new Set(parseDraft(ser).map((b) => b.id));
       if (v > savedVersion.current) savedVersion.current = v;
       failures.current = 0;
-      if (savedVersion.current >= version.current) { try { localStorage.removeItem(BACKUP_KEY); } catch {} }
-      onSavedRef.current?.(ser);
+      if (savedVersion.current >= version.current) { try { localStorage.removeItem(BACKUP_KEY); localStorage.removeItem(BASE_KEY); } catch {} }
+      onSavedRef.current?.(ser, rev.current >= 0 ? rev.current : undefined);
       if (mounted.current) {
         setRetryIn(0);
         if (savedVersion.current >= version.current) { setStatus("saved"); setSavedAt(new Date()); }
@@ -205,9 +327,10 @@ export default function DraftEditor({ notebookId, title, initial, material, onRe
   }
   useEffect(() => {
     latest.current = blocks;
+    if (skipSave.current) { skipSave.current = false; return; }
     if (!dirty.current) return;
     version.current++;
-    try { localStorage.setItem(BACKUP_KEY, serializeDraft(blocks)); } catch {}
+    try { localStorage.setItem(BACKUP_KEY, serializeDraft(blocks)); localStorage.setItem(BASE_KEY, JSON.stringify(Array.from(baseIds.current))); } catch {}
     setStatus("saving");
     if (timer.current) clearTimeout(timer.current);
     timer.current = setTimeout(() => { timer.current = null; saveNow(); }, 1000);
@@ -216,6 +339,11 @@ export default function DraftEditor({ notebookId, title, initial, material, onRe
   useEffect(() => {
     mounted.current = true;
     if (restored) { dirty.current = true; version.current++; setFlash("Kaydedilmemiş son değişikliklerin geri yüklendi"); saveNow(); }
+    else refreshRemote();
+    // Sekmeye donunce: taslak baska yerden (okuyucu) guncellendiyse tazele
+    const onVisible = () => { if (document.visibilityState === "visible") refreshRemote(); };
+    document.addEventListener("visibilitychange", onVisible);
+    window.addEventListener("focus", onVisible);
     // Baglanti gelince bekleyen kaydi hemen dene
     const onOnline = () => { if (savedVersion.current < version.current) saveNow(); };
     // Kaydedilmemis degisiklik varken sayfadan cikista tarayici uyarisi + son bir deneme
@@ -224,7 +352,7 @@ export default function DraftEditor({ notebookId, title, initial, material, onRe
       try {
         fetch(`${API}/collections/${notebookId}`, { method: "PATCH", keepalive: true,
           headers: { "Content-Type": "application/json", Authorization: "Bearer " + (getToken() || "") },
-          body: JSON.stringify({ draft: serializeDraft(latest.current) }) });
+          body: JSON.stringify(rev.current >= 0 ? { draft: serializeDraft(latest.current), draft_rev: rev.current } : { draft: serializeDraft(latest.current) }) });
       } catch {}
       e.preventDefault(); e.returnValue = "";
     };
@@ -233,6 +361,8 @@ export default function DraftEditor({ notebookId, title, initial, material, onRe
     return () => {
       window.removeEventListener("online", onOnline);
       window.removeEventListener("beforeunload", onUnload);
+      document.removeEventListener("visibilitychange", onVisible);
+      window.removeEventListener("focus", onVisible);
       mounted.current = false;
       // Sekme degisti / bilesen kalkti: bekleyen kaydi gonder (iptal etme)
       if (timer.current) { clearTimeout(timer.current); timer.current = null; }
@@ -241,6 +371,28 @@ export default function DraftEditor({ notebookId, title, initial, material, onRe
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [notebookId]);
+
+  // Sunucudaki taslak daha yeniyse ve bekleyen yerel degisiklik yoksa sunucudakini goster.
+  // Bekleyen degisiklik varsa bir sey yapma: siradaki kayit kosullu gider ve birlestirir.
+  const refreshing = useRef(false);
+  async function refreshRemote() {
+    if (rev.current < 0 || refreshing.current) return;
+    refreshing.current = true;
+    try {
+      const r = await api(`/collections/${notebookId}/draft`, {}, 1);
+      if (!mounted.current || typeof r?.draft_rev !== "number" || r.draft_rev === rev.current) return;
+      const idle = savedVersion.current >= version.current && !timer.current && !inflight.current;
+      if (!idle) return;
+      const remote = parseDraft(r.draft);
+      rev.current = r.draft_rev;
+      baseIds.current = new Set(remote.map((b) => b.id));
+      skipSave.current = true;
+      setBlocks(remote);
+      onSavedRef.current?.(r.draft || "", r.draft_rev);
+      toast.info("Taslak başka yerden güncellendi, yenilendi.");
+    } catch { /* sessiz: bir sonraki kayit zaten birlestirir */ }
+    finally { refreshing.current = false; }
+  }
 
   function update(next: Block[]) { dirty.current = true; setBlocks(next); }
   function insertAfter(idx: number, b: Block) {
@@ -299,6 +451,11 @@ export default function DraftEditor({ notebookId, title, initial, material, onRe
                     className="flex min-h-[36px] items-center gap-1 rounded-lg border border-green-600/40 bg-green-500/5 px-2.5 py-1 text-green-800 hover:bg-green-500/10 disabled:opacity-60 dark:text-green-300">
               {ver?.busy ? <Loader2 size={12} className="animate-spin" /> : <ShieldCheck size={12} />} Kaynaklarla doğrula <Cost n={verifyN} />
             </button>
+            <button onClick={runSimilarity} disabled={sim?.busy}
+                    title="Yazdığın paragrafların kaynaklardaki cümlelerle ne kadar aynı olduğuna bakar; alıntı olarak işaretlemen ya da kendi cümlelerinle yazman gereken yerleri gösterir · ücretsiz"
+                    className="flex min-h-[40px] items-center gap-1 rounded-lg border border-orange-500/40 bg-orange-500/5 px-2.5 py-1 text-orange-800 hover:bg-orange-500/10 disabled:opacity-60 dark:text-orange-300">
+              {sim?.busy ? <Loader2 size={12} className="animate-spin" /> : <Copy size={12} aria-hidden />} Benzerlik kontrolü
+            </button>
             <button onClick={() => download("md")} className="min-h-[36px] rounded-lg border bg-surface px-2.5 py-1 hover:border-accent-purple/50">Markdown</button>
             <button onClick={() => download("doc")} className="min-h-[36px] rounded-lg border bg-surface px-2.5 py-1 hover:border-accent-purple/50">Word</button>
           </span>
@@ -351,9 +508,48 @@ export default function DraftEditor({ notebookId, title, initial, material, onRe
           </div>
         )}
 
+        {sim?.open && (
+          <div className="mb-3 rounded-2xl border bg-surface p-4" aria-live="polite">
+            <div className="flex flex-wrap items-center gap-2">
+              <p className="flex items-center gap-1.5 text-sm font-medium"><Copy size={15} className="text-orange-700" aria-hidden /> Benzerlik kontrolü</p>
+              <span className="text-xs text-text-secondary">ücretsiz · yapay zekâ kullanmaz</span>
+              <button onClick={() => setSim(null)} aria-label="Benzerlik sonuçlarını kapat" className="ml-auto flex h-10 w-10 items-center justify-center rounded-md text-text-secondary hover:bg-surface-muted"><X size={15} /></button>
+            </div>
+            {sim.busy && <p className="mt-2 flex items-center gap-2 text-sm text-text-secondary" role="status"><Loader2 size={14} className="animate-spin" aria-hidden /> Paragrafların kaynaklarla karşılaştırılıyor…</p>}
+            {sim.error && <p className="mt-2 text-sm text-danger">{sim.error}</p>}
+            {sim.results && !sim.busy && (
+              <>
+                <p className="mt-1 text-sm">
+                  {simActive.length === 0
+                    ? `Belirgin benzerlik bulunmadı (${sim.checked || 0} paragraf kontrol edildi).`
+                    : [simHigh ? `${simHigh} paragraf yüksek` : "", simMid ? `${simMid} orta` : ""].filter(Boolean).join(", ") + " benzerlik"}
+                  {sim.quoted?.length ? ` · ${sim.quoted.length} paragraf tırnak ve atıf taşıdığı için alıntı sayıldı` : ""}
+                </p>
+                {sim.note && <p className="mt-1 text-xs text-text-secondary">{sim.note}</p>}
+                <p className="mt-1 text-xs text-text-secondary">
+                  Yazdığın paragrafların defterindeki kaynaklarla kelimesi kelimesine ne kadar örtüştüğüne bakar. İddiaların kaynakta geçip geçmediğini görmek için “Kaynaklarla doğrula”yı kullan.
+                </p>
+                {simActive.length > 1 && (
+                  <ul className="mt-2 flex flex-wrap gap-1.5">
+                    {simActive.map((r) => (
+                      <li key={r.id}>
+                        <button type="button" onClick={() => jumpTo(r.id)}
+                                className={cx("flex min-h-[40px] items-center gap-1.5 rounded-full border px-3 text-xs", SMETA[r.level].card)}>
+                          <span aria-hidden className={cx("h-2 w-2 rounded-full", SMETA[r.level].bar)} />
+                          Paragraf {blocks.findIndex((b) => b.id === r.id) + 1} · %{Math.round(r.score * 100)}
+                        </button>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </>
+            )}
+          </div>
+        )}
+
         <div className="rounded-2xl border bg-surface p-4 md:p-6">
           {blocks.map((b, i) => (
-            <div key={b.id} className="group relative" onFocus={() => setFocusIdx(i)} onClick={() => setFocusIdx(i)}>
+            <div key={b.id} id={"blk-" + b.id} className="group relative" onFocus={() => setFocusIdx(i)} onClick={() => setFocusIdx(i)}>
               {/* Yapay zekayla duzenle (sag ust): odaktaki blokta, dokunmatikte ve klavye odaginda gorunur */}
               {(b.type === "p" || b.type === "h" || b.type === "quote") && (
                 <div className={cx("absolute right-0 top-1 z-10 transition",
@@ -396,6 +592,43 @@ export default function DraftEditor({ notebookId, title, initial, material, onRe
                               placeholder={i === 0 && blocks.length === 1 ? "Buraya yaz. Sağdaki alıntıları tıklayarak araya kart olarak ekle; Ctrl+Enter yeni paragraf." : "Yaz…"}
                               className={cx("w-full resize-none bg-transparent py-1.5 text-[15px] leading-[1.8] outline-none placeholder:text-text-secondary/60", focusIdx === i && "pr-32")} />
               )}
+              {b.type === "p" && simById[b.id] && (() => {
+                const r = simById[b.id]; const M = SMETA[r.level]; const pct = Math.round(r.score * 100);
+                return (
+                  <>
+                    <span aria-hidden className={cx("absolute -right-2.5 top-2.5 h-[calc(100%-1rem)] w-1 rounded-full", M.bar)} />
+                    <div className={cx("my-2 rounded-xl border p-3 text-sm", M.card)} role="group" aria-label={M.t}>
+                      <p className={cx("flex items-start gap-1.5 font-medium", M.ink)}>
+                        <AlertTriangle size={15} className="mt-0.5 shrink-0" aria-hidden /> {M.t}
+                      </p>
+                      <p className="mt-1 text-text-primary">
+                        Bu paragrafın %{pct}&apos;{pctPoss(pct)} «{r.source.title}»{r.source.page ? ` s.${r.source.page}` : ""} ile aynı
+                        {r.longest >= 12 ? `; ${r.longest} kelimelik bir bölüm birebir geçiyor` : ""}.
+                      </p>
+                      {r.match && <p className="mt-1.5 line-clamp-3 border-l-2 border-black/15 pl-2 text-xs italic text-text-secondary">Kaynakta: {r.match}</p>}
+                      <div className="mt-2 flex flex-wrap gap-1.5">
+                        <button type="button" onClick={() => toQuote(i, r)}
+                                title="Paragrafı kaynak ve sayfa atıflı alıntı kartına dönüştürür (ücretsiz)"
+                                className="flex min-h-[40px] items-center gap-1 rounded-lg border bg-surface px-3 text-text-primary hover:border-accent-purple/50">
+                          <Quote size={13} aria-hidden /> Alıntıya çevir
+                        </button>
+                        <button type="button" onClick={() => runAssist(i, "paraphrase")} title={costTitle(1)}
+                                className="flex min-h-[40px] items-center gap-1 rounded-lg border bg-surface px-3 text-text-primary hover:border-accent-purple/50">
+                          <Wand2 size={13} aria-hidden /> Kendi cümlelerimle yeniden yaz <Cost n={1} />
+                        </button>
+                        <button type="button" onClick={() => hideSim(r.id)}
+                                className="min-h-[40px] rounded-lg px-3 text-text-secondary hover:bg-surface-muted">
+                          Yoksay
+                        </button>
+                        <button type="button" onClick={() => router.push("/documents/" + r.source.document_id + (r.source.page ? "?page=" + r.source.page : ""))}
+                                className="flex min-h-[40px] items-center gap-1 rounded-lg px-3 text-text-secondary hover:bg-surface-muted">
+                          <ExternalLink size={13} aria-hidden /> Kaynakta gör
+                        </button>
+                      </div>
+                    </div>
+                  </>
+                );
+              })()}
               {b.type === "h" && (
                 <AutoTextarea value={b.text} focus={focusIdx === i} onChange={(v) => setText(i, v)} onEnterNew={() => addParagraph(i)}
                               placeholder="Başlık" className={cx("w-full resize-none bg-transparent py-2 font-heading text-2xl leading-tight outline-none placeholder:text-text-secondary/60", focusIdx === i && "pr-32")} />
@@ -449,7 +682,7 @@ export default function DraftEditor({ notebookId, title, initial, material, onRe
                       <p className="mb-1 flex items-center gap-1 text-[11px] uppercase tracking-wide text-accent-purple"><Sparkles size={11} /> Öneri — {assist.action === "paraphrase" ? "kendi cümlelerinle" : assist.action === "shorten" ? "kısaltılmış" : assist.action === "academic" ? "akademik ton" : "düzenlenmiş"}</p>
                       <p className="whitespace-pre-wrap leading-relaxed">{assist.text}</p>
                       <div className="mt-2 flex gap-2">
-                        <button onClick={applyAssist} className="flex items-center gap-1 rounded-lg bg-accent-purple px-3 py-1.5 text-white"><Check size={13} /> {assist.action === "paraphrase" ? "Altına paragraf olarak ekle" : "Uygula"}</button>
+                        <button onClick={applyAssist} className="flex items-center gap-1 rounded-lg bg-accent-purple px-3 py-1.5 text-white"><Check size={13} /> {assist.action === "paraphrase" ? (blocks[assist.idx]?.type === "quote" ? "Altına paragraf olarak ekle" : "Paragrafın yerine koy") : "Uygula"}</button>
                         <button onClick={() => runAssist(i, assist.action, customInstr.trim() || undefined)} title={costTitle(1)} className="flex min-h-[40px] items-center rounded-lg border px-3 py-1.5 text-text-secondary">Tekrar dene <Cost n={1} /></button>
                         <button onClick={() => setAssist(null)} className="rounded-lg border px-3 py-1.5 text-text-secondary">Vazgeç</button>
                       </div>

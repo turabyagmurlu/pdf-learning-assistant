@@ -174,6 +174,9 @@ class CollectionPatch(BaseModel):
     title: str | None = None
     description: str | None = None
     draft: str | None = None
+    # Taslak kaydinda istemcinin bildigi surum. Verilirse yalniz sunucudaki surum hala buysa yazilir;
+    # degilse (okuyucudan blok eklendi, baska sekme kaydetti) yazmaz, guncel taslagi dondurur.
+    draft_rev: int | None = None
 
 
 @router.patch("/collections/{cid}")
@@ -188,8 +191,22 @@ async def update_collection(cid: str, body: CollectionPatch, conn=Depends(db), u
         await conn.execute("UPDATE collections SET description=$1 WHERE id=$2 AND user_id=$3",
                            body.description, cid, user["id"])
     if body.draft is not None:
-        await conn.execute("UPDATE collections SET draft=$1, draft_at=now() WHERE id=$2 AND user_id=$3",
-                           body.draft, cid, user["id"])
+        if body.draft_rev is None:
+            # eski istemci: kosulsuz yazar (geriye uyum)
+            rev = await conn.fetchval(
+                "UPDATE collections SET draft=$1, draft_at=now(), draft_rev=COALESCE(draft_rev,0)+1 "
+                "WHERE id=$2 AND user_id=$3 RETURNING draft_rev", body.draft, cid, user["id"])
+            return {"ok": True, "draft_rev": int(rev or 0)}
+        rev = await conn.fetchval(
+            "UPDATE collections SET draft=$1, draft_at=now(), draft_rev=COALESCE(draft_rev,0)+1 "
+            "WHERE id=$2 AND user_id=$3 AND COALESCE(draft_rev,0)=$4 RETURNING draft_rev",
+            body.draft, cid, user["id"], int(body.draft_rev))
+        if rev is None:
+            cur = await conn.fetchrow("SELECT draft, COALESCE(draft_rev,0) AS draft_rev FROM collections WHERE id=$1 AND user_id=$2",
+                                      cid, user["id"])
+            return {"ok": False, "conflict": True, "draft": cur["draft"] if cur else None,
+                    "draft_rev": int(cur["draft_rev"]) if cur else 0}
+        return {"ok": True, "draft_rev": int(rev)}
     return {"ok": True}
 
 

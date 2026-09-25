@@ -5,7 +5,7 @@ import "react-pdf/dist/Page/TextLayer.css";
 import "react-pdf/dist/Page/AnnotationLayer.css";
 import "@/styles/reader.css";
 import { Annotation, Rect, HIGHLIGHT_COLORS } from "@/lib/reader";
-import { StickyNote, MessageSquare } from "lucide-react";
+import { StickyNote, MessageSquare, PenLine } from "lucide-react";
 
 // Worker unpkg'den gelir; service worker (public/sw.js) bu dosyayi onbellege alir,
 // ikinci acilista ag gerekmez.
@@ -28,6 +28,8 @@ interface Props {
   onSelectAnnotation: (a: Annotation) => void;
   /** Secili metni sag paneldeki sohbete soru olarak hazirla */
   onAsk?: (text: string, page: number) => void;
+  /** Secili metni kaynak + sayfa atifli alinti karti olarak defterin taslagina ekle (ucretsiz) */
+  onAddToDraft?: (text: string, page: number) => void;
 }
 
 const PAGE_MAX = 820;   // genis ekranda sayfa genisligi (px, olcek 1)
@@ -143,7 +145,7 @@ export default function PdfReader(props: Props) {
     const cRect = c.getBoundingClientRect();
     const first = clientRects[0];
     const last = clientRects[clientRects.length - 1];
-    const BW = props.onAsk ? 340 : 290;                   // balon yaklasik genisligi
+    const BW = Math.min(c.clientWidth - 16, 290 + (props.onAsk ? 60 : 0) + (props.onAddToDraft ? 130 : 0));   // balon yaklasik genisligi
     // dokunmatikte sistem menusu secimin ustunde acilir: balonu secimin altina koy
     const top = coarse.current
       ? last.bottom - cRect.top + c.scrollTop + 12
@@ -151,7 +153,7 @@ export default function PdfReader(props: Props) {
     const rawLeft = first.left - cRect.left + Math.min(first.width, 120) - 40;
     const left = Math.max(8, Math.min(rawLeft, c.clientWidth - BW - 8));
     setSel({ page: pageNum, rects, text: s.toString(), top: Math.max(c.scrollTop + 4, top), left });
-  }, [props.onAsk]);
+  }, [props.onAsk, props.onAddToDraft]);
 
   useEffect(() => {
     let t: ReturnType<typeof setTimeout> | null = null;
@@ -169,6 +171,11 @@ export default function PdfReader(props: Props) {
   const ask = () => {
     if (!sel || !props.onAsk) return;
     props.onAsk(sel.text, sel.page);
+    clearSel();
+  };
+  const toDraft = () => {
+    if (!sel || !props.onAddToDraft) return;
+    props.onAddToDraft(sel.text, sel.page);
     clearSel();
   };
 
@@ -229,7 +236,7 @@ export default function PdfReader(props: Props) {
 
       {sel && (
         <div role="toolbar" aria-label="Seçili metin"
-             className="absolute z-30 flex items-center gap-0.5 rounded-xl border bg-white/95 px-1 py-0.5 shadow-lg"
+             className="absolute z-30 flex max-w-[calc(100%-16px)] flex-wrap items-center gap-0.5 rounded-xl border bg-white/95 px-1 py-0.5 shadow-lg"
              style={{ top: sel.top, left: sel.left, color: "#1F1D1A" }}
              onPointerDown={() => { bubbleDownAt.current = Date.now(); }}
              onMouseDown={(e) => e.preventDefault()}>
@@ -247,6 +254,13 @@ export default function PdfReader(props: Props) {
                     className="ml-0.5 flex h-10 items-center gap-1 rounded-lg bg-[#6D5DF6]/12 px-2.5 text-sm font-medium text-[#4A3BC4] hover:bg-[#6D5DF6]/20"
                     aria-label="Seçili metni sohbette sor" title="Seçili metni sağdaki sohbete soru olarak hazırlar">
               <MessageSquare size={15} aria-hidden /> Sor
+            </button>
+          )}
+          {props.onAddToDraft && (
+            <button type="button" onClick={toDraft}
+                    className="ml-0.5 flex h-10 items-center gap-1 whitespace-nowrap rounded-lg px-2.5 text-sm font-medium hover:bg-black/5"
+                    aria-label="Taslağa ekle" title="Seçili metni kaynak ve sayfa numarasıyla defterin taslağına alıntı olarak ekler (ücretsiz)">
+              <PenLine size={15} aria-hidden /> Taslağa ekle
             </button>
           )}
         </div>

@@ -4,7 +4,7 @@
  * web sayfasi, yapistirilan metin, e-kitap). Solda bolum listesi, ortada metin
  * ya da tablo, sagda kaynakli sohbet. Atif "sayfa"si = bolum / slayt / tablo blogu.
  */
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { api } from "@/lib/api";
 import { usePoll } from "@/hooks/usePoll";
 import { ChatPanel } from "@/components/chat/ChatPanel";
@@ -13,7 +13,8 @@ import Modal from "@/components/Modal";
 import SourceIcon from "@/components/SourceIcon";
 import { KIND_LABEL } from "@/lib/sources";
 import { stageInfo } from "@/lib/docstage";
-import { ExternalLink, Loader2, Search, ListTree, MessageSquare } from "lucide-react";
+import { useAddToDraft } from "@/components/reader/useAddToDraft";
+import { ExternalLink, Loader2, Search, ListTree, MessageSquare, PenLine } from "lucide-react";
 
 type Page = { page_number: number; title?: string | null; text: string;
   table?: { header: string[]; rows: string[][]; first_row: number } };
@@ -56,6 +57,39 @@ export default function TextReader({ id, doc }: { id: string; doc: any }) {
   const isXl = useMedia("(min-width: 1280px)");
   const [tocOpen, setTocOpen] = useState(false);
   const [chatOpen, setChatOpen] = useState(false);
+  const { addToDraft, picker: draftPicker } = useAddToDraft(doc, ctx);
+
+  // metin secimi -> "Taslağa ekle" balonu (fare, dokunmatik ve klavye)
+  const [sel, setSel] = useState<{ text: string; page: number; top: number; left: number } | null>(null);
+  const bubbleDownAt = useRef(0);
+  const readSelection = useCallback(() => {
+    const b = box.current;
+    const s = window.getSelection();
+    if (!b || !s || s.isCollapsed || !s.rangeCount) {
+      if (Date.now() - bubbleDownAt.current < 900) return;
+      setSel(null); return;
+    }
+    const range = s.getRangeAt(0);
+    if (!b.contains(range.commonAncestorContainer)) { setSel(null); return; }
+    const node = range.startContainer.nodeType === 1 ? (range.startContainer as HTMLElement) : range.startContainer.parentElement;
+    const sec = node?.closest("[data-page]") as HTMLElement | null;
+    const text = s.toString().trim();
+    if (!sec || text.length < 3) { setSel(null); return; }
+    const rects = Array.from(range.getClientRects()).filter((r) => r.width > 1);
+    if (!rects.length) { setSel(null); return; }
+    const br = b.getBoundingClientRect();
+    const coarse = !!window.matchMedia?.("(pointer: coarse)").matches;
+    const first = rects[0], last = rects[rects.length - 1];
+    const top = coarse ? last.bottom - br.top + b.scrollTop + 12 : first.top - br.top + b.scrollTop - 52;
+    const left = Math.max(8, Math.min(first.left - br.left, b.clientWidth - 170));
+    setSel({ text, page: parseInt(sec.dataset.page || "1", 10) || 1, top: Math.max(b.scrollTop + 4, top), left });
+  }, []);
+  useEffect(() => {
+    let t: ReturnType<typeof setTimeout> | null = null;
+    const onChange = () => { if (t) clearTimeout(t); t = setTimeout(readSelection, 250); };
+    document.addEventListener("selectionchange", onChange);
+    return () => { document.removeEventListener("selectionchange", onChange); if (t) clearTimeout(t); };
+  }, [readSelection]);
 
   // icerik: hazir olana kadar yokla (sekme gizliyken / cevrimdisiyken durur)
   async function loadContent(): Promise<boolean> {
@@ -158,7 +192,22 @@ export default function TextReader({ id, doc }: { id: string; doc: any }) {
                    className="w-32 min-w-0 bg-transparent text-sm outline-none sm:w-40" />
           </label>
         </div>
-        <div ref={box} onScroll={onScroll} className="relative min-h-0 flex-1 overflow-y-auto">
+        <div ref={box} onScroll={onScroll} onPointerUp={readSelection} onKeyUp={(e) => { if (e.shiftKey) readSelection(); }}
+             className="relative min-h-0 flex-1 overflow-y-auto">
+          {sel && (
+            <div role="toolbar" aria-label="Seçili metin"
+                 className="absolute z-30 flex items-center rounded-xl border bg-surface px-1 py-0.5 shadow-lg"
+                 style={{ top: sel.top, left: sel.left }}
+                 onPointerDown={() => { bubbleDownAt.current = Date.now(); }}
+                 onMouseDown={(e) => e.preventDefault()}>
+              <button type="button" aria-label="Taslağa ekle"
+                      title={`Seçili metni ${unit.toLowerCase()} numarasıyla defterin taslağına alıntı olarak ekler (ücretsiz)`}
+                      onClick={() => { addToDraft(sel.text, sel.page); window.getSelection()?.removeAllRanges(); setSel(null); }}
+                      className="flex h-10 items-center gap-1.5 whitespace-nowrap rounded-lg px-3 text-sm font-medium hover:bg-surface-muted">
+                <PenLine size={15} aria-hidden /> Taslağa ekle
+              </button>
+            </div>
+          )}
           <div className="mx-auto max-w-3xl px-5 py-6">
             {pages === null ? (
               <div className="flex items-center gap-2 text-sm text-text-secondary">
@@ -229,6 +278,7 @@ export default function TextReader({ id, doc }: { id: string; doc: any }) {
         </div>
       </Modal>
     )}
+    {draftPicker}
     {!isXl && (
       <Modal open={tocOpen} onClose={() => setTocOpen(false)} title={plural} size="md" className="p-4">
         {doc.short_summary && <p className="mb-3 text-sm leading-relaxed text-text-secondary">{doc.short_summary}</p>}

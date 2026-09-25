@@ -8,6 +8,7 @@ import { useAnnotations } from "@/hooks/useAnnotations";
 import { usePoll } from "@/hooks/usePoll";
 import ReaderToolbar, { ReaderMoreMenu, ReaderBottomBar, Theme, Tool } from "@/components/reader/ReaderToolbar";
 import ReaderHeader, { useNotebookContext, notebookHref } from "@/components/reader/ReaderHeader";
+import { useAddToDraft } from "@/components/reader/useAddToDraft";
 import NotesPanel from "@/components/reader/NotesPanel";
 import ExplainPanel from "@/components/reader/ExplainPanel";
 import ConnectionsPanel from "@/components/reader/ConnectionsPanel";
@@ -67,6 +68,7 @@ export default function DocumentPage({ params }: { params: { id: string } }) {
   const [prefill, setPrefill] = useState<{ text: string; key: number } | null>(null);
 
   const ctx = useNotebookContext(doc);
+  const { addToDraft, picker: draftPicker } = useAddToDraft(doc, ctx);
   const { annotations, add, patch, remove } = useAnnotations(id);
   // icindekiler: tiklaninca maddenin gectigi sayfayi bul (ucretsiz), sonucu hatirla
   const [tocPages, setTocPages] = useState<Record<number, number>>({});
@@ -532,6 +534,7 @@ export default function DocumentPage({ params }: { params: { id: string } }) {
               onCreateHighlight={onCreateHighlight} onCreateSticky={onCreateSticky}
               onSelectAnnotation={(a) => { setEditing(a); showNotes(); }}
               onAsk={onAsk}
+              onAddToDraft={(text, pg) => addToDraft(text, pg)}
             />
           ) : (
             <div className="reader-surround flex h-full items-center justify-center p-6 text-center text-sm" style={{ color: "var(--r-ink-2)" }} role="status">
@@ -595,6 +598,7 @@ export default function DocumentPage({ params }: { params: { id: string } }) {
         </Modal>
       )}
 
+      {draftPicker}
       {editing && (
         <NoteEditor ann={editing} onClose={() => setEditing(null)}
                     onSave={(content, color) => { patch(editing.id, { note_content: content, ...(color ? { highlight_color: color } : {}) }); setEditing(null); }}
