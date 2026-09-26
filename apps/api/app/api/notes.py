@@ -1,4 +1,10 @@
-"""Okuyucu notlari ve vurgulari (documents/{id}/notes, notes/{id})."""
+"""Okuyucu notlari ve vurgulari (documents/{id}/notes, notes/{id}).
+
+anchor JSON'u (sutun eklemeden):
+  {type:"highlight", rects:[...], style:"highlight"|"underline", opacity:0.35|0.55|0.8}
+  {type:"sticky", x, y}
+Silme yumusaktir (deleted_at); 30 gun icinde POST /trash/note/{id}/restore ile geri gelir.
+"""
 import uuid
 from fastapi import APIRouter, Depends
 from pydantic import BaseModel
@@ -19,7 +25,8 @@ class NoteIn(BaseModel):
 
 @router.post("/documents/{doc_id}/notes")
 async def add_note(doc_id: str, body: NoteIn, conn=Depends(db), user=Depends(current_user)):
-    own = await conn.fetchval("SELECT 1 FROM documents WHERE id=$1 AND user_id=$2", doc_id, user["id"])
+    own = await conn.fetchval("SELECT 1 FROM documents WHERE id=$1 AND user_id=$2 AND deleted_at IS NULL",
+                              doc_id, user["id"])
     if not own:
         raise NotFound("Kaynak bulunamadı; silinmiş olabilir.")
     nid = str(uuid.uuid4())
@@ -35,7 +42,7 @@ async def add_note(doc_id: str, body: NoteIn, conn=Depends(db), user=Depends(cur
 @router.get("/documents/{doc_id}/notes")
 async def list_notes(doc_id: str, conn=Depends(db), user=Depends(current_user)):
     rows = await conn.fetch(
-        "SELECT * FROM notes WHERE document_id=$1 AND user_id=$2 ORDER BY page_number, created_at",
+        "SELECT * FROM notes WHERE document_id=$1 AND user_id=$2 AND deleted_at IS NULL ORDER BY page_number, created_at",
         doc_id, user["id"])
     return [dict(r) for r in rows]
 
@@ -44,11 +51,14 @@ class NotePatch(BaseModel):
     note_content: str | None = None
     highlight_color: str | None = None
     tags: list[str] | None = None
+    # kalem paleti: stil (vurgu / alt cizgi) ve opaklik anchor icinde tasinir
+    anchor: dict | None = None
 
 
 @router.patch("/notes/{note_id}")
 async def patch_note(note_id: str, body: NotePatch, conn=Depends(db), user=Depends(current_user)):
-    row = await conn.fetchrow("SELECT id FROM notes WHERE id=$1 AND user_id=$2", note_id, user["id"])
+    row = await conn.fetchrow("SELECT id FROM notes WHERE id=$1 AND user_id=$2 AND deleted_at IS NULL",
+                              note_id, user["id"])
     if not row:
         raise NotFound("Not bulunamadı; silinmiş olabilir.")
     sets, vals, i = [], [], 1
@@ -58,6 +68,8 @@ async def patch_note(note_id: str, body: NotePatch, conn=Depends(db), user=Depen
         sets.append(f"highlight_color=${i}"); vals.append(body.highlight_color); i += 1
     if body.tags is not None:
         sets.append(f"tags=${i}"); vals.append(body.tags); i += 1
+    if body.anchor is not None:
+        sets.append(f"anchor=${i}"); vals.append(body.anchor); i += 1
     if sets:
         vals.append(note_id)
         await conn.execute(f"UPDATE notes SET {', '.join(sets)} WHERE id=${i}", *vals)
@@ -66,9 +78,9 @@ async def patch_note(note_id: str, body: NotePatch, conn=Depends(db), user=Depen
 
 @router.delete("/notes/{note_id}")
 async def delete_note(note_id: str, conn=Depends(db), user=Depends(current_user)):
-    await conn.execute("DELETE FROM notes WHERE id=$1 AND user_id=$2", note_id, user["id"])
-    return {"ok": True}
+    """Cop kutusuna tasir (yumusak silme). Geri al: POST /trash/note/{id}/restore."""
+    await conn.execute("UPDATE notes SET deleted_at=now() WHERE id=$1 AND user_id=$2 AND deleted_at IS NULL",
+                       note_id, user["id"])
+    return {"ok": True, "trashed": True, "restore": f"/trash/note/{note_id}/restore"}
 
 # Kaldirilan uclar (TK-6, web cagirmiyor): GET /notes (eski Vurgular sayfasi), GET /notes/search.
-# PATCH /notes/{id} duruyor: okuyucu notu simdilik sil+yeniden olustur ile guncelliyor
-# (hooks/useAnnotations.ts), ileride PATCH'e gecebilir.

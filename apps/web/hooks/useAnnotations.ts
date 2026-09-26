@@ -1,6 +1,8 @@
 "use client";
 import { useCallback, useEffect, useState } from "react";
-import { Annotation, listAnnotations, createAnnotation, deleteAnnotation } from "@/lib/reader";
+import {
+  Annotation, listAnnotations, createAnnotation, deleteAnnotation, patchAnnotation, restoreAnnotation,
+} from "@/lib/reader";
 
 export function useAnnotations(docId: string) {
   const [annotations, setAnnotations] = useState<Annotation[]>([]);
@@ -19,30 +21,33 @@ export function useAnnotations(docId: string) {
     return created;
   }, [docId]);
 
-  // Update = delete + recreate (backend has no PATCH; POST/DELETE are enough).
-  const patch = useCallback(async (id: string, p: Partial<Pick<Annotation, "note_content" | "highlight_color">>) => {
-    let merged: Annotation | null = null;
+  // Guncelleme PATCH ile (ayni kimlik kalir; cop kutusuna iz dusmez). Sunucu reddederse eski hale doner.
+  const patch = useCallback(async (id: string, p: Partial<Pick<Annotation, "note_content" | "highlight_color" | "anchor">>) => {
+    let before: Annotation | null = null;
     setAnnotations((prev) => {
-      const cur = prev.find((x) => x.id === id);
-      if (cur) merged = { ...cur, ...p };
+      before = prev.find((x) => x.id === id) || null;
       return prev.map((x) => (x.id === id ? { ...x, ...p } : x));
     });
-    if (!merged) return;
-    const m = merged as Annotation;
-    const created = await createAnnotation(docId, {
-      page_number: m.page_number, selected_text: m.selected_text,
-      note_content: m.note_content ?? "", highlight_color: m.highlight_color, anchor: m.anchor,
-    });
-    if (created) {
-      await deleteAnnotation(id);
-      setAnnotations((prev) => prev.map((x) => (x.id === id ? { ...m, id: created.id } : x)));
+    const ok = await patchAnnotation(id, p);
+    if (!ok && before) {
+      const b = before as Annotation;
+      setAnnotations((prev) => prev.map((x) => (x.id === id ? b : x)));
     }
-  }, [docId]);
+    return ok;
+  }, []);
 
+  // Silme = cop kutusuna tasima (30 gun geri alinabilir)
   const remove = useCallback(async (id: string) => {
     setAnnotations((prev) => prev.filter((x) => x.id !== id));
     await deleteAnnotation(id);
   }, []);
 
-  return { annotations, loading, add, patch, remove, reload };
+  // Copten geri getir (geri al): ayni kimlikle listeye doner
+  const restore = useCallback(async (a: Annotation) => {
+    const ok = await restoreAnnotation(a.id);
+    if (ok) setAnnotations((prev) => (prev.some((x) => x.id === a.id) ? prev : [...prev, a]));
+    return ok;
+  }, []);
+
+  return { annotations, loading, add, patch, remove, restore, reload };
 }

@@ -7,6 +7,7 @@
  * Tum hedefler en az 40 px (dar ekranda 44 px); her dugmenin gorunen metni ya da aria-label'i var.
  */
 import { useEffect, useRef, useState } from "react";
+import type { PenTool } from "@/lib/reader";
 import {
   ChevronLeft, ChevronRight, Minus, Plus, Highlighter, StickyNote,
   BookOpen, FileText, Maximize2, Minimize2, Sun, Contrast, Moon, PanelLeft, PanelRight, Download,
@@ -14,7 +15,11 @@ import {
 } from "lucide-react";
 
 export type Theme = "light" | "sepia" | "dark";
-export type Tool = "none" | "highlight" | "note";
+/** Okuyucu araci: kalem paleti araclari (lib/reader PenTool) — none | highlight | underline | note | eraser */
+export type Tool = PenTool;
+/** Paletle acilan araclar (vurgu dugmesi bunlardan biri acikken "basili" gorunur) */
+export const PEN_TOOLS: Tool[] = ["highlight", "underline", "eraser"];
+export const isPenTool = (t: Tool) => PEN_TOOLS.includes(t);
 export const THEME_LABEL: Record<Theme, string> = { light: "Açık", sepia: "Sepya", dark: "Koyu" };
 const THEME_ORDER: Theme[] = ["light", "sepia", "dark"];
 export const nextTheme = (t: Theme): Theme => THEME_ORDER[(THEME_ORDER.indexOf(t) + 1) % 3];
@@ -78,8 +83,9 @@ export default function ReaderToolbar(p: ToolbarProps) {
               onClick={() => p.setScale(() => 1)}>{Math.round(p.scale * 100)}%</button>
       <button className={btn} aria-label="Yakınlaştır" title="Yakınlaştır" onClick={() => p.setScale(zoomIn)}><Plus size={17} /></button>
       <Sep />
-      <button className={`${btn} ${p.tool === "highlight" ? active : ""}`} aria-label="Vurgu aracı" aria-pressed={p.tool === "highlight"}
-              title="Vurgu aracı" onClick={() => p.setTool(p.tool === "highlight" ? "none" : "highlight")}><Highlighter size={17} /></button>
+      <button className={`${btn} ${isPenTool(p.tool) ? active : ""}`} aria-label="Vurgu aracı ve kalem paleti" aria-pressed={isPenTool(p.tool)}
+              title="Vurgu aracı (H): paleti açar — renk, altını çiz, silgi"
+              onClick={() => p.setTool(isPenTool(p.tool) ? "none" : "highlight")}><Highlighter size={17} /></button>
       <button className={`${btn} ${p.tool === "note" ? active : ""}`} aria-label="Kenar notu aracı" aria-pressed={p.tool === "note"}
               title="Kenar notu: sayfada bir yere tıkla" onClick={() => p.setTool(p.tool === "note" ? "none" : "note")}><StickyNote size={17} /></button>
       <button className={`${btn} ${p.focus ? active : ""}`} aria-label="Odak modu" aria-pressed={p.focus} title="Odak modu (F)"
@@ -124,8 +130,8 @@ export function ReaderMoreMenu(p: ToolbarProps & { variant: "wide" | "narrow" })
       { key: "zin", label: "Yakınlaştır", icon: <Plus size={17} />, onSelect: () => p.setScale(zoomIn) },
       { key: "zout", label: "Uzaklaştır", icon: <Minus size={17} />, onSelect: () => p.setScale(zoomOut) },
       { key: "zfit", label: `Sayfaya sığdır (şu an %${Math.round(p.scale * 100)})`, icon: <RotateCcw size={17} />, onSelect: () => p.setScale(() => 1) },
-      { key: "hl", label: "Vurgu aracı", icon: <Highlighter size={17} />, checked: p.tool === "highlight",
-        onSelect: () => p.setTool(p.tool === "highlight" ? "none" : "highlight") },
+      { key: "hl", label: "Vurgu aracı ve kalem paleti", icon: <Highlighter size={17} />, checked: isPenTool(p.tool),
+        onSelect: () => p.setTool(isPenTool(p.tool) ? "none" : "highlight") },
       { key: "note", label: "Kenar notu aracı", icon: <StickyNote size={17} />, checked: p.tool === "note",
         onSelect: () => p.setTool(p.tool === "note" ? "none" : "note") },
     );

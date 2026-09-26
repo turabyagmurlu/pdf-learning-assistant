@@ -1,19 +1,33 @@
 """Gemini TTS ile dogal Turkce seslendirme.
 
-Gemini TTS 24kHz, 16-bit, mono PCM dondurur; onune WAV basligi ekleyip
-tarayicida dogrudan calinabilir hale getiririz.
+Gemini TTS 24kHz, 16-bit, mono PCM dondurur. Varsayilan cikti artik MP3
+(ffmpeg, 64 kb/s mono: WAV'in ~6'da biri); ffmpeg yoksa ya da hata verirse
+WAV basligi eklenip olduğu gibi verilir.
 """
 import base64
 import hashlib
-import io
+import logging
 import re
+import shutil
 import struct
+import subprocess
 import httpx
 from app.config import settings
 from app.core.errors import AiUnavailable
 from app.ai import usage
 
 BASE = "https://generativelanguage.googleapis.com/v1beta"
+log = logging.getLogger(__name__)
+
+PCM_RATE = 24000                       # Gemini TTS: 24 kHz, 16 bit, mono
+WAV_HEADER_LEN = 44
+MP3_BITRATE = "64k"
+FORMATS = {"mp3": "audio/mpeg", "wav": "audio/wav"}
+DEFAULT_FORMAT = "mp3"
+
+# Ses ornegi: her ses icin bir kez uretilir, `sample:<ses>:<format>` anahtariyla
+# kalici saklanir (LectureTab'in gonderdigi cumleyle birebir ayni olmali).
+SAMPLE_TEXT = "Merhaba, bu defterdeki kaynakları sana bu sesle anlatacağım."
 
 
 class TtsBusy(AiUnavailable):
@@ -72,13 +86,107 @@ def wav_from_pcm(pcm: bytes) -> bytes:
     return _wav_header(len(pcm)) + pcm
 
 
+def pcm_from_wav(wav: bytes) -> bytes:
+    """Bizim urettigimiz (44 baytlik sabit basliklı) WAV'dan PCM'i geri alir."""
+    if wav[:4] == b"RIFF" and len(wav) > WAV_HEADER_LEN:
+        return wav[WAV_HEADER_LEN:]
+    return wav
+
+
+_FFMPEG: str | None = None
+_FFMPEG_CHECKED = False
+
+
+def ffmpeg_path() -> str | None:
+    """ffmpeg ikilisi (Dockerfile'da var); yoksa None -> WAV'a duselim."""
+    global _FFMPEG, _FFMPEG_CHECKED
+    if not _FFMPEG_CHECKED:
+        _FFMPEG = shutil.which("ffmpeg")
+        _FFMPEG_CHECKED = True
+    return _FFMPEG
+
+
+def pcm_to_mp3(pcm: bytes, bitrate: str = MP3_BITRATE) -> bytes | None:
+    """PCM (s16le 24 kHz mono) -> MP3. ffmpeg yoksa/hata verirse None (cagiran WAV'a duser).
+
+    Boru uzerinden calisir, gecici dosya yok. 9 dakikalik ses ~1-2 sn surer;
+    engelleyici oldugu icin `asyncio.to_thread` icinden cagrilmali.
+    """
+    exe = ffmpeg_path()
+    if not exe or not pcm:
+        return None
+    cmd = [exe, "-hide_banner", "-loglevel", "error", "-nostdin",
+           "-f", "s16le", "-ar", str(PCM_RATE), "-ac", "1", "-i", "pipe:0",
+           "-codec:a", "libmp3lame", "-b:a", bitrate, "-f", "mp3", "pipe:1"]
+    try:
+        p = subprocess.run(cmd, input=pcm, capture_output=True, timeout=120)
+        if p.returncode == 0 and len(p.stdout) > 200:
+            return p.stdout
+        log.warning("ffmpeg mp3 basarisiz (rc=%s): %s", p.returncode, p.stderr[-300:].decode("utf-8", "ignore"))
+    except Exception as e:  # noqa
+        log.warning("ffmpeg mp3 calistirilamadi: %r", e)
+    return None
+
+
+def mp3_to_pcm(mp3: bytes) -> bytes | None:
+    """MP3 -> PCM (s16le 24 kHz mono); yalniz eski istemci WAV isterse gerekir."""
+    exe = ffmpeg_path()
+    if not exe or not mp3:
+        return None
+    cmd = [exe, "-hide_banner", "-loglevel", "error", "-nostdin", "-i", "pipe:0",
+           "-f", "s16le", "-ar", str(PCM_RATE), "-ac", "1", "pipe:1"]
+    try:
+        p = subprocess.run(cmd, input=mp3, capture_output=True, timeout=120)
+        if p.returncode == 0 and p.stdout:
+            return p.stdout
+    except Exception:  # noqa
+        pass
+    return None
+
+
+def normalize_format(fmt: str | None, accept: str | None = None) -> str:
+    """Istemcinin istedigi format: `?fmt=` once, sonra Accept basligi, yoksa MP3."""
+    f = (fmt or "").strip().lower()
+    if f in ("mp3", "mpeg"):
+        return "mp3"
+    if f in ("wav", "wave"):
+        return "wav"
+    a = (accept or "").lower()
+    if "audio/wav" in a and "audio/mpeg" not in a:
+        return "wav"
+    return DEFAULT_FORMAT
+
+
+def encode_audio(pcm: bytes, fmt: str = DEFAULT_FORMAT) -> tuple[bytes, str, str]:
+    """PCM'i istenen bicime kodlar -> (bayt, mime, gercek_format). MP3 olmazsa WAV."""
+    if fmt == "mp3":
+        mp3 = pcm_to_mp3(pcm)
+        if mp3:
+            return mp3, FORMATS["mp3"], "mp3"
+    return wav_from_pcm(pcm), FORMATS["wav"], "wav"
+
+
 def cache_key(text: str, voice: str, style: str = "") -> str:
-    """Ayni metin+ses icin sabit anahtar; uretilen WAV bir daha uretilmez."""
+    """Ayni metin+ses icin sabit anahtar; uretilen ses bir daha uretilmez.
+
+    Format anahtara DAHIL DEGIL: cagiran `mp3:`/`wav:`/`pcm:` on ekiyle ayirir,
+    boylece eski `wav:` kayitlari gecerli kalir (bkz. api/study.py).
+    """
     h = hashlib.sha256()
     h.update((text or "").strip().encode("utf-8"))
     h.update(b"\x00" + (voice or "").encode("utf-8"))
     h.update(b"\x00" + (style or "").strip().encode("utf-8"))
     return h.hexdigest()
+
+
+def sample_key(voice: str, fmt: str = DEFAULT_FORMAT) -> str:
+    """Ses ornegi icin kalici anahtar (LRU temizliginde silinmez)."""
+    return f"sample:{voice}:{fmt}"
+
+
+def estimate_seconds(chars: int, sec_per_100: float = 1.0) -> int:
+    """Kabaca uretim suresi: ~1 sn / 100 karakter (istemci kendi olcumuyle kalibre eder)."""
+    return max(3, int(round(chars / 100.0 * sec_per_100)) + 2)
 
 
 def _quota_from_response(r: httpx.Response) -> "TtsQuota":
@@ -218,17 +326,28 @@ def synthesize_pcm(text: str, voice: str = DEFAULT_VOICE, style: str = "") -> by
         raise AiUnavailable("Seslendirme şu an yapılamadı; biraz sonra tekrar dene ya da cihaz sesiyle dinle.")
 
 
-def synthesize(text: str, voice: str = DEFAULT_VOICE, style: str = "") -> bytes:
-    """Tek parca WAV (kisa metinler icin); gecici yogunlukta kendi kendine tekrar dener."""
+def synthesize_pcm_retry(text: str, voice: str = DEFAULT_VOICE, style: str = "") -> bytes:
+    """Tek parca PCM (kisa metinler icin); gecici yogunlukta kendi kendine tekrar dener."""
     import time as _time
     last: Exception | None = None
     for attempt in range(3):
         try:
-            return wav_from_pcm(synthesize_pcm(text, voice, style))
+            return synthesize_pcm(text, voice, style)
         except TtsBusy as e:
             last = e
             if attempt < 2:
                 _time.sleep(e.retry_after)
-        except Exception as e:  # noqa - kota ve diger hatalar dogrudan yukari
+        except Exception:  # noqa - kota ve diger hatalar dogrudan yukari
             raise
     raise last or AiUnavailable("Seslendirme şu an yapılamadı; biraz sonra tekrar dene ya da cihaz sesiyle dinle.")
+
+
+def synthesize(text: str, voice: str = DEFAULT_VOICE, style: str = "") -> bytes:
+    """Geriye uyum: tek parca WAV."""
+    return wav_from_pcm(synthesize_pcm_retry(text, voice, style))
+
+
+def synthesize_audio(text: str, voice: str = DEFAULT_VOICE, style: str = "",
+                     fmt: str = DEFAULT_FORMAT) -> tuple[bytes, str, str]:
+    """Tek parca ses, istenen bicimde -> (bayt, mime, gercek_format)."""
+    return encode_audio(synthesize_pcm_retry(text, voice, style), fmt)

@@ -2,8 +2,8 @@
 import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
-import { Library, LogOut, Search, Notebook, Sun, Moon, MonitorSmartphone, MoreHorizontal, Keyboard } from "lucide-react";
-import { clearToken, refreshSessionIfNeeded } from "@/lib/api";
+import { Library, LogOut, Search, Notebook, Sun, Moon, MonitorSmartphone, MoreHorizontal, Keyboard, Trash2 } from "lucide-react";
+import { api, clearToken, refreshSessionIfNeeded } from "@/lib/api";
 import { BrandMarkSvg } from "@/components/BrandMark";
 import ThemeToggle, { useTheme, THEME_LABEL, ThemeMode } from "@/components/ThemeToggle";
 import Shortcuts from "@/components/Shortcuts";
@@ -19,6 +19,30 @@ const NAV = [
   { href: "/search", label: "Araştır", Icon: Search, title: "Araştır" },
 ];
 const cx = (...a: any[]) => a.filter(Boolean).join(" ");
+
+/**
+ * Cop kutusu rozeti (Ajan P): sayfa degisince ve "typdf:trash-changed" olayinda /trash/count okunur.
+ * Silme yapan sayfalar (Kutuphane, okuyucu, defter) bu olayi gonderir; /trash sayfasi da.
+ */
+function useTrashCount(pathname: string) {
+  const [n, setN] = useState(0);
+  useEffect(() => {
+    let alive = true;
+    const load = () => { api("/trash/count", {}, 1).then((r) => { if (alive && r && typeof r.total === "number") setN(r.total); }).catch(() => {}); };
+    load();
+    window.addEventListener("typdf:trash-changed", load);
+    return () => { alive = false; window.removeEventListener("typdf:trash-changed", load); };
+  }, [pathname]);
+  return n;
+}
+function TrashBadge({ n }: { n: number }) {
+  if (!n) return null;
+  return (
+    <span className="ml-auto rounded-full bg-surface-muted px-1.5 text-2xs font-medium text-text-secondary" aria-hidden>
+      {n > 99 ? "99+" : n}
+    </span>
+  );
+}
 
 /**
  * Ortak yerlesim olculeri (yuzen ogeler bunlara gore konumlanir; D1/D2 kullanir):
@@ -42,10 +66,11 @@ html[data-reader]{--bottom-nav:0px;--topbar-h:0px;--sidebar-w:0px;--reader-bar:6
  * "⋯" menusu: tema, kisayollar ve cikis tek yerde (TK-5).
  * Telefon ust cubugunda ve tablet ikon rayinda kullanilir; tam menude (lg+) ayri satirlar var.
  */
-function MoreMenu({ mode, setMode, onLogout, up, className }: {
+function MoreMenu({ mode, setMode, onLogout, up, className, trashCount, onTrash }: {
   mode: ThemeMode; setMode: (m: ThemeMode) => void; onLogout: () => void;
   /** Menu yukari acilsin (ray altindaki dugme icin) */
   up?: boolean; className?: string;
+  trashCount?: number; onTrash?: () => void;
 }) {
   const [open, setOpen] = useState(false);
   const wrap = useRef<HTMLDivElement>(null);
@@ -97,6 +122,14 @@ function MoreMenu({ mode, setMode, onLogout, up, className }: {
             <span className="flex-1">Kısayollar</span>
             <kbd className="rounded border bg-surface-muted px-1.5 font-mono text-xs">?</kbd>
           </button>
+          {onTrash && (
+            <button type="button" role="menuitem" className={item} onClick={() => { setOpen(false); onTrash(); }}
+                    aria-label={`Çöp kutusu${trashCount ? `, ${trashCount} öğe` : ""}`}>
+              <Trash2 size={17} aria-hidden className="text-text-secondary" />
+              <span className="flex-1">Çöp kutusu</span>
+              <TrashBadge n={trashCount || 0} />
+            </button>
+          )}
           <div className="my-1 border-t" role="separator" />
           <button type="button" role="menuitem" className={item} onClick={() => { setOpen(false); onLogout(); }}>
             <LogOut size={17} aria-hidden className="text-text-secondary" />
@@ -117,6 +150,7 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
   const active = (href: string) => pathname === href || pathname.startsWith(href + "/");
   const sub = isSubPage(pathname);
   const parent = parentOf(pathname);
+  const trashCount = useTrashCount(pathname);
 
   // Ilk sayfadan sonra yapilan her gecis "uygulama ici gezinti"dir -> geri tusu gercek geri gider.
   const firstPath = useRef<string | null>(null);
@@ -140,7 +174,8 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
     if (isReader) return;
     const n = NAV.find((x) => active(x.href));
     const base = "TY PDF";
-    document.title = n ? `${n.title} · ${base}` : pathname.startsWith("/collections/") ? `Defter · ${base}` : base;
+    document.title = n ? `${n.title} · ${base}` : pathname.startsWith("/collections/") ? `Defter · ${base}`
+      : pathname.startsWith("/trash") ? `Çöp kutusu · ${base}` : base;
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [pathname, isReader]);
 
@@ -200,6 +235,25 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
         <div className="mt-auto flex w-full flex-col items-center gap-1 lg:items-stretch">
           <span className="hidden md:inline lg:hidden"><QuotaMeter compact /></span>
           <span className="hidden lg:block"><QuotaMeter /></span>
+          {/* Cop kutusu: rayda ikon + rozet, tam menude satir + rozet */}
+          <Link href="/trash" aria-current={active("/trash") ? "page" : undefined}
+                aria-label={`Çöp kutusu${trashCount ? `, ${trashCount} öğe` : ""}`} title="Çöp kutusu"
+                className={cx("relative hidden h-11 w-11 items-center justify-center rounded-lg text-text-secondary hover:bg-surface-muted md:flex lg:hidden",
+                  active("/trash") && "bg-accent-purple/10 text-text-primary")}>
+            <Trash2 size={20} aria-hidden className={active("/trash") ? "text-accent-purple" : ""} />
+            {trashCount > 0 && (
+              <span aria-hidden className="absolute right-1 top-1 min-w-[16px] rounded-full bg-accent-purple px-1 text-center text-[10px] font-semibold leading-4 text-white">
+                {trashCount > 99 ? "99+" : trashCount}
+              </span>
+            )}
+          </Link>
+          <Link href="/trash" aria-current={active("/trash") ? "page" : undefined}
+                className={cx("hidden min-h-[40px] items-center gap-2 rounded-md px-3 text-text-secondary hover:bg-surface-muted lg:flex",
+                  active("/trash") && "bg-accent-purple/10 font-medium text-text-primary")}>
+            <Trash2 size={18} aria-hidden className={active("/trash") ? "text-accent-purple" : ""} />
+            <span className="flex-1">Çöp kutusu</span>
+            <TrashBadge n={trashCount} />
+          </Link>
           <MoreMenu mode={mode} setMode={set} onLogout={logout} up className="hidden md:block lg:hidden" />
           <button type="button" onClick={() => window.dispatchEvent(new KeyboardEvent("keydown", { key: "?" }))}
                   className="hidden min-h-[40px] items-center gap-2 rounded-md px-3 text-text-secondary hover:bg-surface-muted lg:flex">
@@ -232,7 +286,7 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
                 <Search size={18} aria-hidden />
               </button>
               <QuotaMeter compact />
-              <MoreMenu mode={mode} setMode={set} onLogout={logout} />
+              <MoreMenu mode={mode} setMode={set} onLogout={logout} trashCount={trashCount} onTrash={() => router.push("/trash")} />
             </div>
           </header>
         )}

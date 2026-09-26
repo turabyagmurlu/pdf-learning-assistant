@@ -1,7 +1,20 @@
 "use client";
 import { useMemo, useState } from "react";
-import { Annotation } from "@/lib/reader";
-import { Trash2, StickyNote, Highlighter, Search, Quote } from "lucide-react";
+import { Annotation, annotationKindLabel, highlightStyle, darken } from "@/lib/reader";
+import { Trash2, StickyNote, Highlighter, Underline, Search, Quote } from "lucide-react";
+
+/** #RRGGBB -> rgba (vurgu kademesi listede de gorunsun; metin okunakli kalsin) */
+function withAlpha(hex: string, a: number) {
+  const m = /^#?([0-9a-f]{2})([0-9a-f]{2})([0-9a-f]{2})$/i.exec(hex);
+  if (!m) return hex;
+  return `rgba(${parseInt(m[1], 16)}, ${parseInt(m[2], 16)}, ${parseInt(m[3], 16)}, ${a})`;
+}
+/** Listedeki alinti: vurgu -> zemin (kademeyle), alt cizgi -> renkli alt cizgi (kalinlikla) */
+function quoteStyle(a: Annotation): React.CSSProperties {
+  const hs = highlightStyle(a);
+  if (hs.underline) return { background: "transparent", borderBottom: hs.borderBottom, borderRadius: 0, paddingBottom: 1 };
+  return { background: withAlpha(hs.background, hs.opacity) };
+}
 
 interface Props {
   annotations: Annotation[];
@@ -43,9 +56,11 @@ export default function NotesPanel({ annotations, docTitle, onJump, onDelete, on
         ) : items.map((a) => (
           <div key={a.id} className="group rounded-lg border bg-surface p-2.5 hover:border-accent-purple/50 transition">
             <div className="flex items-center justify-between text-xs text-text-secondary">
-              <span className="flex items-center gap-1">
-                {a.anchor.type === "sticky" ? <StickyNote size={12} aria-hidden /> : <Highlighter size={12} aria-hidden />}
-                <span className="sr-only">{a.anchor.type === "sticky" ? "Kenar notu" : "Vurgu"},</span> s.{a.page_number}
+              <span className="flex items-center gap-1" title={annotationKindLabel(a)}>
+                {a.anchor.type === "sticky" ? <StickyNote size={12} aria-hidden />
+                  : a.anchor.style === "underline" ? <Underline size={12} aria-hidden style={{ color: darken(a.highlight_color || "#FFE78A") }} />
+                  : <Highlighter size={12} aria-hidden />}
+                <span className="sr-only">{annotationKindLabel(a)},</span> s.{a.page_number}
               </span>
               <span className="-my-1 flex items-center">
                 {a.selected_text && (
@@ -56,14 +71,14 @@ export default function NotesPanel({ annotations, docTitle, onJump, onDelete, on
                   </button>
                 )}
                 <button type="button" className="flex h-10 w-10 items-center justify-center rounded-lg text-text-secondary hover:bg-surface-hover hover:text-danger"
-                        aria-label={`Sayfa ${a.page_number} ${a.anchor.type === "sticky" ? "kenar notunu" : "vurgusunu"} sil`}
+                        title="Çöp kutusuna taşı (30 gün içinde geri alabilirsin)"
+                        aria-label={`Sayfa ${a.page_number} ${a.anchor.type === "sticky" ? "kenar notunu" : a.anchor.style === "underline" ? "alt çizgisini" : "vurgusunu"} çöp kutusuna taşı`}
                         onClick={() => onDelete(a.id)}><Trash2 size={15} aria-hidden /></button>
               </span>
             </div>
             {a.anchor.type !== "sticky" && a.selected_text && (
               <button type="button" onClick={() => onJump(a)} className="mt-1 block w-full text-left" aria-label={`Sayfa ${a.page_number}'e git: ${(a.selected_text || "").slice(0, 80)}`}>
-                <span className="rounded px-1 text-sm text-text-primary line-clamp-3"
-                      style={{ background: a.highlight_color || "#FFE78A" }}>{a.selected_text}</span>
+                <span className="rounded px-1 text-sm text-text-primary line-clamp-3" style={quoteStyle(a)}>{a.selected_text}</span>
               </button>
             )}
             {a.note_content ? (

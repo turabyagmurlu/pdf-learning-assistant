@@ -79,7 +79,7 @@ async def _evidence(conn, ids, vec, k=3, per_doc=None):
         """SELECT dc.document_id, dc.page_number, dc.section_title, dc.content, d.title AS doc_title,
                   1 - (dc.embedding <=> $1) AS score
            FROM document_chunks dc JOIN documents d ON d.id = dc.document_id
-           WHERE dc.document_id = ANY($2::uuid[]) AND dc.embedding IS NOT NULL
+           WHERE dc.document_id = ANY($2::uuid[]) AND dc.embedding IS NOT NULL AND d.deleted_at IS NULL
            ORDER BY dc.embedding <=> $1 LIMIT $3""", vec, ids, 40 if per_doc else k)
     rows = [dict(r) for r in rows]
     if per_doc:

@@ -78,6 +78,14 @@
   transition: filter .12s ease;
 }
 .hl-rect:hover { filter: brightness(0.96) saturate(1.15); }
+/* Kalem paleti (Ajan P): alt cizgi stili — zemin yok, satirin altinda renkli cizgi (kalinlik kademeden) */
+.hl-rect.hl-underline { background: transparent !important; mix-blend-mode: normal; border-radius: 0; }
+.hl-rect.hl-underline:hover { filter: none; background: rgba(0,0,0,0.05) !important; }
+/* Silgi araci acikken vurgular "silinebilir" gorunur: kirmizi kenar, uzerine gelince soluklasir */
+.hl-erasable { cursor: cell; outline: 1.5px dashed var(--danger, #B3402D) !important; outline-offset: 1px; }
+.hl-erasable:hover { opacity: 0.35 !important; }
+/* Silgi aracinda metin secimi calismasin (dokunus vurguya gitsin) */
+.reader-surround[data-tool="eraser"] .textLayer { user-select: none; -webkit-user-select: none; }
 .hl-note-dot {
   position: absolute;
   width: 28px; height: 28px;

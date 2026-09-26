@@ -2,11 +2,15 @@
 import { useEffect, useRef, useState } from "react";
 import dynamic from "next/dynamic";
 import { api } from "@/lib/api";
-import { exportMarkdown, Annotation, HIGHLIGHT_COLORS } from "@/lib/reader";
+import {
+  exportMarkdown, Annotation, HIGHLIGHT_COLORS, HighlightStyle, PenPrefs, loadPenPrefs, savePenPrefs,
+  OPACITY_STEPS, DEFAULT_OPACITY,
+} from "@/lib/reader";
 import { stageInfo } from "@/lib/docstage";
 import { useAnnotations } from "@/hooks/useAnnotations";
 import { usePoll } from "@/hooks/usePoll";
-import ReaderToolbar, { ReaderMoreMenu, ReaderBottomBar, Theme, Tool } from "@/components/reader/ReaderToolbar";
+import ReaderToolbar, { ReaderMoreMenu, ReaderBottomBar, Theme, Tool, isPenTool } from "@/components/reader/ReaderToolbar";
+import PenPalette from "@/components/reader/PenPalette";
 import ReaderHeader, { useNotebookContext, notebookHref, useMedia } from "@/components/reader/ReaderHeader";
 import { useAddToDraft } from "@/components/reader/useAddToDraft";
 import NotesPanel from "@/components/reader/NotesPanel";
@@ -69,7 +73,23 @@ export default function DocumentPage({ params }: { params: { id: string } }) {
   const [numPages, setNumPages] = useState(0);
   const [scale, setScale] = useState(1);
   const [spread, setSpread] = useState(false);
-  const [tool, setTool] = useState<Tool>("none");
+  const [tool, setToolRaw] = useState<Tool>("none");
+  // Kalem paleti (Ajan P): renk, kademe, konum, kucuk mu — cihazda saklanir. prevTool: kalemle cift dokunusta gecis.
+  const [pen, setPen] = useState<PenPrefs>({ color: HIGHLIGHT_COLORS[0].value, opacity: DEFAULT_OPACITY, collapsed: false, pos: null });
+  const penLoaded = useRef(false);
+  const prevToolRef = useRef<Tool>("highlight");
+  const toolRef = useRef<Tool>("none");
+  function setTool(t: Tool) {
+    if (t !== toolRef.current) { if (toolRef.current !== "none") prevToolRef.current = toolRef.current; toolRef.current = t; }
+    setToolRaw(t);
+    // araca gecince palet acik gelsin (kucultulmus degil)
+    if (t !== "none") setPen((p) => (p.collapsed ? { ...p, collapsed: false } : p));
+  }
+  function penDoubleTap() {
+    const cur = toolRef.current;
+    const other = prevToolRef.current === cur || prevToolRef.current === "none" ? (cur === "eraser" ? "highlight" : "eraser") : prevToolRef.current;
+    setTool(cur === "none" ? "highlight" : other);
+  }
 
   const [theme, setTheme] = useState<Theme>("light");
   const [focus, setFocus] = useState(false);
@@ -103,7 +123,7 @@ export default function DocumentPage({ params }: { params: { id: string } }) {
 
   const ctx = useNotebookContext(doc);
   const { addToDraft, picker: draftPicker } = useAddToDraft(doc, ctx);
-  const { annotations, add, patch, remove } = useAnnotations(id);
+  const { annotations, add, patch, remove, restore } = useAnnotations(id);
   // okuma konumu cihazlar arasi: 3 sn gecikmeli yazma, baska cihazdaki konum basliktaki cipte
   const { serverPage, serverDevice } = useReadingSync(id, {
     page, numPages, pct: numPages ? Math.round((page / numPages) * 100) : 0,
@@ -140,15 +160,20 @@ export default function DocumentPage({ params }: { params: { id: string } }) {
                  highlight_color: a.highlight_color, anchor: a.anchor });
   }
   // bir islemi geri alir, yinelemek icin gereken karsit islemi dondurur
+  // silmeyi geri alma: cop kutusundan ayni kimlikle geri getir (olmazsa yeniden olustur)
+  async function bringBack(a: Annotation): Promise<Annotation> {
+    if (await restore(a)) return a;
+    return (await recreate(a)) || a;
+  }
   async function applyUndo(op: HistOp): Promise<HistOp> {
     if (op.kind === "add") { await remove(op.ann.id); return { kind: "add", ann: op.ann }; }
-    if (op.kind === "remove") { const c = await recreate(op.ann); return { kind: "remove", ann: c || op.ann }; }
+    if (op.kind === "remove") { const c = await bringBack(op.ann); return { kind: "remove", ann: c }; }
     const out: HistOp[] = [];
     for (const o of [...op.ops].reverse()) out.unshift(await applyUndo(o));
     return { kind: "group", ops: out };
   }
   async function applyRedo(op: HistOp): Promise<HistOp> {
-    if (op.kind === "add") { const c = await recreate(op.ann); return { kind: "add", ann: c || op.ann }; }
+    if (op.kind === "add") { const c = await bringBack(op.ann); return { kind: "add", ann: c }; }
     if (op.kind === "remove") { await remove(op.ann.id); return { kind: "remove", ann: op.ann }; }
     const out: HistOp[] = [];
     for (const o of op.ops) out.push(await applyRedo(o));
@@ -183,6 +208,10 @@ export default function DocumentPage({ params }: { params: { id: string } }) {
     }
     return oldArea > 0 ? Math.min(1, inter / oldArea) : 0;
   }
+
+  // kalem paleti tercihleri
+  useEffect(() => { setPen(loadPenPrefs()); penLoaded.current = true; }, []);
+  useEffect(() => { if (penLoaded.current) savePenPrefs(pen); }, [pen]);
 
   // kalici okuyucu tercihleri
   useEffect(() => {
@@ -307,11 +336,21 @@ export default function DocumentPage({ params }: { params: { id: string } }) {
       if (e.key === "ArrowRight" || e.key === "PageDown") { e.preventDefault(); setPage((p) => Math.min(numPages || p, p + 1)); }
       else if (e.key === "ArrowLeft" || e.key === "PageUp") { e.preventDefault(); setPage((p) => Math.max(1, p - 1)); }
       else if (e.key === "f" && isLg) setFocus((f) => !f);
+      // kalem paleti: 1-5 renk, H vurgu, U alt cizgi, E silgi (ayni tusa tekrar basinca arac kapanir)
+      else if (/^[1-5]$/.test(e.key) && viewMode === "page") {
+        const c = HIGHLIGHT_COLORS[Number(e.key) - 1];
+        setPen((p) => ({ ...p, color: c.value }));
+        if (toolRef.current === "none" || toolRef.current === "eraser") setTool("highlight");
+        say(`Renk: ${c.label}`, 1200);
+      }
+      else if ((e.key === "h" || e.key === "H") && viewMode === "page") setTool(toolRef.current === "highlight" ? "none" : "highlight");
+      else if ((e.key === "u" || e.key === "U") && viewMode === "page") setTool(toolRef.current === "underline" ? "none" : "underline");
+      else if ((e.key === "e" || e.key === "E") && viewMode === "page") setTool(toolRef.current === "eraser" ? "none" : "eraser");
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [numPages, annotations, isLg, sideSheet, pinned]);
+  }, [numPages, annotations, isLg, sideSheet, pinned, viewMode]);
 
   // kaldigin yerden devam: PDF acilinca kayitli sayfaya don
   useEffect(() => {
@@ -365,11 +404,14 @@ export default function DocumentPage({ params }: { params: { id: string } }) {
   const showRight = rightOpen && (!focus || peek === "right");
   const progress = numPages ? Math.round((page / numPages) * 100) : 0;
 
-  async function onCreateHighlight(h: { page: number; rects: any[]; text: string; color: string; openNote?: boolean }) {
+  async function onCreateHighlight(h: { page: number; rects: any[]; text: string; color: string; style: HighlightStyle; opacity: number; openNote?: boolean }) {
+    // secilen renk paletin son rengi olur (H-5: bir sonraki secim bu renkle vurgulanir)
+    setPen((p) => (p.color === h.color ? p : { ...p, color: h.color }));
     const olds = annotations.filter((a) => a.page_number === h.page && a.anchor?.type === "highlight" && !a.note_content
                                             && coveredBy(a.anchor.rects || [], h.rects) >= 0.6);
     for (const o of olds) await remove(o.id);
-    const created = await add({ page_number: h.page, selected_text: h.text, note_content: "", highlight_color: h.color, anchor: { type: "highlight", rects: h.rects } });
+    const created = await add({ page_number: h.page, selected_text: h.text, note_content: "", highlight_color: h.color,
+                                anchor: { type: "highlight", rects: h.rects, style: h.style, opacity: h.opacity } });
     if (created) {
       const addOp: HistOp = { kind: "add", ann: created };
       pushHist(olds.length ? { kind: "group", ops: [...olds.map((o) => ({ kind: "remove", ann: o } as HistOp)), addOp] } : addOp);
@@ -382,6 +424,10 @@ export default function DocumentPage({ params }: { params: { id: string } }) {
       }
     }
     if (created && h.openNote) { setEditing(created); showNotes(); }
+  }
+  function onErase(a: Annotation) {
+    void removeTracked(a.id);
+    say(`${a.anchor.type === "sticky" ? "Kenar notu" : a.anchor.style === "underline" ? "Alt çizgi" : "Vurgu"} silindi · Ctrl+Z ile geri al`, 2500);
   }
   async function onCreateSticky(s: { page: number; x: number; y: number }) {
     const created = await add({ page_number: s.page, selected_text: null, note_content: "", highlight_color: null, anchor: { type: "sticky", x: s.x, y: s.y } });
@@ -624,9 +670,11 @@ export default function DocumentPage({ params }: { params: { id: string } }) {
       <PinchZoom scale={scale} onScaleChange={(s: number) => setScale(() => s)} fitLabel="Sığdır">
         <PdfReader
           fileUrl={fileUrl} page={page} scale={scale} spread={isLg && spread} tool={tool}
+          pen={{ color: pen.color, opacity: pen.opacity }}
           annotations={annotations}
           onNumPages={setNumPages} onVisiblePage={setPage}
           onCreateHighlight={onCreateHighlight} onCreateSticky={onCreateSticky}
+          onErase={onErase} onPenDoubleTap={penDoubleTap}
           onSelectAnnotation={(a) => { setEditing(a); showNotes(); }}
           onAsk={onAsk}
           onAddToDraft={(text, pg) => addToDraft(text, pg)}
@@ -681,6 +729,16 @@ export default function DocumentPage({ params }: { params: { id: string } }) {
         <section aria-label="PDF" className="relative min-w-0 flex-1 overflow-hidden"
               onPointerDown={() => { if (focus && peek) setPeek(null); }}>
           {pdfView}
+          {/* Kalem paleti: arac acikken; masaustunde ustte (arac cubugunun altinda), tablette/telefonda altta */}
+          {tool !== "none" && viewMode === "page" && fileUrl && (
+            <PenPalette tool={tool} setTool={setTool}
+                        color={pen.color} setColor={(c) => setPen((p) => ({ ...p, color: c }))}
+                        opacity={pen.opacity} setOpacity={(o) => setPen((p) => ({ ...p, opacity: o }))}
+                        collapsed={pen.collapsed} setCollapsed={(b) => setPen((p) => ({ ...p, collapsed: b }))}
+                        pos={pen.pos} setPos={(pos) => setPen((p) => ({ ...p, pos }))}
+                        dock={isLg ? "top" : "bottom"} onClose={() => setTool("none")}
+                        onUndo={undo} canUndo={histTick >= 0 && undoRef.current.length > 0} />
+          )}
           {/* okuma ilerlemesi */}
           <div aria-hidden className="pointer-events-none absolute bottom-0 left-0 h-1 bg-accent-purple/70 transition-all" style={{ width: `${progress}%` }} />
           {numPages > 0 && (
@@ -761,34 +819,63 @@ export default function DocumentPage({ params }: { params: { id: string } }) {
       {draftPicker}
       {editing && (
         <NoteEditor ann={editing} onClose={() => setEditing(null)}
-                    onSave={(content, color) => { patch(editing.id, { note_content: content, ...(color ? { highlight_color: color } : {}) }); setEditing(null); }}
-                    onDelete={() => { removeTracked(editing.id); setEditing(null); }} />
+                    onSave={(content, color, style, opacity) => {
+                      const anchorPatch = editing.anchor.type === "sticky" ? {}
+                        : { anchor: { ...editing.anchor, style: style || editing.anchor.style || "highlight", opacity: opacity ?? editing.anchor.opacity ?? DEFAULT_OPACITY } };
+                      patch(editing.id, { note_content: content, ...(color ? { highlight_color: color } : {}), ...anchorPatch });
+                      setEditing(null);
+                    }}
+                    onDelete={() => { removeTracked(editing.id); setEditing(null); say("Çöp kutusuna taşındı · Ctrl+Z ile geri al", 2500); }} />
       )}
     </div>
   );
 }
 
 function NoteEditor({ ann, onClose, onSave, onDelete }: {
-  ann: Annotation; onClose: () => void; onSave: (content: string, color?: string) => void; onDelete: () => void;
+  ann: Annotation; onClose: () => void;
+  onSave: (content: string, color?: string, style?: HighlightStyle, opacity?: number) => void; onDelete: () => void;
 }) {
   const [text, setText] = useState(ann.note_content || "");
   const [color, setColor] = useState(ann.highlight_color || HIGHLIGHT_COLORS[0].value);
+  const [style, setStyle] = useState<HighlightStyle>(ann.anchor.style === "underline" ? "underline" : "highlight");
+  const [opacity, setOpacity] = useState<number>(ann.anchor.opacity ?? DEFAULT_OPACITY);
   const sticky = ann.anchor.type === "sticky";
-  const save = () => onSave(text, !sticky ? color : undefined);
+  const save = () => onSave(text, !sticky ? color : undefined, !sticky ? style : undefined, !sticky ? opacity : undefined);
+  const preview: React.CSSProperties = style === "underline"
+    ? { background: "transparent", borderBottom: `${(OPACITY_STEPS.find((s) => s.value === opacity) || OPACITY_STEPS[2]).underlinePx}px solid ${color}` }
+    : { background: color, opacity: Math.max(0.5, opacity) };
   return (
-    <Modal open onClose={onClose} title={`${sticky ? "Kenar notu" : "Vurgu notu"} · s.${ann.page_number}`} size="md">
+    <Modal open onClose={onClose} title={`${sticky ? "Kenar notu" : style === "underline" ? "Alt çizgi notu" : "Vurgu notu"} · s.${ann.page_number}`} size="md">
       {ann.selected_text && (
-        <p className="mb-3 rounded-md px-2 py-1 text-sm text-[#1F1D1A]" style={{ background: ann.highlight_color || "#FFE78A" }}>{ann.selected_text}</p>
+        <p className="mb-3 rounded-md px-2 py-1 text-sm text-[#1F1D1A]" style={preview}>{ann.selected_text}</p>
       )}
       {!sticky && (
-        <div className="mb-3 flex items-center gap-0.5" role="group" aria-label="Vurgu rengi">
-          {HIGHLIGHT_COLORS.map((c) => (
-            <button key={c.key} type="button" aria-label={c.label} aria-pressed={color === c.value} onClick={() => setColor(c.value)}
-                    className="flex h-10 w-10 items-center justify-center rounded-lg hover:bg-surface-muted">
-              <span className={`h-6 w-6 rounded-full border ${color === c.value ? "ring-2 ring-accent-purple ring-offset-1" : "border-black/10"}`}
-                    style={{ background: c.value }} />
-            </button>
-          ))}
+        <div className="mb-3 flex flex-wrap items-center gap-2">
+          <div className="flex items-center gap-0.5" role="group" aria-label="Vurgu rengi">
+            {HIGHLIGHT_COLORS.map((c) => (
+              <button key={c.key} type="button" aria-label={c.label} aria-pressed={color === c.value} onClick={() => setColor(c.value)}
+                      className="flex h-10 w-10 items-center justify-center rounded-lg hover:bg-surface-muted">
+                <span className={`h-6 w-6 rounded-full border ${color === c.value ? "ring-2 ring-accent-purple ring-offset-1" : "border-black/10"}`}
+                      style={{ background: c.value }} />
+              </button>
+            ))}
+          </div>
+          <div role="group" aria-label="Stil" className="flex items-center rounded-lg border p-0.5 text-xs">
+            {([["highlight", "Vurgu"], ["underline", "Altı çizili"]] as const).map(([k, label]) => (
+              <button key={k} type="button" aria-pressed={style === k} onClick={() => setStyle(k)}
+                      className={`h-9 rounded-md px-2.5 ${style === k ? "bg-accent-purple/10 font-medium text-accent-purple" : "text-text-secondary hover:bg-surface-muted"}`}>
+                {label}
+              </button>
+            ))}
+          </div>
+          <div role="group" aria-label={style === "underline" ? "Çizgi kalınlığı" : "Koyuluk"} className="flex items-center rounded-lg border p-0.5 text-xs">
+            {OPACITY_STEPS.map((st) => (
+              <button key={st.key} type="button" aria-pressed={opacity === st.value} onClick={() => setOpacity(st.value)}
+                      className={`h-9 rounded-md px-2.5 ${opacity === st.value ? "bg-accent-purple/10 font-medium text-accent-purple" : "text-text-secondary hover:bg-surface-muted"}`}>
+                {st.label}
+              </button>
+            ))}
+          </div>
         </div>
       )}
       <label htmlFor="note-editor-text" className="sr-only">Not metni</label>
@@ -796,7 +883,8 @@ function NoteEditor({ ann, onClose, onSave, onDelete }: {
                 onKeyDown={(e) => { if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) { e.preventDefault(); save(); } }}
                 placeholder="Notunu yaz…" className="w-full rounded-lg border bg-surface-muted p-3 text-sm outline-none focus:border-accent-purple" />
       <div className="mt-3 flex items-center justify-between">
-        <button type="button" onClick={onDelete} className="min-h-[44px] rounded-lg px-2 text-sm text-danger hover:bg-surface-muted">
+        <button type="button" onClick={onDelete} className="min-h-[44px] rounded-lg px-2 text-sm text-danger hover:bg-surface-muted"
+                title="Çöp kutusuna taşınır; 30 gün içinde geri alabilirsin">
           {sticky ? "Notu sil" : "Vurguyu sil"}
         </button>
         <div className="flex gap-2">

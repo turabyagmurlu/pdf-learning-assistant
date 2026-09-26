@@ -48,7 +48,12 @@ function describe(v: SpeechSynthesisVoice) {
   return `${v.name} — ${bits.join(", ")}`;
 }
 
-export default function BrowserVoice({ text, onClose }: { text: string; onClose?: () => void }) {
+/** Telefon/tablet: Edge onerisi anlamsiz (iOS'ta motor hep Apple'inki). */
+const IS_MOBILE = typeof navigator !== "undefined" && /Android|iPhone|iPad|iPod/i.test(navigator.userAgent);
+/** iOS Safari'de pause/resume guvenilmez: duraklatmayi iptal + kaldigi cumleden yeniden baslatma ile yapariz. */
+const IS_IOS = typeof navigator !== "undefined" && /iPhone|iPad|iPod/i.test(navigator.userAgent);
+
+export default function BrowserVoice({ text, onClose, autoPlay = false }: { text: string; onClose?: () => void; autoPlay?: boolean }) {
   const parts = useRef<string[]>(splitSentences(text));
   const idx = useRef(0);
   const stopped = useRef(false);
@@ -71,6 +76,7 @@ export default function BrowserVoice({ text, onClose }: { text: string; onClose?
     if (!browserVoiceSupported()) return;
     const read = () => {
       const all = window.speechSynthesis.getVoices();
+      if (!all.length) return;
       const tr = all.filter((v) => /^tr/i.test(v.lang));
       // En iyisi basa: once kadin, sonra dogal ses.
       const sorted = (tr.length ? tr : all).sort((a, b) => voiceQuality(b).score - voiceQuality(a).score);
@@ -78,13 +84,25 @@ export default function BrowserVoice({ text, onClose }: { text: string; onClose?
       setVoiceName((n) => n || (sorted[0]?.name ?? ""));
     };
     read();
+    // iOS'ta ilk getVoices() bos donup "voiceschanged" hic gelmeyebilir: biraz sonra yeniden dene.
+    const retry1 = setTimeout(read, 300);
+    const retry2 = setTimeout(read, 1500);
     window.speechSynthesis.addEventListener("voiceschanged", read);
     return () => {
+      clearTimeout(retry1); clearTimeout(retry2);
       window.speechSynthesis.removeEventListener("voiceschanged", read);
       stopped.current = true;
       try { window.speechSynthesis.cancel(); } catch {}
     };
   }, []);
+
+  // "Beklemeden cihaz sesiyle dinle": acilir acilmaz okumaya basla (tarayici izin vermezse "Oku" dugmesi var).
+  useEffect(() => {
+    if (!autoPlay || !browserVoiceSupported()) return;
+    const t = setTimeout(() => speakFrom(0), 50);
+    return () => clearTimeout(t);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [autoPlay]);
 
   function speakFrom(i: number) {
     if (!browserVoiceSupported()) return;
@@ -113,9 +131,14 @@ export default function BrowserVoice({ text, onClose }: { text: string; onClose?
 
   function toggle() {
     const synth = window.speechSynthesis;
-    if (state === "playing") { synth.pause(); setState("paused"); }
-    else if (state === "paused") { synth.resume(); setState("playing"); }
-    else speakFrom(0);
+    if (state === "playing") {
+      if (IS_IOS) { stopped.current = true; try { synth.cancel(); } catch {} }   // iOS: pause guvenilmez
+      else synth.pause();
+      setState("paused");
+    } else if (state === "paused") {
+      if (IS_IOS || !synth.paused) speakFrom(idx.current);                      // kaldigi cumleden devam
+      else { synth.resume(); setState("playing"); }
+    } else speakFrom(idx.current);
   }
 
   function stop() {
@@ -156,27 +179,29 @@ export default function BrowserVoice({ text, onClose }: { text: string; onClose?
       </div>
       {voices.length > 0 && !voiceQuality(voices.find((v) => v.name === voiceName) || voices[0]).female && (
         <p className="mt-2 rounded-lg bg-warning/10 px-3 py-2 text-[11px] text-text-secondary">
-          Bu cihazda yüklü tek Türkçe ses erkek ve robotik. Doğal bir kadın sesi istersen uygulamayı
-          <b> Microsoft Edge</b>'de aç — Edge'in çevrimiçi Türkçe kadın sesi burada listeye düşer.
-          Asıl anlatıcı sesi için kullanım hakkın yenilenince <b>Dinle</b>'ye dön.
+          {IS_MOBILE
+            ? "Bu cihazda yüklü Türkçe ses erkek ve biraz robotik; cihaz ayarlarından başka bir Türkçe ses yükleyebilirsin. "
+            : <>Bu cihazda yüklü tek Türkçe ses erkek ve robotik. Doğal bir kadın sesi istersen uygulamayı
+              <b> Microsoft Edge</b>&apos;de aç — Edge&apos;in çevrimiçi Türkçe kadın sesi burada listeye düşer. </>}
+          Asıl anlatıcı sesi için kullanım hakkın yenilenince <b>Sesli oku</b>&apos;ya dön.
         </p>
       )}
 
       <div className="mt-3 flex flex-wrap items-center gap-2">
         <button onClick={() => jump(-2)} title="2 cümle geri (←)" aria-label="2 cümle geri"
-                className="flex items-center gap-1 rounded-xl border px-3 py-2 text-sm hover:bg-black/5">
+                className="flex min-h-[40px] items-center gap-1 rounded-xl border px-3 py-2 text-sm hover:bg-black/5">
           <SkipBack size={15} /> <span className="text-xs">2 cümle</span>
         </button>
         <button onClick={toggle}
-                className="flex items-center gap-1.5 rounded-xl bg-accent-purple px-4 py-2 text-sm text-white">
+                className="flex min-h-[44px] items-center gap-1.5 rounded-xl bg-accent-purple px-4 py-2 text-sm text-white">
           {state === "playing" ? <Pause size={15} /> : <Play size={15} />}
           {state === "playing" ? "Duraklat" : state === "paused" ? "Devam et" : "Oku"}
         </button>
         <button onClick={() => jump(2)} title="2 cümle ileri (→)" aria-label="2 cümle ileri"
-                className="flex items-center gap-1 rounded-xl border px-3 py-2 text-sm hover:bg-black/5">
+                className="flex min-h-[40px] items-center gap-1 rounded-xl border px-3 py-2 text-sm hover:bg-black/5">
           <span className="text-xs">2 cümle</span> <SkipForward size={15} />
         </button>
-        <button onClick={stop} className="flex items-center gap-1.5 rounded-xl border px-3 py-2 text-sm">
+        <button onClick={stop} className="flex min-h-[40px] items-center gap-1.5 rounded-xl border px-3 py-2 text-sm">
           <Square size={13} /> Durdur
         </button>
 
@@ -184,7 +209,7 @@ export default function BrowserVoice({ text, onClose }: { text: string; onClose?
           {SPEEDS.map((s) => (
             <button key={s} onClick={() => { setRate(s); if (state !== "idle") setTimeout(() => speakFrom(idx.current), 0); }}
                     aria-label={`Hız ${s}×`} aria-pressed={rate === s}
-                    className={"min-h-[36px] rounded-lg px-2 py-1 text-xs " + (rate === s ? "bg-accent-purple text-white" : "text-text-secondary")}>
+                    className={"min-h-[40px] min-w-[40px] rounded-lg px-2 py-1 text-xs " + (rate === s ? "bg-accent-purple text-white" : "text-text-secondary")}>
               {s}×
             </button>
           ))}
@@ -192,7 +217,7 @@ export default function BrowserVoice({ text, onClose }: { text: string; onClose?
 
         {voices.length > 1 && (
           <select value={voiceName} aria-label="Cihaz sesi" onChange={(e) => { setVoiceName(e.target.value); if (state !== "idle") setTimeout(() => speakFrom(idx.current), 0); }}
-                  className="rounded-xl border bg-surface px-2 py-2 text-xs">
+                  className="min-h-[40px] rounded-xl border bg-surface px-2 py-2 text-xs">
             {voices.map((v) => <option key={v.name} value={v.name}>{describe(v)}</option>)}
           </select>
         )}

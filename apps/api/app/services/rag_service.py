@@ -66,7 +66,7 @@ async def retrieve_many(conn, document_ids: list[str], question: str,
                1 - (dc.embedding <=> $1) AS score
         FROM document_chunks dc
         JOIN documents d ON d.id = dc.document_id
-        WHERE dc.document_id = ANY($2::uuid[]) AND dc.embedding IS NOT NULL
+        WHERE dc.document_id = ANY($2::uuid[]) AND dc.embedding IS NOT NULL AND d.deleted_at IS NULL
         ORDER BY dc.embedding <=> $1
         LIMIT 30
         """,

@@ -286,17 +286,26 @@ export default function LibraryPage() {
     const d = docs.find((x) => x.id === id);
     const inNbs = d ? colIds(d).map((c) => colName[c]).filter(Boolean) : [];
     const ok = await confirm({
-      title: `“${d?.title || "Bu kaynak"}” silinsin mi?`,
-      description: "Kaynak ve üzerindeki her şey kalıcı olarak silinir; geri alınamaz.",
-      losses: [deleteLosses(d),
-               ...(inNbs.length ? [inNbs.length === 1 ? `«${inNbs[0]}» defterinden de çıkar` : `Bağlı olduğu ${inNbs.length} defterden de çıkar (${inNbs.join(", ")})`] : [])],
-      confirmLabel: "Kalıcı olarak sil", danger: true,
+      title: `“${d?.title || "Bu kaynak"}” çöp kutusuna taşınsın mı?`,
+      description: "Çöp kutusuna taşınır; 30 gün içinde geri alabilirsin. Sonra kendiliğinden kalıcı silinir.",
+      losses: [deleteLosses(d).replace(/silinir$/, "çöpe gider"),
+               ...(inNbs.length ? [inNbs.length === 1 ? `«${inNbs[0]}» defterinden çıkar (geri getirince döner)` : `Bağlı olduğu ${inNbs.length} defterden çıkar (${inNbs.join(", ")}); geri getirince döner`] : [])],
+      keeps: ["Çöp kutusundan geri getirebilirsin (sol menü › Çöp kutusu)"],
+      confirmLabel: "Çöp kutusuna taşı", danger: true,
     });
     if (!ok) return;
     const prevDocs = docs;
     setDocs((prev) => prev.filter((x) => x.id !== id));
-    try { await api("/documents/" + id, { method: "DELETE" }); toast("Kaynak silindi."); }
-    catch (e) { setDocs(prevDocs); toast.error("Kaynak silinemedi. " + errorMessage(e)); }
+    try {
+      await api("/documents/" + id, { method: "DELETE" });
+      window.dispatchEvent(new Event("typdf:trash-changed"));
+      toast("Kaynak çöp kutusuna taşındı.", { action: { label: "Geri al", run: () => {
+        void api(`/trash/document/${id}/restore`, { method: "POST" })
+          .then(() => { window.dispatchEvent(new Event("typdf:trash-changed")); return reload(); })
+          .catch((e) => toast.error("Geri getirilemedi. " + errorMessage(e)));
+      } } });
+    }
+    catch (e) { setDocs(prevDocs); toast.error("Kaynak çöp kutusuna taşınamadı. " + errorMessage(e)); }
   }
 
   async function renameNb(id: string) {
@@ -310,12 +319,14 @@ export default function LibraryPage() {
   async function deleteNb(id: string, title: string) {
     const n = docs.filter((d) => colIds(d).includes(id)).length;
     const ok = await confirm({
-      title: `“${title}” defteri silinsin mi?`,
-      description: "Defter kalıcı olarak silinir; bu işlem geri alınamaz.",
-      losses: ["Defterin sohbeti, taslağı, sözlüğü, haritası ve zaman çizelgesi silinir"],
-      keeps: n > 0 ? [`İçindeki ${n} kaynak silinmez; Kütüphane'de ve bağlı olduğu diğer defterlerde kalır`] : undefined,
-      confirmLabel: "Defteri sil", danger: true,
-      typeToConfirm: n > 0 ? title : undefined,
+      title: `“${title}” defteri çöp kutusuna taşınsın mı?`,
+      description: "Çöp kutusuna taşınır; 30 gün içinde geri alabilirsin. Sonra kendiliğinden kalıcı silinir.",
+      losses: ["Defterin sohbeti, taslağı, sözlüğü, haritası ve zaman çizelgesi defterle birlikte çöpe gider"],
+      keeps: [
+        ...(n > 0 ? [`İçindeki ${n} kaynak silinmez; Kütüphane'de ve bağlı olduğu diğer defterlerde kalır (geri getirince deftere döner)`] : []),
+        "Çöp kutusundan geri getirebilirsin (sol menü › Çöp kutusu)",
+      ],
+      confirmLabel: "Çöp kutusuna taşı", danger: true,
     });
     if (!ok) return;
     setNbMenu(null);
@@ -323,8 +334,16 @@ export default function LibraryPage() {
     const prevCols = collections, prevDocs = docs;
     setCollections((cs) => cs.filter((c) => c.id !== id));
     setDocs((ds) => ds.map((d) => (colIds(d).includes(id) ? { ...d, collection_ids: colIds(d).filter((x) => x !== id), collection_id: null } : d)));
-    try { await api("/collections/" + id, { method: "DELETE" }); toast("Defter silindi; kaynaklar Kütüphane'de duruyor."); }
-    catch (e) { setCollections(prevCols); setDocs(prevDocs); toast.error("Defter silinemedi. " + errorMessage(e)); }
+    try {
+      await api("/collections/" + id, { method: "DELETE" });
+      window.dispatchEvent(new Event("typdf:trash-changed"));
+      toast("Defter çöp kutusuna taşındı; kaynaklar Kütüphane'de duruyor.", { action: { label: "Geri al", run: () => {
+        void api(`/trash/collection/${id}/restore`, { method: "POST" })
+          .then(() => { window.dispatchEvent(new Event("typdf:trash-changed")); return reload(); })
+          .catch((e) => toast.error("Geri getirilemedi. " + errorMessage(e)));
+      } } });
+    }
+    catch (e) { setCollections(prevCols); setDocs(prevDocs); toast.error("Defter çöp kutusuna taşınamadı. " + errorMessage(e)); }
   }
   async function createNb() {
     const t = newNb.trim();

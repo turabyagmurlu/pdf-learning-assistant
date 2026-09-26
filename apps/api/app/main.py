@@ -74,6 +74,22 @@ async def lifespan(app: FastAPI):
                 " created_at timestamptz NOT NULL DEFAULT now())"
             )
             await conn.execute("CREATE INDEX IF NOT EXISTS tts_cache_used_idx ON tts_cache (used_at)")
+            # Ses onbellegi butcesi (S1/M6): bayt sayisi + sabitlenmis (ses ornegi) kayitlar
+            await conn.execute("ALTER TABLE tts_cache ADD COLUMN IF NOT EXISTS bytes int NOT NULL DEFAULT 0")
+            await conn.execute("ALTER TABLE tts_cache ADD COLUMN IF NOT EXISTS pinned boolean NOT NULL DEFAULT false")
+            await conn.execute("UPDATE tts_cache SET bytes=octet_length(wav) WHERE bytes=0")
+            # Sayfa anlatimi onbellegi (S1/H5): ayni belge+sayfa+metin -> 0 kullanim
+            await conn.execute(
+                "CREATE TABLE IF NOT EXISTS explain_cache ("
+                " document_id uuid NOT NULL REFERENCES documents(id) ON DELETE CASCADE,"
+                " page int NOT NULL DEFAULT 0,"
+                " input_hash text NOT NULL,"
+                " explanation text NOT NULL,"
+                " hits int NOT NULL DEFAULT 0,"
+                " created_at timestamptz NOT NULL DEFAULT now(),"
+                " used_at timestamptz NOT NULL DEFAULT now(),"
+                " PRIMARY KEY (document_id, page))"
+            )
             # --- kota tasarrufu ---
             # soru gommeleri (ayni soru bir daha gomulmez)
             await conn.execute(
@@ -150,6 +166,15 @@ async def lifespan(app: FastAPI):
             await _migrate_document_collections(conn)
     except Exception as e:  # noqa
         print("document_collections migrasyonu basarisiz:", repr(e))
+    # Cop kutusu (yumusak silme): deleted_at / trash_links sutunlari (Ajan P)
+    try:
+        from app.db.session import get_pool
+        from app.api.documents import ensure_trash_schema
+        pool = await get_pool()
+        async with pool.acquire() as conn:
+            await ensure_trash_schema(conn)
+    except Exception as e:  # noqa
+        print("cop kutusu migrasyonu basarisiz:", repr(e))
     # Auth semasi (token_version, password_resets) trafik gelmeden hazir olsun
     try:
         from app.db.session import get_pool
@@ -168,8 +193,11 @@ async def lifespan(app: FastAPI):
         pass
     flusher = _asyncio.create_task(_flush_usage_loop())
     backuper = _asyncio.create_task(_backup_loop())
+    trash_purger = _asyncio.create_task(_trash_purge_loop())   # 30 gunden eski cop ogeleri, gunde bir
     # Eski kaynaklarda file_hash bos: bir kez arka planda doldur (kopya yuklemeyi yakalamak icin)
     hasher = _asyncio.create_task(_backfill_hashes_once())
+    # Ses onbellegi butcesi: gunde bir kez en eski kayitlari sil (S1/M6)
+    tts_trimmer = _asyncio.create_task(_tts_trim_loop())
     # Yarim kalmis belgeleri kaldigi yerden isle (sunucu uyuyup uyandiginda sart)
     try:
         from app.workers.tasks import resume_unfinished
@@ -179,7 +207,9 @@ async def lifespan(app: FastAPI):
     yield
     flusher.cancel()
     backuper.cancel()
+    trash_purger.cancel()
     hasher.cancel()
+    tts_trimmer.cancel()
     try:
         await _flush_usage()
     except Exception:  # noqa
@@ -308,6 +338,22 @@ async def _backup_loop():
         await _asyncio.sleep(6 * 3600)
 
 
+async def _trash_purge_loop():
+    """Gunluk temizlik: cop kutusunda 30 gunu doldurmus kaynak/defter/not/sohbetleri kalici siler."""
+    import asyncio as _asyncio
+    await _asyncio.sleep(300)                  # acilis yukunu bekle
+    while True:
+        try:
+            from app.api.documents import purge_expired
+            from app.db.session import get_pool
+            pool = await get_pool()
+            async with pool.acquire() as conn:
+                await purge_expired(conn)
+        except Exception:  # noqa
+            pass
+        await _asyncio.sleep(24 * 3600)
+
+
 async def _flush_usage_loop():
     import asyncio as _asyncio
     while True:
@@ -316,6 +362,19 @@ async def _flush_usage_loop():
             await _flush_usage()
         except Exception:  # noqa
             pass
+
+
+async def _tts_trim_loop():
+    """Gunluk ses onbellegi temizligi: toplam bayt butcesi asildiysa en eski kayitlar silinir (S1/M6)."""
+    import asyncio as _asyncio
+    await _asyncio.sleep(240)                  # acilis yukunu bekle
+    while True:
+        try:
+            from app.api.study import trim_tts_cache
+            await trim_tts_cache()
+        except Exception:  # noqa
+            pass
+        await _asyncio.sleep(24 * 3600)
 
 
 app = FastAPI(title="PDF Öğrenme Asistanı API", version="1.0.0", lifespan=lifespan)
@@ -434,6 +493,7 @@ async def usage_status(user=Depends(current_user)):
 
 app.include_router(auth.router)
 app.include_router(documents.router)
+app.include_router(documents.trash_router)
 app.include_router(chat.router)
 app.include_router(notes.router)
 app.include_router(study.router)
@@ -441,3 +501,4 @@ app.include_router(collections.router)
 app.include_router(research.router)
 app.include_router(drafts.router)
 app.include_router(exports.router)
+from app.api import lecture as _lecture; app.include_router(_lecture.router)  # noqa: E402,E702 - sesli ozet (S2)

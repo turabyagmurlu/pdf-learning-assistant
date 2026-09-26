@@ -110,6 +110,36 @@ def service_state() -> dict:
     return {"state": state, "retry_min": retry_min}
 
 
+def _pool_state(models: list[str]) -> dict:
+    """Verilen model havuzunun ozeti: {"state": aktif|yogun|doldu, "retry_min": int|None}."""
+    sts = [status(m) for m in models]
+    if any(s == "aktif" for s in sts):
+        return {"state": "aktif", "retry_min": None}
+    now = time.time()
+    if not sts or all(s in ("gunluk_doldu", "yok") for s in sts):
+        state = "doldu"
+        until = next_reset().timestamp()
+    else:
+        state = "yogun"
+        waits = [t for t in (blocked_until(m) for m, s in zip(models, sts) if s == "dakikalik_dolu") if t]
+        until = min(waits) if waits else now + 60
+    return {"state": state, "retry_min": max(1, int((until - now + 59) // 60))}
+
+
+def tts_state() -> dict:
+    """Seslendirme (Gemini TTS) havuzunun ozeti, model adi vermeden.
+
+    service_state() metin havuzuna bakar; ses modellerinin kotasi ayridir. "Sesli oku"
+    dugmesi bu bilgiyle dolu iken kullanici bosuna tiklamasin, dogrudan cihaz sesine gecsin.
+    Import dongusu olmasin diye tts_service fonksiyon icinde yuklenir.
+    """
+    try:
+        from app.services.tts_service import _tts_models
+        return _pool_state(_tts_models())
+    except Exception:  # noqa - bilinmiyorsa aktif varsay
+        return {"state": "aktif", "retry_min": None}
+
+
 def snapshot() -> dict:
     d = today()
     with _LOCK:

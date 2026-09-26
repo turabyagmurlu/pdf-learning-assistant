@@ -306,20 +306,19 @@ function CollectionPage({ id }: { id: string }) {
 
   async function deleteNotebook() {
     const n = docs.length;
-    const losses = ["Defterin sohbetleri, sözlüğü, haritası ve zaman çizelgesi silinir"];
-    if (st.draft_words) losses.unshift(`Taslağındaki ${st.draft_words} kelime silinir`);
+    const losses = ["Defter; sohbetleri, sözlüğü, haritası ve zaman çizelgesiyle çöp kutusuna gider"];
+    if (st.draft_words) losses.unshift(`Taslağındaki ${st.draft_words} kelime de defterle birlikte taşınır`);
     const ok = await confirm({
       title: `“${col.title}” defteri silinsin mi?`,
-      description: "Defter kalıcı olarak silinir; bu işlem geri alınamaz.",
+      description: "Çöp kutusuna taşınır; 30 gün içinde geri alabilirsin. Sonra kalıcı olarak silinir.",
       losses,
       keeps: n > 0 ? [`Kutuyu işaretlemezsen ${n} kaynağın silinmez; Kütüphane'de ve varsa diğer defterlerinde kalır`] : undefined,
-      checkbox: n > 0 ? "Yalnız bu deftere ait kaynakları da kalıcı olarak sil (dosyaları ve notlarıyla). Başka defterlerde de olan kaynaklar korunur." : undefined,
-      confirmLabel: "Defteri sil", danger: true,
-      typeToConfirm: (n > 0 || st.draft_words) ? col.title : undefined,
+      checkbox: n > 0 ? "Yalnız bu deftere ait kaynakları da çöp kutusuna taşı. Başka defterlerde de olan kaynaklar korunur." : undefined,
+      confirmLabel: "Çöp kutusuna taşı", danger: true,
     });
     if (!ok) return;
     const withSources = n > 0 && wasChecked();
-    try { await api("/collections/" + id + (withSources ? "?with_sources=1" : ""), { method: "DELETE" }, 1); toast("Defter silindi"); router.push("/notebooks"); }
+    try { await api("/collections/" + id + (withSources ? "?with_sources=1" : ""), { method: "DELETE" }, 1); toast("Defter çöp kutusuna taşındı", { action: { label: "Geri al", run: () => { api("/trash/collection/" + id + "/restore", { method: "POST" }, 1).then(() => { window.dispatchEvent(new Event("typdf:trash-changed")); router.push("/collections/" + id); }).catch(() => toast.error("Geri alınamadı")); } } }); window.dispatchEvent(new Event("typdf:trash-changed")); router.push("/notebooks"); }
     catch (e: any) { toast.error(e?.message || "Defter silinemedi; tekrar dene."); }
   }
 

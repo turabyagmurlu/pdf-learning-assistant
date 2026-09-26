@@ -259,20 +259,49 @@ def feynman_review(concept: str, explanation: str, context: str) -> str:
     return llm.complete(messages, model=settings.active_llm_model)
 
 
-def lecture_script(context: str, title: str) -> str:
-    """Koleksiyon icerigini sesli dinlenebilir akici bir derse cevirir."""
-    llm = get_llm()
-    messages = [
-        {"role": "system", "content":
-            "Sen bir konuyu sesli anlatan ogretmensin. Metin SESLI OKUNACAK: baslik, madde "
-            "isareti, yildiz, numara veya bicimlendirme KULLANMA. Sadece duz, akici cumleler. "
+_SPOKEN_RULES = (
+    "Metin SESLI OKUNACAK: baslik, madde isareti, yildiz, numara, parantez, tire, iki nokta "
+    "veya bicimlendirme KULLANMA. Kisaltma kullanma (vb., yy., M.O. gibi kisaltmalari acik yaz). "
+    "Sayilari ve tarihleri okunacagi gibi yaz. Cumleler 20 kelimeyi gecmesin. "
+    "Yalnizca Turkce yaz."
+)
+
+
+def lecture_prompt(context: str, title: str, dialog: bool = False) -> list[dict]:
+    """Sesli ozet istemi. dialog=True: iki kisilik sohbet (Ayse ogretmen, Kerem merakli ogrenci).
+
+    Sohbet biciminde her replik ayri satirda 'Ayşe: …' / 'Kerem: …' olarak yazilir;
+    seslendirme bu etiketlere gore iki ayri sesle yapilir.
+    """
+    if dialog:
+        system = (
+            "Sen bir podcast senaristisin. Iki kisi konuyu sohbet ederek anlatir: "
+            "Ayşe (sakin, sicak bir ogretmen; anlatir ve ornek verir) ve "
+            "Kerem (merakli bir ogrenci; kisa sorular sorar, anladigini kendi cumleleriyle "
+            "tekrar eder, bazen sasirir). BICIM KESIN: her replik ayri satirda, satir 'Ayşe: ' "
+            "ya da 'Kerem: ' ile baslar; baska konusmaci, sahne yonergesi, baslik yok. "
+            "Replikler kisa (1-3 cumle), sirali ve dogal; Kerem'in sorulari dinleyicinin "
+            "aklina gelecek sorular olsun. Kerem giris yapar ve konuyu sorar, Ayşe anlatir; "
+            "sonda Kerem ogrendiklerini iki cumleyle toparlar. Yaklasik 900-1200 kelime. "
+            + _SPOKEN_RULES
+        )
+        user = (f"Konu: {title}\n\nAsagidaki kaynaklardan yararlanarak sohbeti yaz:\n\n{context[:14000]}")
+    else:
+        system = (
+            "Sen bir konuyu sesli anlatan ogretmensin. Sadece duz, akici cumleler. "
             "Dinleyiciyi 'sen' diye kabul et. Once konuya kisa bir giris yap, sonra ana "
             "fikirleri birbirine baglayarak anlat, aralarda 'simdi sunu dusun' gibi kucuk "
-            "duraklamalar koy, sonunda kisa bir toparlama yap. Yaklasik 900-1200 kelime."},
-        {"role": "user", "content":
-            f"Konu: {title}\n\nAsagidaki kaynaklardan yararlanarak dersi anlat:\n\n{context[:14000]}"},
-    ]
-    return llm.complete(messages, model=settings.active_llm_model)
+            "duraklamalar koy, sonunda kisa bir toparlama yap. Paragraflar arasinda bos satir "
+            "birak. Yaklasik 900-1200 kelime. " + _SPOKEN_RULES
+        )
+        user = f"Konu: {title}\n\nAsagidaki kaynaklardan yararlanarak dersi anlat:\n\n{context[:14000]}"
+    return [{"role": "system", "content": system}, {"role": "user", "content": user}]
+
+
+def lecture_script(context: str, title: str, dialog: bool = False) -> str:
+    """Koleksiyon icerigini sesli dinlenebilir akici bir derse (ya da iki kisilik sohbete) cevirir."""
+    llm = get_llm()
+    return llm.complete(lecture_prompt(context, title, dialog), model=settings.active_llm_model)
 
 
 STUDY_QUALITY_RULES = """KALİTE KURALLARI (kesin):

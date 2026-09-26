@@ -4,26 +4,20 @@ import { Document, Page, pdfjs } from "react-pdf";
 import "react-pdf/dist/Page/TextLayer.css";
 import "react-pdf/dist/Page/AnnotationLayer.css";
 import "@/styles/reader.css";
-import { Annotation, Rect, HIGHLIGHT_COLORS } from "@/lib/reader";
-import { StickyNote, MessageSquare, PenLine } from "lucide-react";
+import { Annotation, Rect, HIGHLIGHT_COLORS, PenTool, HighlightStyle, highlightStyle, darken } from "@/lib/reader";
+import { StickyNote, MessageSquare, PenLine, Underline } from "lucide-react";
 
 // Worker paketten sunulur (TK-6): scripts/copy-worker.mjs pdfjs-dist worker'ini public/'e kopyalar
 // (package.json postinstall). Service worker (public/sw.js) onbellege alir; ikinci acilista ag gerekmez.
 pdfjs.GlobalWorkerOptions.workerSrc = "/pdf.worker.min.mjs";
 
-type NewHighlight = { page: number; rects: Rect[]; text: string; color: string; openNote?: boolean };
+type NewHighlight = {
+  page: number; rects: Rect[]; text: string; color: string;
+  style: HighlightStyle; opacity: number; openNote?: boolean;
+};
 type NewSticky = { page: number; x: number; y: number };
-
-/** Son kullanilan vurgu rengi (H-5: arac acikken balon acilmadan bu renkle vurgulanir). */
-const LAST_COLOR_KEY = "reader.lastColor";
-function lastColor(): string {
-  try {
-    const v = localStorage.getItem(LAST_COLOR_KEY);
-    if (v && HIGHLIGHT_COLORS.some((c) => c.value === v)) return v;
-  } catch {}
-  return HIGHLIGHT_COLORS[0].value;
-}
-function rememberColor(v: string) { try { localStorage.setItem(LAST_COLOR_KEY, v); } catch {} }
+/** Kalem paletinin o anki secimi (renk + kademe); H-5: arac acikken balon acilmadan bununla vurgulanir. */
+export type PenState = { color: string; opacity: number };
 
 /** Dokunulan noktadaki metin konumu (kalemle secim icin). */
 function caretAt(x: number, y: number): Range | null {
@@ -42,13 +36,20 @@ interface Props {
   page: number;
   scale: number;
   spread: boolean;
-  tool: "none" | "highlight" | "note";
+  /** Kalem paleti araci: none | highlight | underline | note | eraser */
+  tool: PenTool;
+  /** Paletteki secili renk ve kademe */
+  pen: PenState;
   annotations: Annotation[];
   onNumPages: (n: number) => void;
   onVisiblePage: (n: number) => void;
   onCreateHighlight: (h: NewHighlight) => void;
   onCreateSticky: (s: NewSticky) => void;
   onSelectAnnotation: (a: Annotation) => void;
+  /** Silgi: bir vurguya dokununca (geri al ile) */
+  onErase: (a: Annotation) => void;
+  /** Apple Pencil: hizli iki dokunus -> son iki arac arasinda gecis */
+  onPenDoubleTap?: () => void;
   /** Secili metni sag paneldeki sohbete soru olarak hazirla */
   onAsk?: (text: string, page: number) => void;
   /** Secili metni kaynak + sayfa atifli alinti karti olarak defterin taslagina ekle (ucretsiz) */
@@ -62,7 +63,9 @@ const WINDOW = 2;       // gorunen sayfanin +-2 komsusu cizilir; digerleri yer t
 type Sel = { page: number; rects: Rect[]; text: string; top: number; left: number };
 
 export default function PdfReader(props: Props) {
-  const { fileUrl, page, scale, spread, tool, annotations } = props;
+  const { fileUrl, page, scale, spread, tool, annotations, pen: penState } = props;
+  // secimle dogrudan vurgulayan araclar (H-5 otomatik vurgu bunlarda calisir)
+  const selTool = tool === "highlight" || tool === "underline";
   const [numPages, setNumPages] = useState(0);
   const scrollRef = useRef<HTMLDivElement>(null);
   const bubbleDownAt = useRef(0);
@@ -185,8 +188,9 @@ export default function PdfReader(props: Props) {
       h: r.height / pr.height,
     })).filter((rc) => rc.y >= -0.05 && rc.y + rc.h <= 1.05);
     if (!rects.length) { setSel(null); return; }
-    if (autoCommit && tool === "highlight") {
-      props.onCreateHighlight({ page: pageNum, rects, text: s.toString(), color: lastColor() });
+    if (autoCommit && selTool) {
+      props.onCreateHighlight({ page: pageNum, rects, text: s.toString(), color: penState.color,
+                                style: tool === "underline" ? "underline" : "highlight", opacity: penState.opacity });
       s.removeAllRanges(); setSel(null);
       return;
     }
@@ -202,30 +206,61 @@ export default function PdfReader(props: Props) {
     const left = Math.max(8, Math.min(rawLeft, c.clientWidth - BW - 8));
     setSel({ page: pageNum, rects, text: s.toString(), top: Math.max(c.scrollTop + 4, top), left });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [props.onAsk, props.onAddToDraft, props.onCreateHighlight, tool]);
+  }, [props.onAsk, props.onAddToDraft, props.onCreateHighlight, tool, selTool, penState.color, penState.opacity]);
 
   useEffect(() => {
     let t: ReturnType<typeof setTimeout> | null = null;
     // Arac acikken secim degisimi balon acmaz (birakinca dogrudan vurgulanir)
-    const onChange = () => { if (tool === "highlight") return; if (t) clearTimeout(t); t = setTimeout(() => readSelection(false), 250); };
+    const onChange = () => { if (selTool) return; if (t) clearTimeout(t); t = setTimeout(() => readSelection(false), 250); };
     document.addEventListener("selectionchange", onChange);
     return () => { document.removeEventListener("selectionchange", onChange); if (t) clearTimeout(t); };
-  }, [readSelection, tool]);
+  }, [readSelection, selTool]);
 
-  // TB-6: vurgu araci acikken KALEM (pointerType === "pen") surukleyince sayfa kaymaz, metin secilir,
-  // birakinca son renkle vurgulanir. Parmak ve fare eskisi gibi (parmak kaydirir).
+  // TB-6: vurgu / alt cizgi araci acikken KALEM (pointerType === "pen") surukleyince sayfa kaymaz, metin
+  // secilir, birakinca paletteki renk ve kademeyle vurgulanir. Parmak ve fare eskisi gibi (parmak kaydirir).
+  // Silgi aracinda kalemle surukleme: altindan gecilen vurgular silinir.
+  // Hizli iki dokunus (kalem, < 350 ms, < 14 px): son iki arac arasinda gecis (onPenDoubleTap).
   const pen = useRef<{ id: number; start: Range } | null>(null);
+  const penErase = useRef<{ id: number; done: Set<string> } | null>(null);
+  const lastPenTap = useRef<{ t: number; x: number; y: number } | null>(null);
+  const eraseAt = (x: number, y: number) => {
+    const el = document.elementFromPoint(x, y) as HTMLElement | null;
+    const id = el?.closest?.("[data-ann]")?.getAttribute("data-ann");
+    if (!id || penErase.current?.done.has(id)) return;
+    penErase.current?.done.add(id);
+    const a = annotations.find((z) => z.id === id);
+    if (a) props.onErase(a);
+  };
   const onPenDown = (e: React.PointerEvent) => {
-    if (tool !== "highlight" || e.pointerType !== "pen") return;
+    if (e.pointerType !== "pen") return;
+    const now = Date.now();
+    const lt = lastPenTap.current;
+    lastPenTap.current = { t: now, x: e.clientX, y: e.clientY };
+    if (lt && now - lt.t < 350 && Math.hypot(e.clientX - lt.x, e.clientY - lt.y) < 14 && props.onPenDoubleTap) {
+      lastPenTap.current = null;
+      props.onPenDoubleTap();
+      e.preventDefault();
+      return;
+    }
+    const c = scrollRef.current;
+    if (tool === "eraser") {
+      if (c) c.style.touchAction = "none";
+      penErase.current = { id: e.pointerId, done: new Set() };
+      try { (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId); } catch {}
+      eraseAt(e.clientX, e.clientY);
+      e.preventDefault();
+      return;
+    }
+    if (!selTool) return;
     const start = caretAt(e.clientX, e.clientY);
     if (!start) return;
-    const c = scrollRef.current;
     if (c) c.style.touchAction = "none";
     pen.current = { id: e.pointerId, start };
     try { (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId); } catch {}
     e.preventDefault();
   };
   const onPenMove = (e: React.PointerEvent) => {
+    if (penErase.current && e.pointerId === penErase.current.id) { e.preventDefault(); eraseAt(e.clientX, e.clientY); return; }
     if (!pen.current || e.pointerId !== pen.current.id) return;
     e.preventDefault();
     const end = caretAt(e.clientX, e.clientY);
@@ -241,6 +276,12 @@ export default function PdfReader(props: Props) {
   };
   const onPenUp = (e: React.PointerEvent) => {
     const c = scrollRef.current;
+    if (penErase.current && e.pointerId === penErase.current.id) {
+      penErase.current = null;
+      if (c) c.style.touchAction = "";
+      try { (e.currentTarget as HTMLElement).releasePointerCapture(e.pointerId); } catch {}
+      return;
+    }
     if (pen.current && e.pointerId === pen.current.id) {
       pen.current = null;
       if (c) c.style.touchAction = "";
@@ -248,14 +289,13 @@ export default function PdfReader(props: Props) {
       readSelection(true);
       return;
     }
-    readSelection(tool === "highlight");
+    readSelection(selTool);
   };
 
   const clearSel = () => { window.getSelection()?.removeAllRanges(); setSel(null); };
-  const commitHighlight = (color: string, openNote = false) => {
+  const commitHighlight = (color: string, openNote = false, style: HighlightStyle = "highlight") => {
     if (!sel) return;
-    rememberColor(color);
-    props.onCreateHighlight({ page: sel.page, rects: sel.rects, text: sel.text, color, openNote });
+    props.onCreateHighlight({ page: sel.page, rects: sel.rects, text: sel.text, color, style, opacity: penState.opacity, openNote });
     clearSel();
   };
   const ask = () => {
@@ -280,6 +320,8 @@ export default function PdfReader(props: Props) {
 
   const onPageClick = (pageNum: number, e: React.MouseEvent) => {
     if (tool !== "note") return;
+    // balondan / vurgudan gelen tiklama degil, sayfanin kendisi
+    if ((e.target as HTMLElement).closest?.("[data-ann], [role=toolbar]")) return;
     const el = e.currentTarget as HTMLElement;
     const r = el.getBoundingClientRect();
     props.onCreateSticky({ page: pageNum, x: (e.clientX - r.left) / r.width, y: (e.clientY - r.top) / r.height });
@@ -290,7 +332,8 @@ export default function PdfReader(props: Props) {
 
   const block = (n: number) => (
     <PageBlock key={n} n={n} width={width} live={isLive(n)} ratio={ratios[n] || ratio} onRatio={onRatio}
-               annotations={annotations} onClick={onPageClick} onSelectAnnotation={props.onSelectAnnotation} />
+               annotations={annotations} onClick={onPageClick} eraser={tool === "eraser"}
+               onSelectAnnotation={props.onSelectAnnotation} onErase={props.onErase} />
   );
 
   const offline = typeof navigator !== "undefined" && navigator.onLine === false;
@@ -298,8 +341,9 @@ export default function PdfReader(props: Props) {
   return (
     <div ref={scrollRef} className="reader-surround h-full w-full overflow-auto overscroll-contain"
          onPointerDown={onPenDown} onPointerMove={onPenMove} onPointerUp={onPenUp} onPointerCancel={onPenUp}
-         onKeyUp={(e) => { if (e.shiftKey) readSelection(tool === "highlight"); }}
-         style={{ cursor: tool === "note" ? "crosshair" : tool === "highlight" ? "text" : "auto" }}>
+         onKeyUp={(e) => { if (e.shiftKey) readSelection(selTool); }}
+         data-tool={tool}
+         style={{ cursor: tool === "note" ? "crosshair" : selTool ? "text" : tool === "eraser" ? "cell" : "auto" }}>
       {/* H-4: Document "w-max min-w-full" — sayfa kaptan genisleyince kap da genisler, sol kenar kaydirilabilir */}
       <Document
         file={fileUrl}
@@ -336,10 +380,16 @@ export default function PdfReader(props: Props) {
             <button key={c.key} type="button" title={`${c.label} ile vurgula`} aria-label={`${c.label} ile vurgula`}
                     onClick={() => commitHighlight(c.value)}
                     className="flex h-10 w-10 items-center justify-center rounded-lg hover:bg-surface-hover">
-              <span className="h-6 w-6 rounded-full border border-black/15" style={{ background: c.value }} />
+              <span className={`h-6 w-6 rounded-full border ${c.value === penState.color ? "border-accent-purple ring-2 ring-accent-purple/40" : "border-black/15"}`}
+                    style={{ background: c.value }} />
             </button>
           ))}
-          <button type="button" onClick={() => commitHighlight(lastColor(), true)}
+          <button type="button" onClick={() => commitHighlight(penState.color, false, "underline")}
+                  className="flex h-10 w-10 items-center justify-center rounded-lg hover:bg-surface-hover"
+                  aria-label="Altını çiz" title="Altını çiz (seçili renkle)">
+            <Underline size={17} aria-hidden style={{ color: darken(penState.color) }} />
+          </button>
+          <button type="button" onClick={() => commitHighlight(penState.color, true)}
                   className="h-10 rounded-lg px-2 text-sm hover:bg-surface-hover" aria-label="Vurgula ve not ekle">+ Not</button>
           {props.onAsk && (
             <button type="button" onClick={ask}
@@ -361,11 +411,14 @@ export default function PdfReader(props: Props) {
   );
 }
 
-function PageBlock({ n, width, live, ratio, onRatio, annotations, onClick, onSelectAnnotation }: {
+function PageBlock({ n, width, live, ratio, onRatio, annotations, onClick, onSelectAnnotation, onErase, eraser }: {
   n: number; width: number; live: boolean; ratio: number; onRatio: (n: number, r: number) => void;
   annotations: Annotation[];
   onClick: (n: number, e: React.MouseEvent) => void;
   onSelectAnnotation: (a: Annotation) => void;
+  onErase: (a: Annotation) => void;
+  /** Silgi araci acik: vurguya dokununca silinir (secilmez) */
+  eraser: boolean;
 }) {
   const h = Math.round(width * ratio);
   if (!live) {
@@ -385,23 +438,28 @@ function PageBlock({ n, width, live, ratio, onRatio, annotations, onClick, onSel
       <div className="hl-layer">
         {anns.map((a) =>
           a.anchor.type === "sticky" ? (
-            <button key={a.id} type="button" className="hl-note-dot" aria-label={`Kenar notu, sayfa ${n}${a.note_content ? ": " + a.note_content.slice(0, 60) : ""}`}
+            <button key={a.id} type="button" className={`hl-note-dot ${eraser ? "hl-erasable" : ""}`} data-ann={a.id}
+                    aria-label={`Kenar notu, sayfa ${n}${a.note_content ? ": " + a.note_content.slice(0, 60) : ""}${eraser ? " (silmek için dokun)" : ""}`}
                     style={{ left: `${(a.anchor.x ?? 0.95) * 100}%`, top: `${(a.anchor.y ?? 0.04) * 100}%` }}
-                    onClick={(e) => { e.stopPropagation(); onSelectAnnotation(a); }}>
+                    onClick={(e) => { e.stopPropagation(); if (eraser) onErase(a); else onSelectAnnotation(a); }}>
               <StickyNote size={13} />
             </button>
           ) : (
-            (a.anchor.rects ?? []).map((r, i) => (
-              <div key={a.id + i} className="hl-rect"
-                   style={{
-                     left: `${r.x * 100}%`, top: `${r.y * 100}%`,
-                     width: `${r.w * 100}%`, height: `${r.h * 100}%`,
-                     background: a.highlight_color ?? "#FFE78A",
-                     outline: a.note_content ? "1.5px solid var(--r-accent)" : "none",
-                   }}
-                   title={a.note_content || a.selected_text || ""}
-                   onClick={(e) => { e.stopPropagation(); onSelectAnnotation(a); }} />
-            ))
+            (a.anchor.rects ?? []).map((r, i) => {
+              const hs = highlightStyle(a);
+              return (
+                <div key={a.id + i} className={`hl-rect ${hs.underline ? "hl-underline" : ""} ${eraser ? "hl-erasable" : ""}`}
+                     data-ann={a.id}
+                     style={{
+                       left: `${r.x * 100}%`, top: `${r.y * 100}%`,
+                       width: `${r.w * 100}%`, height: `${r.h * 100}%`,
+                       background: hs.background, opacity: hs.opacity, borderBottom: hs.borderBottom,
+                       outline: a.note_content ? "1.5px solid var(--r-accent)" : "none",
+                     }}
+                     title={eraser ? "Sil" : (a.note_content || a.selected_text || "")}
+                     onClick={(e) => { e.stopPropagation(); if (eraser) onErase(a); else onSelectAnnotation(a); }} />
+              );
+            })
           )
         )}
       </div>
