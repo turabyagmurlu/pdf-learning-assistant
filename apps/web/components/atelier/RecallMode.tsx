@@ -38,7 +38,9 @@ export default function RecallMode({ cards, index, onGrade }: {
 }) {
   const card = cards[index];
   const text = (card?.text || "").trim();
-  const keys = useMemo(() => pickKeywords(text), [text]);
+  // el yazısı notunda perde yok (metni yok)
+  const inkCard = !!card?.ink?.strokes?.length;
+  const keys = useMemo(() => (inkCard ? [] : pickKeywords(text)), [text, inkCard]);
   const segs = useMemo(() => segments(text, keys), [text, keys]);
   const [open, setOpen] = useState<Set<number>>(new Set());
   const [typed, setTyped] = useState(false);
@@ -105,7 +107,7 @@ export default function RecallMode({ cards, index, onGrade }: {
         <Deck cards={cards} index={index} label="Kart" exitDir={exitDir}
               hints={{ left: "Tekrar", right: "Bildim" }}
               onSwipe={(d) => grade(d === "right" ? "good" : "again")}
-              render={(c, _i, active) => (active
+              render={(c, _i, active) => (active && !c.ink?.strokes?.length
                 ? <QuoteCard card={c}>{body}</QuoteCard>
                 : <QuoteCard card={c} dropCap={false} />)} />
       </div>

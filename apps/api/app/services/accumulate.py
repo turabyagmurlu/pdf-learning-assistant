@@ -7,6 +7,7 @@ SONA bir alinti blogu olarak eklenir. Ayni note_id bir taslakta zaten varsa tekr
 
 Blok bicimi (web DraftEditor Block "quote"):
   {id, type:"quote", text, note?, color, source, page, document_id, note_id, style, auto:true, at}
+  El yazisi notu (anchor.type "ink"): style "ink", text "", ink:{strokes, box} (drafts.clean_ink sinirlari).
 
 Kurallar:
   - Her hedef taslak kendi islemi (transaction) + satir kilidi (FOR UPDATE) ile yazilir;
@@ -21,7 +22,7 @@ import logging
 from datetime import datetime
 from typing import Any, Callable
 
-from app.api.drafts import parse_draft, serialize_draft, _uid, _is_empty_p
+from app.api.drafts import parse_draft, serialize_draft, _uid, _is_empty_p, clean_ink
 
 log = logging.getLogger("accumulate")
 
@@ -58,6 +59,8 @@ def note_style(anchor: Any) -> str:
     a = _anchor(anchor)
     if a.get("type") == "sticky":
         return "sticky"
+    if a.get("type") == "ink":
+        return "ink"
     st = a.get("style")
     return st if st in ("highlight", "underline") else "highlight"
 
@@ -72,7 +75,9 @@ def build_quote_block(note: dict, title: str | None, *, auto: bool = True) -> di
     """Not satirindan alinti blogu. Metni de yorumu da bossa (ornek: bos kenar notu) None."""
     text = " ".join(str(note.get("selected_text") or "").split())[:4000]
     comment = note_comment(note.get("note_content"))
-    if not text and not comment:
+    anchor = _anchor(note.get("anchor"))
+    ink = clean_ink(anchor) if anchor.get("type") == "ink" else None
+    if not text and not comment and not ink:
         return None
     page = note.get("page_number")
     try:
@@ -86,7 +91,10 @@ def build_quote_block(note: dict, title: str | None, *, auto: bool = True) -> di
                "note_id": str(note.get("id")),
                "style": note_style(note.get("anchor")),
                "at": _iso(note.get("created_at")) or datetime.utcnow().isoformat() + "Z"}
-    if comment:
+    if ink:
+        # el yazisi: metin yok, darbeler blokta tasinir (taslak / Atolye onizlemesi)
+        b.update({"style": "ink", "text": "", "note": comment or "", "ink": ink})
+    elif comment:
         b["note"] = comment
     if auto:
         b["auto"] = True
@@ -134,6 +142,8 @@ def patch_note_blocks(blocks: list[dict], note_id: str, fresh: dict | None) -> t
                 nb.pop("note", None)
             if not (nb.get("text") or "").strip() and fresh.get("text"):
                 nb["text"] = fresh["text"]
+            if fresh.get("ink"):
+                nb["ink"] = fresh["ink"]   # el yazisinda son cizgi geri alininca
             if nb != b:
                 changed += 1
             out.append(nb)

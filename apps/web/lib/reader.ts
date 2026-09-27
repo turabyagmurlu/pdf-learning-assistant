@@ -5,9 +5,10 @@
 // Kalem paleti (Ajan P): stil (vurgu / alt cizgi) ve opaklik SUTUN EKLEMEDEN anchor JSON'unda
 // tasinir: {type:"highlight", rects, style:"highlight"|"underline", opacity:0.45|0.75|1}.
 import { API, getToken } from "@/lib/api";
+import { INK_COLORS, INK_WIDTHS, normalizeInk, type InkStroke } from "@/lib/ink";
 
 export type Rect = { x: number; y: number; w: number; h: number }; // 0..1 relative to page
-export type AnnType = "highlight" | "sticky";
+export type AnnType = "highlight" | "sticky" | "ink";
 export type HighlightStyle = "highlight" | "underline";
 export interface Anchor {
   type: AnnType;
@@ -16,6 +17,11 @@ export interface Anchor {
   y?: number;
   style?: HighlightStyle;   // vurgu (fosforlu) | alt cizgi — yoksa "highlight"
   opacity?: number;         // 0.45 | 0.75 | 1 — yoksa 1 (eski vurgular)
+  /** El yazisi (type "ink"): darbeler ve kutu — sayfa GENISLIGINE gore 0-1 (lib/ink) */
+  strokes?: InkStroke[];
+  box?: [number, number, number, number];
+  /** El yazisi: sayfanin yukseklik/genislik orani (vurgu haritasinda konum icin) */
+  r?: number;
 }
 export interface Annotation {
   id: string;
@@ -69,17 +75,20 @@ export const OPACITY_STEPS: { key: string; label: string; value: number; underli
 export const DEFAULT_OPACITY = 1;
 
 /** Vurgu araclari (palet). "none": arac kapali. */
-export type PenTool = "none" | "highlight" | "underline" | "note" | "eraser";
+export type PenTool = "none" | "ink" | "highlight" | "underline" | "note" | "eraser";
 export const PEN_TOOL_LABEL: Record<PenTool, string> = {
-  none: "Kapalı", highlight: "Vurgu", underline: "Altını çiz", note: "Kenar notu", eraser: "Silgi",
+  none: "Kapalı", ink: "Kalem", highlight: "Vurgu", underline: "Altını çiz", note: "Kenar notu", eraser: "Silgi",
 };
 
 /** Palet tercihleri (renk, kademe, konum, kucultulmus mu) — cihazda saklanir. */
-export type PenPrefs = { color: string; opacity: number; collapsed: boolean; pos: { x: number; y: number } | null };
+export type PenPrefs = { color: string; opacity: number; collapsed: boolean; pos: { x: number; y: number } | null;
+  /** Kalem (el yazisi) rengi ve kalinligi */
+  inkColor: string; inkWidth: number };
 const PEN_KEY = "reader.pen";
 const LAST_COLOR_KEY = "reader.lastColor";   // eski anahtar: geriye uyum
 export function loadPenPrefs(): PenPrefs {
-  const def: PenPrefs = { color: HIGHLIGHT_COLORS[0].value, opacity: DEFAULT_OPACITY, collapsed: false, pos: null };
+  const def: PenPrefs = { color: HIGHLIGHT_COLORS[0].value, opacity: DEFAULT_OPACITY, collapsed: false, pos: null,
+                          inkColor: INK_COLORS[0].value, inkWidth: INK_WIDTHS[1].value };
   try {
     const raw = localStorage.getItem(PEN_KEY);
     if (raw) {
@@ -88,6 +97,8 @@ export function loadPenPrefs(): PenPrefs {
       if (typeof p.opacity === "number" && OPACITY_STEPS.some((s) => s.value === p.opacity)) def.opacity = p.opacity;
       if (typeof p.collapsed === "boolean") def.collapsed = p.collapsed;
       if (p.pos && typeof p.pos.x === "number" && typeof p.pos.y === "number") def.pos = { x: p.pos.x, y: p.pos.y };
+      if (typeof p.inkColor === "string" && INK_COLORS.some((c) => c.value === p.inkColor)) def.inkColor = p.inkColor;
+      if (typeof p.inkWidth === "number" && INK_WIDTHS.some((w) => w.value === p.inkWidth)) def.inkWidth = p.inkWidth;
     } else {
       const v = localStorage.getItem(LAST_COLOR_KEY);
       if (v && HIGHLIGHT_COLORS.some((c) => c.value === pigmentOf(v))) def.color = pigmentOf(v);
@@ -161,8 +172,11 @@ export function annotationMarks(anns: Annotation[]): MapMark[] {
   const out: MapMark[] = [];
   for (const a of anns) {
     const sticky = a.anchor?.type === "sticky";
+    const ink = a.anchor?.type === "ink";
     const rects = a.anchor?.rects || [];
-    const y = sticky ? (a.anchor.y ?? 0.04) : rects.length ? Math.min(...rects.map((r) => r.y)) : 0;
+    const y = sticky ? (a.anchor.y ?? 0.04)
+      : ink ? (a.anchor.box ? a.anchor.box[1] / (a.anchor.r || 1.294) : 0)
+      : rects.length ? Math.min(...rects.map((r) => r.y)) : 0;
     const raw = (sticky ? a.note_content : a.selected_text || a.note_content) || "";
     const t = raw.replace(/\s+/g, " ").trim();
     const snip = t.length > 40 ? t.slice(0, 40) + "…" : t;
@@ -172,7 +186,7 @@ export function annotationMarks(anns: Annotation[]): MapMark[] {
       page: Math.max(1, a.page_number || 1),
       y: Math.min(1, Math.max(0, Number.isFinite(y) ? y : 0)),
       // kendi rengi (pastel); kenar notu okuyucu moru — cizgiye ince kenar CSS'te (.hl-map-mark) verilir
-      color: sticky ? "#7B6CF0" : (a.highlight_color || HIGHLIGHT_COLORS[0].value),
+      color: sticky ? "#7B6CF0" : ink ? (a.anchor.strokes?.[0]?.c || INK_COLORS[0].value) : (a.highlight_color || HIGHLIGHT_COLORS[0].value),
       label: snip ? `${kind}: ${snip}` : kind,
     });
   }
@@ -180,6 +194,7 @@ export function annotationMarks(anns: Annotation[]): MapMark[] {
 }
 export function annotationKindLabel(a: Pick<Annotation, "anchor">): string {
   if (a.anchor.type === "sticky") return "Kenar notu";
+  if (a.anchor.type === "ink") return "El yazısı notu";
   return a.anchor.style === "underline" ? "Altı çizili" : "Vurgu";
 }
 
@@ -214,6 +229,10 @@ export async function listAnnotations(docId: string): Promise<Annotation[]> {
 function normalizeAnchor(a: any): Anchor {
   if (!a) return { type: "highlight" };
   if (typeof a === "string") { try { a = JSON.parse(a); } catch { return { type: "highlight" }; } }
+  if (a.type === "ink") {
+    const ink = normalizeInk(a);
+    if (ink) return { type: "ink", strokes: ink.strokes, box: ink.box, ...(typeof a.r === "number" && a.r > 0 ? { r: a.r } : {}) };
+  }
   const out: Anchor = { type: a.type === "sticky" ? "sticky" : "highlight", rects: a.rects, x: a.x, y: a.y };
   if (a.style === "underline") out.style = "underline";
   if (typeof a.opacity === "number" && a.opacity > 0 && a.opacity <= 1) out.opacity = a.opacity;
@@ -264,7 +283,7 @@ export function exportMarkdown(title: string, anns: Annotation[]): string {
   const lines = [`# ${title} — Notlar ve vurgular\n`];
   const byPage = [...anns].sort((a, b) => a.page_number - b.page_number);
   for (const a of byPage) {
-    const kind = a.anchor.type === "sticky" ? "Not" : a.anchor.style === "underline" ? "Altı çizili" : "Vurgu";
+    const kind = a.anchor.type === "sticky" ? "Not" : a.anchor.type === "ink" ? "El yazısı notu" : a.anchor.style === "underline" ? "Altı çizili" : "Vurgu";
     lines.push(`## Sayfa ${a.page_number} · ${kind}`);
     if (a.selected_text) lines.push(`> ${a.selected_text}`);
     if (a.note_content) lines.push(`\n${a.note_content}`);

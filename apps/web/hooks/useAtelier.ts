@@ -10,6 +10,7 @@
  */
 import { useCallback, useEffect, useRef, useState } from "react";
 import { api, errorMessage } from "@/lib/api";
+import type { InkStroke } from "@/lib/ink";
 
 export type AtelierScope = string;
 export type Practice = "read" | "recall" | "listen";
@@ -29,6 +30,8 @@ export type AtelierCard = {
   box?: number;
   due?: string | null;
   seen?: number;
+  /** El yazısı notu (style "ink"): darbeler + kutu; metin "El yazısı notu" */
+  ink?: { strokes: InkStroke[]; box: [number, number, number, number] } | null;
 };
 
 type DeckResp = { items?: AtelierCard[]; total?: number; due?: number };

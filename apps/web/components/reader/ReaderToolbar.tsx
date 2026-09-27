@@ -16,10 +16,10 @@ import {
 } from "lucide-react";
 
 export type Theme = "light" | "sepia" | "dark";
-/** Okuyucu araci: kalem paleti araclari (lib/reader PenTool) — none | highlight | underline | note | eraser */
+/** Okuyucu araci: kalem paleti araclari (lib/reader PenTool) — none | ink | highlight | underline | note | eraser */
 export type Tool = PenTool;
 /** Paletle acilan araclar (vurgu dugmesi bunlardan biri acikken "basili" gorunur) */
-export const PEN_TOOLS: Tool[] = ["highlight", "underline", "eraser"];
+export const PEN_TOOLS: Tool[] = ["ink", "highlight", "underline", "eraser"];
 export const isPenTool = (t: Tool) => PEN_TOOLS.includes(t);
 export const THEME_LABEL: Record<Theme, string> = { light: "Açık", sepia: "Sepya", dark: "Koyu" };
 const THEME_ORDER: Theme[] = ["light", "sepia", "dark"];
@@ -167,8 +167,8 @@ export default function ReaderToolbar(p: ToolbarProps) {
               onClick={() => p.setScale(() => 1)}>{Math.round(p.scale * 100)}%</button>
       <button className={btn} aria-label="Yakınlaştır" title="Yakınlaştır" onClick={() => p.setScale(zoomIn)}><Plus size={17} /></button>
       <Sep />
-      <button className={`${btn} ${isPenTool(p.tool) ? active : ""}`} aria-label="Vurgu aracı ve kalem paleti" aria-pressed={isPenTool(p.tool)}
-              title="Vurgu aracı (H): paleti açar — renk, altını çiz, silgi"
+      <button className={`${btn} ${isPenTool(p.tool) ? active : ""}`} aria-label="Kalem: vurgula, altını çiz, el yazısıyla not al" aria-pressed={isPenTool(p.tool)}
+              title="Kalem: vurgula, altını çiz, el yazısıyla not al (H)"
               onClick={() => p.setTool(isPenTool(p.tool) ? "none" : "highlight")}><Highlighter size={17} /></button>
       <button className={`${btn} ${p.tool === "note" ? active : ""}`} aria-label="Kenar notu aracı" aria-pressed={p.tool === "note"}
               title="Kenar notu: sayfada bir yere tıkla" onClick={() => p.setTool(p.tool === "note" ? "none" : "note")}><StickyNote size={17} /></button>
@@ -214,7 +214,7 @@ export function ReaderMoreMenu(p: ToolbarProps & { variant: "wide" | "narrow" })
       { key: "zin", label: "Yakınlaştır", icon: <Plus size={17} />, onSelect: () => p.setScale(zoomIn) },
       { key: "zout", label: "Uzaklaştır", icon: <Minus size={17} />, onSelect: () => p.setScale(zoomOut) },
       { key: "zfit", label: `Sayfaya sığdır (şu an %${Math.round(p.scale * 100)})`, icon: <RotateCcw size={17} />, onSelect: () => p.setScale(() => 1) },
-      { key: "hl", label: "Vurgu aracı ve kalem paleti", icon: <Highlighter size={17} />, checked: isPenTool(p.tool),
+      { key: "hl", label: "Kalem: vurgula, altını çiz, el yazısıyla not al", icon: <Highlighter size={17} />, checked: isPenTool(p.tool),
         onSelect: () => p.setTool(isPenTool(p.tool) ? "none" : "highlight") },
       { key: "note", label: "Kenar notu aracı", icon: <StickyNote size={17} />, checked: p.tool === "note",
         onSelect: () => p.setTool(p.tool === "note" ? "none" : "note") },

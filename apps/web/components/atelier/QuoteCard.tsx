@@ -3,6 +3,7 @@
  * Atölye kartı: vellum yüzey, sol kenarda pigment şeridi, büyük Fraunces italik alıntı,
  * kenar notu (kullanıcının yorumu) ve altta folyo "s. 12" + kaynak adı (kaynağında açar).
  * Hatırla modu gövdeyi `children` ile kendisi çizer (perdeli kelimeler).
+ * El yazısı notu (style "ink"): gövde kutuya ölçekli çizimdir, perde uygulanmaz.
  */
 import Link from "next/link";
 import type { ReactNode } from "react";
@@ -10,6 +11,7 @@ import { DropCap, Folio } from "@/components/art";
 import { pigmentName, pigmentOf } from "@/lib/reader";
 import { docHref } from "@/lib/links";
 import type { AtelierCard } from "@/hooks/useAtelier";
+import InkPreview from "@/components/reader/InkPreview";
 
 const cx = (...a: (string | false | null | undefined)[]) => a.filter(Boolean).join(" ");
 
@@ -22,7 +24,8 @@ export function quoteSize(text: string): string {
   return "text-[17px] leading-[1.6] md:text-[19px] md:leading-[1.6]";
 }
 
-export function cardColor(card: Pick<AtelierCard, "color" | "kind">): string {
+export function cardColor(card: Pick<AtelierCard, "color" | "kind" | "ink">): string {
+  if (card.ink?.strokes?.length) return card.ink.strokes[0].c;
   if (card.kind === "p" || !card.color) return "var(--gold)";
   return pigmentOf(card.color);
 }
@@ -30,6 +33,7 @@ export function cardColor(card: Pick<AtelierCard, "color" | "kind">): string {
 export function eyebrowOf(card: Pick<AtelierCard, "color" | "kind" | "style">): string {
   if (card.kind === "p") return "Kendi satırların";
   if (card.style === "sticky") return "Kenar notu";
+  if (card.style === "ink") return "El yazısı notu";
   const name = card.color ? pigmentName(card.color) : "";
   return card.style === "underline" ? `Alt çizgi${name ? " · " + name : ""}` : name || "Vurgu";
 }
@@ -70,6 +74,7 @@ export default function QuoteCard({ card, children, footer, active, className, d
   const first = text.charAt(0);
   const useDrop = dropCap && !children && /^[«"'“‘(\[]*\p{L}/u.test(first + text.slice(1, 3)) && text.length > 60;
   const note = (card.note || "").trim();
+  const ink = card.ink?.strokes?.length ? card.ink : null;
   return (
     <article className={cx("vellum relative overflow-hidden rounded-2xl border px-6 py-7 shadow-soft md:px-12 md:py-10",
                active && "ring-1 ring-gold", className)}>
@@ -78,7 +83,10 @@ export default function QuoteCard({ card, children, footer, active, className, d
       <p className="eyebrow">{eyebrowOf(card)}</p>
       <div className="mt-phi-2 grid gap-phi-3 lg:grid-cols-[minmax(0,1fr)_200px] lg:gap-phi-4">
         <div className="min-w-0">
-          {children ?? (useDrop
+          {children ?? (ink
+            ? <InkPreview strokes={ink.strokes} box={ink.box} maxHeight={280}
+                          label={`El yazısı notu${card.page ? ` · s. ${card.page}` : ""}`} />
+            : useDrop
             ? <DropCap as="blockquote" text={text} className={cx("font-reading italic text-text-primary", quoteSize(text))} />
             : <blockquote className={cx("font-reading italic text-text-primary", quoteSize(text))}>{text}</blockquote>)}
         </div>

@@ -1,19 +1,24 @@
 "use client";
 /**
  * Kalem paleti (Apple Pencil "araç paleti" tarzı) — Ajan P.
- * Vurgu aracına dokununca açılır: sürüklenebilir koyu kapsül; araçlar (Vurgu · Altını çiz · Kenar notu · Silgi),
+ * Vurgu aracına dokununca açılır: sürüklenebilir koyu kapsül; araçlar (Kalem · Vurgu · Altını çiz · Kenar notu · Silgi),
  * 5 renk, 3 kademe kalınlık/opaklık, geri al, kapat. Konum ve kademe cihazda saklanır (lib/reader loadPenPrefs).
  * Esc ya da dışına dokununca küçülür: yalnız seçili renk/araç yongası kalır, dokununca yeniden açılır.
- * Tüm hedefler 44 px. Kalem/lasso yok: araçlar metin tabanlıdır (seçim → vurgu).
+ * Tüm hedefler 44 px. "Kalem" el yazısıdır (kendi mürekkep renkleri ve 3 kalınlık, lib/ink);
+ * Vurgu / Altını çiz kalemle ya da fareyle satırın üstünden geçince satırları işaretler.
  */
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
-import { Highlighter, Underline, StickyNote, Eraser, X, GripVertical, Check, Undo2 } from "lucide-react";
+import { Highlighter, Underline, StickyNote, Eraser, X, GripVertical, Check, Undo2, PenLine } from "lucide-react";
+import { INK_COLORS, INK_WIDTHS } from "@/lib/ink";
 import { HIGHLIGHT_COLORS, OPACITY_STEPS, PenTool, PEN_TOOL_LABEL, darken, pigmentOf, pigmentName } from "@/lib/reader";
 
 export interface PenPaletteProps {
   tool: PenTool; setTool: (t: PenTool) => void;
   color: string; setColor: (c: string) => void;
   opacity: number; setOpacity: (o: number) => void;
+  /** Kalem (el yazısı) rengi ve kalınlığı */
+  inkColor: string; setInkColor: (c: string) => void;
+  inkWidth: number; setInkWidth: (w: number) => void;
   collapsed: boolean; setCollapsed: (b: boolean) => void;
   pos: { x: number; y: number } | null; setPos: (p: { x: number; y: number } | null) => void;
   /** Varsayılan yer: masaüstünde araç çubuğunun altı (top), tablette/telefonda ekranın altı (bottom) */
@@ -23,8 +28,9 @@ export interface PenPaletteProps {
 }
 
 const TOOLS: { key: PenTool; Icon: typeof Highlighter; hint: string; kbd: string }[] = [
-  { key: "highlight", Icon: Highlighter, hint: "Metni seç, bırakınca vurgulanır", kbd: "H" },
-  { key: "underline", Icon: Underline, hint: "Metni seç, bırakınca altı çizilir", kbd: "U" },
+  { key: "ink", Icon: PenLine, hint: "Kalemle sayfaya yaz ya da çiz; parmakla sayfa kayar", kbd: "P" },
+  { key: "highlight", Icon: Highlighter, hint: "Kalemle satırın üstünden geç, vurgulanır", kbd: "H" },
+  { key: "underline", Icon: Underline, hint: "Kalemle satırın üstünden geç, altı çizilir", kbd: "U" },
   { key: "note", Icon: StickyNote, hint: "Sayfada bir yere dokun, not ekle", kbd: "" },
   { key: "eraser", Icon: Eraser, hint: "Bir vurguya dokun, silinir (Ctrl+Z geri alır)", kbd: "E" },
 ];
@@ -36,6 +42,8 @@ export default function PenPalette(p: PenPaletteProps) {
   const CurIcon = (TOOLS.find((t) => t.key === p.tool) || TOOLS[0]).Icon;
   // secili renk pigment olarak (eski kayitli hex'ler de yeni pigmentle gorunur)
   const cur = pigmentOf(p.color);
+  const ink = p.tool === "ink";
+  const inkName = INK_COLORS.find((c) => c.value === p.inkColor)?.label || "Mürekkep";
 
   // Konumu kaba sınırla (kap küçülünce palet dışarıda kalmasın)
   const clamp = (x: number, y: number) => {
@@ -112,15 +120,15 @@ export default function PenPalette(p: PenPaletteProps) {
     return (
       <div ref={ref} className={`${capsule} touch-none`} style={{ ...style, ...bg }}>
         <button type="button" className="flex h-12 w-12 items-center justify-center rounded-full"
-                aria-label={`Kalem paleti (küçük): ${PEN_TOOL_LABEL[p.tool]}${p.tool === "eraser" ? "" : `, ${pigmentName(cur)}`}. Açmak için dokun`}
+                aria-label={`Kalem paleti (küçük): ${PEN_TOOL_LABEL[p.tool]}${p.tool === "eraser" ? "" : `, ${ink ? inkName : pigmentName(cur)}`}. Açmak için dokun`}
                 title="Kalem paletini aç"
                 onPointerDown={onDragStart} onPointerMove={onDragMove}
                 onPointerUp={(e) => { const moved = onDragEnd(e); if (!moved) p.setCollapsed(false); }}
                 onPointerCancel={onDragEnd}
                 onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); p.setCollapsed(false); } }}>
           <span className="relative flex h-8 w-8 items-center justify-center rounded-full border-2 border-white/80"
-                style={{ background: p.tool === "eraser" ? "transparent" : cur }}>
-            <CurIcon size={15} aria-hidden style={{ color: p.tool === "eraser" ? "#fff" : darken(cur) }} />
+                style={{ background: p.tool === "eraser" ? "transparent" : ink ? "#FFFFFF" : cur }}>
+            <CurIcon size={15} aria-hidden style={{ color: p.tool === "eraser" ? "#fff" : ink ? p.inkColor : darken(cur) }} />
           </span>
         </button>
       </div>
@@ -153,50 +161,89 @@ export default function PenPalette(p: PenPaletteProps) {
                   aria-label={`${PEN_TOOL_LABEL[key]}${kbd ? ` (${kbd})` : ""}`}
                   title={`${PEN_TOOL_LABEL[key]}${kbd ? ` (${kbd})` : ""}: ${hint}`}
                   onClick={() => p.setTool(key)}
-                  className={`${btn} ${p.tool === key ? on : ""}`}>
+                  className={key === "ink"
+                    ? `flex h-11 shrink-0 items-center gap-1.5 rounded-full px-3 text-sm font-semibold transition hover:bg-white/10 focus-visible:outline-white ${p.tool === key ? "bg-white text-[#221A12]" : "ring-1 ring-white/30"}`
+                    : `${btn} ${p.tool === key ? on : ""}`}>
             <Icon size={19} aria-hidden />
+            {key === "ink" && <span>Kalem</span>}
           </button>
         ))}
       </div>
       <Sep />
 
-      {/* Renkler (1-5) */}
-      <div className="flex items-center gap-0.5" role="group" aria-label="Renk">
-        {HIGHLIGHT_COLORS.map((c, i) => {
-          const hex = pigmentOf(c.value);
-          const name = pigmentName(c.value);
-          const sel = hex === cur;
-          return (
-            <button key={c.key} type="button" aria-pressed={sel} aria-label={`${name} (${i + 1})`}
-                    title={`${name} (${i + 1})`} onClick={() => { p.setColor(c.value); if (p.tool === "eraser" || p.tool === "note") p.setTool("highlight"); }}
-                    className={btn} disabled={p.tool === "eraser"}>
-              <span className={`flex items-center justify-center rounded-full border-2 transition ${sel ? "h-8 w-8 border-white" : "h-6 w-6 border-white/30"} ${p.tool === "eraser" ? "opacity-40" : ""}`}
-                    style={{ background: hex }}>
-                {sel && <Check size={15} aria-hidden style={{ color: darken(hex) }} strokeWidth={3} />}
-              </span>
-            </button>
-          );
-        })}
-      </div>
-      <Sep />
-
-      {/* Kalınlık / opaklık: 3 kademe */}
-      <div className="flex items-center gap-0.5" role="group" aria-label={p.tool === "underline" ? "Çizgi kalınlığı" : "Vurgu koyuluğu"}>
-        {OPACITY_STEPS.map((s) => {
-          const sel = s.value === p.opacity;
-          return (
-            <button key={s.key} type="button" aria-pressed={sel} aria-label={s.label} title={s.label}
-                    onClick={() => p.setOpacity(s.value)} disabled={p.tool === "eraser" || p.tool === "note"}
-                    className={`${btn} ${sel ? on : ""} disabled:opacity-40`}>
-              <span className="flex h-6 w-6 items-end justify-center rounded bg-white/90 pb-[3px]">
-                {p.tool === "underline"
-                  ? <span className="w-4 rounded-sm" style={{ height: s.underlinePx, background: darken(cur) }} />
-                  : <span className="h-3 w-4 rounded-sm" style={{ background: cur, opacity: s.value }} />}
-              </span>
-            </button>
-          );
-        })}
-      </div>
+      {ink ? (
+        <>
+          {/* Mürekkep renkleri (1-5) */}
+          <div className="flex items-center gap-0.5" role="group" aria-label="Mürekkep rengi">
+            {INK_COLORS.map((c, i) => {
+              const sel = c.value === p.inkColor;
+              return (
+                <button key={c.key} type="button" aria-pressed={sel} aria-label={`${c.label} mürekkep (${i + 1})`}
+                        title={`${c.label} (${i + 1})`} onClick={() => p.setInkColor(c.value)} className={btn}>
+                  <span className={`flex items-center justify-center rounded-full border-2 transition ${sel ? "h-8 w-8 border-white" : "h-6 w-6 border-white/30"}`}
+                        style={{ background: c.value }}>
+                    {sel && <Check size={15} aria-hidden style={{ color: "#fff" }} strokeWidth={3} />}
+                  </span>
+                </button>
+              );
+            })}
+          </div>
+          <Sep />
+          {/* Kalınlık: 3 kademe */}
+          <div className="flex items-center gap-0.5" role="group" aria-label="Kalem kalınlığı">
+            {INK_WIDTHS.map((w) => {
+              const sel = w.value === p.inkWidth;
+              return (
+                <button key={w.key} type="button" aria-pressed={sel} aria-label={`${w.label} uç`} title={`${w.label} uç`}
+                        onClick={() => p.setInkWidth(w.value)} className={`${btn} ${sel ? on : ""}`}>
+                  <span className="flex h-6 w-6 items-center justify-center rounded bg-white/90">
+                    <span className="rounded-full" style={{ width: Math.round(w.value * 1.6) + 2, height: Math.round(w.value * 1.6) + 2, background: p.inkColor }} />
+                  </span>
+                </button>
+              );
+            })}
+          </div>
+        </>
+      ) : (
+        <>
+        {/* Renkler (1-5) */}
+        <div className="flex items-center gap-0.5" role="group" aria-label="Renk">
+          {HIGHLIGHT_COLORS.map((c, i) => {
+            const hex = pigmentOf(c.value);
+            const name = pigmentName(c.value);
+            const sel = hex === cur;
+            return (
+              <button key={c.key} type="button" aria-pressed={sel} aria-label={`${name} (${i + 1})`}
+                      title={`${name} (${i + 1})`} onClick={() => { p.setColor(c.value); if (p.tool === "eraser" || p.tool === "note") p.setTool("highlight"); }}
+                      className={btn} disabled={p.tool === "eraser"}>
+                <span className={`flex items-center justify-center rounded-full border-2 transition ${sel ? "h-8 w-8 border-white" : "h-6 w-6 border-white/30"} ${p.tool === "eraser" ? "opacity-40" : ""}`}
+                      style={{ background: hex }}>
+                  {sel && <Check size={15} aria-hidden style={{ color: darken(hex) }} strokeWidth={3} />}
+                </span>
+              </button>
+            );
+          })}
+        </div>
+        <Sep />
+        {/* Kalınlık / opaklık: 3 kademe */}
+        <div className="flex items-center gap-0.5" role="group" aria-label={p.tool === "underline" ? "Çizgi kalınlığı" : "Vurgu koyuluğu"}>
+          {OPACITY_STEPS.map((s) => {
+            const sel = s.value === p.opacity;
+            return (
+              <button key={s.key} type="button" aria-pressed={sel} aria-label={s.label} title={s.label}
+                      onClick={() => p.setOpacity(s.value)} disabled={p.tool === "eraser" || p.tool === "note"}
+                      className={`${btn} ${sel ? on : ""} disabled:opacity-40`}>
+                <span className="flex h-6 w-6 items-end justify-center rounded bg-white/90 pb-[3px]">
+                  {p.tool === "underline"
+                    ? <span className="w-4 rounded-sm" style={{ height: s.underlinePx, background: darken(cur) }} />
+                    : <span className="h-3 w-4 rounded-sm" style={{ background: cur, opacity: s.value }} />}
+                </span>
+              </button>
+            );
+          })}
+        </div>
+        </>
+      )}
 
       {p.onUndo && (
         <>

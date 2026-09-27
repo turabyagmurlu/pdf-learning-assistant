@@ -1,11 +1,14 @@
 "use client";
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { Document, Page, pdfjs } from "react-pdf";
 import "react-pdf/dist/Page/TextLayer.css";
 import "react-pdf/dist/Page/AnnotationLayer.css";
 import "@/styles/reader.css";
 import { Annotation, Rect, HIGHLIGHT_COLORS, PenTool, HighlightStyle, PaperTone, highlightStyle, darken, annotationMarks, pigmentOf, pigmentName } from "@/lib/reader";
 import HighlightMap from "@/components/reader/HighlightMap";
+import {
+  type InkPoint, type InkStroke, type Span, type Pt, packStroke, strokePath, rectsFromStroke, strokeBoxRect, pathLength,
+} from "@/lib/ink";
 import { StickyNote, MessageSquare, PenLine, Underline } from "lucide-react";
 
 // Worker paketten sunulur (TK-6): scripts/copy-worker.mjs pdfjs-dist worker'ini public/'e kopyalar
@@ -19,17 +22,30 @@ type NewHighlight = {
 type NewSticky = { page: number; x: number; y: number };
 /** Kalem paletinin o anki secimi (renk + kademe); H-5: arac acikken balon acilmadan bununla vurgulanir. */
 export type PenState = { color: string; opacity: number };
+/** Kaydedilmeyi bekleyen el yazisi (1,2 sn yeni darbe gelmezse tek not olarak kaydedilir). */
+export type InkDraft = { key: string; page: number; strokes: InkStroke[] };
 
-/** Dokunulan noktadaki metin konumu (kalemle secim icin). */
-function caretAt(x: number, y: number): Range | null {
-  const d = document as Document & { caretRangeFromPoint?: (x: number, y: number) => Range | null;
-    caretPositionFromPoint?: (x: number, y: number) => { offsetNode: Node; offset: number } | null };
-  try {
-    if (d.caretRangeFromPoint) return d.caretRangeFromPoint(x, y);
-    const p = d.caretPositionFromPoint?.(x, y);
-    if (p) { const r = document.createRange(); r.setStart(p.offsetNode, p.offset); r.collapse(true); return r; }
-  } catch {}
-  return null;
+const SVGNS = "http://www.w3.org/2000/svg";
+const MIN_MARK_PX = 8;      // bundan kisa fosforlu darbe yok sayilir (dokunus = mevcut vurguyu ac)
+
+/** Sayfanin metin katmanindaki yaprak span'ler; koordinatlar sayfa GENISLIGINE gore oran. */
+function pageSpans(pageEl: HTMLElement, pr: DOMRect): Span[] {
+  const out: Span[] = [];
+  const els = pageEl.querySelectorAll(".react-pdf__Page__textContent span");
+  els.forEach((el) => {
+    if (el.querySelector("span")) return;
+    const t = el.textContent || "";
+    if (!t.trim()) return;
+    const r = el.getBoundingClientRect();
+    if (r.width < 1 || r.height < 1) return;
+    out.push({ x: (r.left - pr.left) / pr.width, y: (r.top - pr.top) / pr.width, w: r.width / pr.width, h: r.height / pr.width, text: t });
+  });
+  return out;
+}
+function median(a: number[]): number {
+  if (!a.length) return 0;
+  const s = [...a].sort((x, y) => x - y);
+  return s[Math.floor(s.length / 2)];
 }
 
 interface Props {
@@ -37,10 +53,22 @@ interface Props {
   page: number;
   scale: number;
   spread: boolean;
-  /** Kalem paleti araci: none | highlight | underline | note | eraser */
+  /** Kalem paleti araci: none | ink | highlight | underline | note | eraser */
   tool: PenTool;
   /** Paletteki secili renk ve kademe */
   pen: PenState;
+  /** El yazisi rengi ve kalinligi (binde sayfa genisligi) */
+  ink?: { color: string; width: number };
+  /** Kaydedilmeyi bekleyen el yazisi darbeleri (sayfada gorunur) */
+  inkDrafts?: InkDraft[];
+  /** Kalem araci: bir darbe bitti (sayfa, darbe, sayfa yukseklik/genislik orani) */
+  onInkStroke?: (page: number, stroke: InkStroke, ratio: number) => void;
+  /** Kalem araci: yeni darbe basladi (kaydetme zamanlayicisi beklesin) */
+  onInkStart?: () => void;
+  /** Kalem araci: son darbeyi geri al (cift dokunusta yanlislikla konan nokta icin) */
+  onInkUndo?: () => void;
+  /** Arac kapaliyken kalem sayfaya degdi (ilk kez: palet + ipucu) */
+  onPenIdle?: () => void;
   annotations: Annotation[];
   onNumPages: (n: number) => void;
   onVisiblePage: (n: number) => void;
@@ -74,6 +102,8 @@ export default function PdfReader(props: Props) {
   const marks = useMemo(() => annotationMarks(annotations), [annotations]);
   // secimle dogrudan vurgulayan araclar (H-5 otomatik vurgu bunlarda calisir)
   const selTool = tool === "highlight" || tool === "underline";
+  // kalem / fare ile cizen araclar (parmak kaydirir: avuc ici reddi)
+  const drawTool = selTool || tool === "ink";
   const [numPages, setNumPages] = useState(0);
   const scrollRef = useRef<HTMLDivElement>(null);
   const bubbleDownAt = useRef(0);
@@ -224,80 +254,255 @@ export default function PdfReader(props: Props) {
     return () => { document.removeEventListener("selectionchange", onChange); if (t) clearTimeout(t); };
   }, [readSelection, selTool]);
 
-  // TB-6: vurgu / alt cizgi araci acikken KALEM (pointerType === "pen") surukleyince sayfa kaymaz, metin
-  // secilir, birakinca paletteki renk ve kademeyle vurgulanir. Parmak ve fare eskisi gibi (parmak kaydirir).
-  // Silgi aracinda kalemle surukleme: altindan gecilen vurgular silinir.
+  // Kalem / fare ile cizim (Ajan K). Vurgu / Altini ciz / Kalem araci acikken KALEM (pointerType "pen") ve FARE
+  // surukleyince yerel metin secimi KULLANILMAZ (iOS'ta secim tasip butun sayfayi boyuyordu):
+  //  - pointerdown'da preventDefault, kapta user-select:none + touch-action:none (yalniz cizerken; .pen-drawing),
+  //    kalem dokunuslarinda (touchType "stylus") touchstart/touchmove da engellenir.
+  //  - Vurgu: gecilen noktalar toplanir; birakinca metin katmanindaki span'lerden satir satir kirpilir (lib/ink
+  //    rectsFromStroke). Taranmis sayfada (span yok) darbenin kendi kutusu. Cizerken yari saydam serit onizlemesi.
+  //  - Kalem: basinca gore kalinlasan puruzsuz darbe (lib/ink strokePath), rAF ile canli.
+  //  - Tek dokunus (< 8 px) = altindaki vurguyu/notu acar. Parmak (touch) her zaman kaydirir; parmakla secim
+  //    balonu eskisi gibi calisir.
+  // Silgi aracinda kalemle surukleme: altindan gecilen vurgular / el yazilari silinir.
   // Hizli iki dokunus (kalem, < 350 ms, < 14 px): son iki arac arasinda gecis (onPenDoubleTap).
-  const pen = useRef<{ id: number; start: Range } | null>(null);
+  type Stroke = {
+    id: number; kind: "ink" | "mark"; pageEl: HTMLElement; pageNum: number; pr: DOMRect;
+    pts: InkPoint[]; px: Pt[]; spans: Span[]; lineH: number;
+    svg: SVGSVGElement; path: SVGPathElement; raf: number; ptype: string;
+  };
+  const stroke = useRef<Stroke | null>(null);
   const penErase = useRef<{ id: number; done: Set<string> } | null>(null);
-  const lastPenTap = useRef<{ t: number; x: number; y: number } | null>(null);
+  const lastPenTap = useRef<{ t: number; x: number; y: number; dot: boolean } | null>(null);
+  const drawRef = useRef(false);
+  drawRef.current = drawTool || tool === "eraser";
   const eraseAt = (x: number, y: number) => {
-    const el = document.elementFromPoint(x, y) as HTMLElement | null;
+    const el = document.elementFromPoint(x, y) as Element | null;
     const id = el?.closest?.("[data-ann]")?.getAttribute("data-ann");
     if (!id || penErase.current?.done.has(id)) return;
     penErase.current?.done.add(id);
     const a = annotations.find((z) => z.id === id);
     if (a) props.onErase(a);
   };
-  const onPenDown = (e: React.PointerEvent) => {
-    if (e.pointerType !== "pen") return;
-    const now = Date.now();
-    const lt = lastPenTap.current;
-    lastPenTap.current = { t: now, x: e.clientX, y: e.clientY };
-    if (lt && now - lt.t < 350 && Math.hypot(e.clientX - lt.x, e.clientY - lt.y) < 14 && props.onPenDoubleTap) {
-      lastPenTap.current = null;
-      props.onPenDoubleTap();
-      e.preventDefault();
-      return;
-    }
+
+  // iOS: kalem dokunusu tarayicinin secimini / kaydirmasini baslatmasin (parmak serbest)
+  useEffect(() => {
+    const el = scrollRef.current;
+    if (!el) return;
+    const guard = (e: TouchEvent) => {
+      if (!drawRef.current || !e.cancelable) return;
+      const touches = Array.from(e.changedTouches) as (Touch & { touchType?: string })[];
+      if (touches.some((t) => t.touchType === "stylus") || (e.type === "touchmove" && stroke.current)) e.preventDefault();
+    };
+    el.addEventListener("touchstart", guard, { passive: false });
+    el.addEventListener("touchmove", guard, { passive: false });
+    return () => { el.removeEventListener("touchstart", guard); el.removeEventListener("touchmove", guard); };
+  }, []);
+  // cizim surerken olusan secimi hemen temizle (bazi tarayicilarda preventDefault yetmez)
+  useEffect(() => {
+    const onSel = () => { if (stroke.current) { try { window.getSelection()?.removeAllRanges(); } catch {} } };
+    document.addEventListener("selectionchange", onSel);
+    return () => document.removeEventListener("selectionchange", onSel);
+  }, []);
+  // birakinca "oturan" vurgu onizlemesi: gercek vurgu listeye gelince kaldirilir
+  useEffect(() => {
     const c = scrollRef.current;
+    if (!c) return;
+    const t = setTimeout(() => c.querySelectorAll(".ink-live[data-settled]").forEach((n) => n.remove()), 60);
+    return () => clearTimeout(t);
+  }, [annotations]);
+
+  const setDrawing = (on: boolean) => {
+    const c = scrollRef.current;
+    if (!c) return;
+    c.classList.toggle("pen-drawing", on);
+    c.style.touchAction = on ? "none" : "";
+  };
+
+  const makeLive = (pageEl: HTMLElement, pr: DOMRect, kind: "ink" | "mark") => {
+    const svg = document.createElementNS(SVGNS, "svg") as SVGSVGElement;
+    svg.setAttribute("viewBox", `0 0 1000 ${Math.round((1000 * pr.height) / pr.width)}`);
+    svg.setAttribute("class", kind === "ink" ? "ink-layer ink-live" : "ink-live ink-live-mark");
+    svg.setAttribute("aria-hidden", "true");
+    const path = document.createElementNS(SVGNS, "path") as SVGPathElement;
+    svg.appendChild(path);
+    pageEl.appendChild(svg);
+    return { svg, path };
+  };
+
+  const redraw = () => {
+    const st = stroke.current;
+    if (!st) return;
+    st.raf = 0;
+    if (st.kind === "ink") {
+      st.path.setAttribute("d", strokePath(st.pts, props.ink?.width || 3.6));
+    } else {
+      // fosforlu onizleme: noktalar arasi kalin, yari saydam serit
+      const d = st.pts.map((q, i) => `${i ? "L" : "M"}${(q[0] * 1000).toFixed(1)},${(q[1] * 1000).toFixed(1)}`).join("");
+      st.path.setAttribute("d", st.pts.length === 1 ? d + "l0.1,0" : d);
+    }
+  };
+
+  const pointOf = (st: Stroke, ev: { clientX: number; clientY: number; pressure: number }, ptype: string): InkPoint => {
+    const x = (ev.clientX - st.pr.left) / st.pr.width, y = (ev.clientY - st.pr.top) / st.pr.width;
+    const maxY = st.pr.height / st.pr.width;
+    const p = ptype === "pen" ? (ev.pressure > 0 ? ev.pressure : 0.5) : 0.5;
+    return [Math.min(1, Math.max(0, x)), Math.min(maxY, Math.max(0, y)), p];
+  };
+
+  const onPenDown = (e: React.PointerEvent) => {
+    const isPen = e.pointerType === "pen";
+    const isMouse = e.pointerType === "mouse";
+    if (!isPen && !isMouse) return;                 // parmak: kaydirma / secim (avuc ici reddi)
+    if (isMouse && e.button !== 0) return;
+    if ((e.target as HTMLElement).closest?.('[role="toolbar"], button, a, input, textarea')) return;
+    if (isPen) {
+      const now = Date.now();
+      const lt = lastPenTap.current;
+      lastPenTap.current = { t: now, x: e.clientX, y: e.clientY, dot: false };
+      if (lt && now - lt.t < 350 && Math.hypot(e.clientX - lt.x, e.clientY - lt.y) < 14 && props.onPenDoubleTap) {
+        lastPenTap.current = null;
+        if (lt.dot) props.onInkUndo?.();          // ilk dokunusun biraktigi noktayi geri al
+        props.onPenDoubleTap();
+        e.preventDefault();
+        return;
+      }
+    }
     if (tool === "eraser") {
-      if (c) c.style.touchAction = "none";
+      if (!isPen) return;                           // fare: tiklama ile silinir (vurgunun onClick'i)
+      setDrawing(true);
       penErase.current = { id: e.pointerId, done: new Set() };
       try { (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId); } catch {}
       eraseAt(e.clientX, e.clientY);
       e.preventDefault();
       return;
     }
-    if (!selTool) return;
-    const start = caretAt(e.clientX, e.clientY);
-    if (!start) return;
-    if (c) c.style.touchAction = "none";
-    pen.current = { id: e.pointerId, start };
-    try { (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId); } catch {}
+    if (!drawTool) {
+      if (isPen && tool === "none") props.onPenIdle?.();
+      return;
+    }
+    const pageEl = (document.elementFromPoint(e.clientX, e.clientY) as HTMLElement | null)?.closest?.("[data-page]") as HTMLElement | null;
+    if (!pageEl || !pageEl.classList.contains("is-live")) return;
     e.preventDefault();
+    try { window.getSelection()?.removeAllRanges(); } catch {}
+    setSel(null);
+    const pr = pageEl.getBoundingClientRect();
+    const kind = tool === "ink" ? "ink" : "mark";
+    const spans = kind === "mark" ? pageSpans(pageEl, pr) : [];
+    const lineH = median(spans.map((q) => q.h)) || 0.02;
+    const { svg, path } = makeLive(pageEl, pr, kind);
+    if (kind === "ink") {
+      path.setAttribute("fill", props.ink?.color || "#1B2233");
+    } else {
+      const under = tool === "underline";
+      path.setAttribute("fill", "none");
+      path.setAttribute("stroke", under ? darken(penHex) : penHex);
+      path.setAttribute("stroke-width", String(Math.max(2, under ? 3 : lineH * 1000 * 0.95)));
+      path.setAttribute("stroke-linecap", "round");
+      path.setAttribute("stroke-linejoin", "round");
+      path.setAttribute("opacity", under ? "0.9" : String(Math.min(0.55, penState.opacity * 0.5)));
+    }
+    stroke.current = { id: e.pointerId, kind, pageEl, pageNum: Number(pageEl.dataset.page), pr, pts: [], px: [],
+                       spans, lineH, svg, path, raf: 0, ptype: e.pointerType };
+    stroke.current.pts.push(pointOf(stroke.current, e, e.pointerType));
+    stroke.current.px.push({ x: e.clientX, y: e.clientY });
+    setDrawing(true);
+    if (kind === "ink") props.onInkStart?.();
+    try { (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId); } catch {}
+    redraw();
   };
+
   const onPenMove = (e: React.PointerEvent) => {
     if (penErase.current && e.pointerId === penErase.current.id) { e.preventDefault(); eraseAt(e.clientX, e.clientY); return; }
-    if (!pen.current || e.pointerId !== pen.current.id) return;
+    const st = stroke.current;
+    if (!st || e.pointerId !== st.id) return;
     e.preventDefault();
-    const end = caretAt(e.clientX, e.clientY);
-    if (!end) return;
-    const s = window.getSelection();
-    if (!s) return;
-    const r = document.createRange();
-    const a = pen.current.start;
-    const before = a.compareBoundaryPoints(Range.START_TO_START, end) <= 0;
-    r.setStart(before ? a.startContainer : end.startContainer, before ? a.startOffset : end.startOffset);
-    r.setEnd(before ? end.startContainer : a.startContainer, before ? end.startOffset : a.startOffset);
-    s.removeAllRanges(); s.addRange(r);
+    const native = e.nativeEvent as PointerEvent;
+    const evs = typeof native.getCoalescedEvents === "function" ? native.getCoalescedEvents() : [];
+    const list = evs.length ? evs : [native];
+    for (const ev of list) {
+      const last = st.px[st.px.length - 1];
+      if (last && Math.hypot(ev.clientX - last.x, ev.clientY - last.y) < 1.2) continue;   // seyrelt
+      st.pts.push(pointOf(st, ev, st.ptype));
+      st.px.push({ x: ev.clientX, y: ev.clientY });
+    }
+    if (!st.raf) st.raf = requestAnimationFrame(redraw);
   };
+
+  const finishStroke = (e: React.PointerEvent, cancelled: boolean) => {
+    const st = stroke.current;
+    if (!st) return;
+    stroke.current = null;
+    if (st.raf) cancelAnimationFrame(st.raf);
+    setDrawing(false);
+    try { (e.currentTarget as HTMLElement).releasePointerCapture(e.pointerId); } catch {}
+    const len = pathLength(st.px);
+    const ratio = st.pr.height / st.pr.width;
+    if (st.kind === "ink") {
+      if (cancelled || !st.pts.length) { st.svg.remove(); return; }
+      if (len < 3 && lastPenTap.current) lastPenTap.current.dot = true;
+      props.onInkStroke?.(st.pageNum, packStroke(st.pts, props.ink?.color || "#1B2233", props.ink?.width || 3.6), ratio);
+      // bekleyen taslak React ile cizilince canli katman kalkar (titreme olmasin diye iki kare sonra)
+      requestAnimationFrame(() => requestAnimationFrame(() => st.svg.remove()));
+      return;
+    }
+    // fosforlu kalem
+    if (cancelled || len < MIN_MARK_PX) {
+      st.svg.remove();
+      if (!cancelled) {
+        // tek dokunus: altindaki vurguyu / notu ac (yeni vurgu yok)
+        const el = document.elementFromPoint(e.clientX, e.clientY) as Element | null;
+        const id = el?.closest?.("[data-ann]")?.getAttribute("data-ann");
+        const a = id ? annotations.find((z) => z.id === id) : null;
+        if (a) props.onSelectAnnotation(a);
+      }
+      return;
+    }
+    const pts: Pt[] = st.pts.map((q) => ({ x: q[0], y: q[1] }));
+    let { rects, text } = rectsFromStroke(st.spans, pts);
+    if (!rects.length && !st.spans.length) {
+      const b = strokeBoxRect(pts, st.lineH);
+      rects = b ? [b] : [];
+      text = "";
+    }
+    if (!rects.length) { st.svg.remove(); return; }
+    // sayfa yuzdesi (Anchor rect bicimi: x,w genislige; y,h yukseklige gore)
+    const out: Rect[] = rects.map((r) => ({ x: +r.x.toFixed(4), y: +(r.y / ratio).toFixed(4), w: +r.w.toFixed(4), h: +(r.h / ratio).toFixed(4) }));
+    // onizleme gercek satirlara "oturur": serit yerine satir dikdortgenleri
+    const under = tool === "underline";
+    st.path.remove();
+    for (const r of rects) {
+      const rc = document.createElementNS(SVGNS, "rect");
+      const hh = under ? 3 : r.h * 1000;
+      rc.setAttribute("x", (r.x * 1000).toFixed(1));
+      rc.setAttribute("y", (under ? (r.y + r.h) * 1000 - hh : r.y * 1000).toFixed(1));
+      rc.setAttribute("width", (r.w * 1000).toFixed(1));
+      rc.setAttribute("height", hh.toFixed(1));
+      rc.setAttribute("rx", "2");
+      rc.setAttribute("fill", under ? darken(penHex) : penHex);
+      rc.setAttribute("opacity", under ? "1" : String(penState.opacity));
+      st.svg.appendChild(rc);
+    }
+    st.svg.setAttribute("data-settled", "1");
+    setTimeout(() => st.svg.remove(), 4000);
+    props.onCreateHighlight({ page: st.pageNum, rects: out, text, color: penState.color,
+                              style: under ? "underline" : "highlight", opacity: penState.opacity });
+  };
+
   const onPenUp = (e: React.PointerEvent) => {
     const c = scrollRef.current;
     if (penErase.current && e.pointerId === penErase.current.id) {
       penErase.current = null;
+      setDrawing(false);
       if (c) c.style.touchAction = "";
       try { (e.currentTarget as HTMLElement).releasePointerCapture(e.pointerId); } catch {}
       return;
     }
-    if (pen.current && e.pointerId === pen.current.id) {
-      pen.current = null;
-      if (c) c.style.touchAction = "";
-      try { (e.currentTarget as HTMLElement).releasePointerCapture(e.pointerId); } catch {}
-      readSelection(true);
+    if (stroke.current && e.pointerId === stroke.current.id) {
+      finishStroke(e, e.type === "pointercancel");
       return;
     }
-    readSelection(selTool);
+    // parmakla secim (vurgu araci acikken birakinca dogrudan vurgulanir)
+    if (e.pointerType === "touch" || !drawTool) readSelection(selTool);
   };
 
   const clearSel = () => { window.getSelection()?.removeAllRanges(); setSel(null); };
@@ -338,9 +543,11 @@ export default function PdfReader(props: Props) {
     setRatios((m) => (Math.abs((m[n] || 0) - r) < 0.001 ? m : { ...m, [n]: r }));
   }, []);
 
+  const inkDrafts = props.inkDrafts;
   const block = (n: number) => (
     <PageBlock key={n} n={n} width={width} live={isLive(n)} ratio={ratios[n] || ratio} onRatio={onRatio}
                annotations={annotations} onClick={onPageClick} eraser={tool === "eraser"} paper={paper} bloomId={bloomId}
+               drafts={inkDrafts?.filter((d) => d.page === n)}
                onSelectAnnotation={props.onSelectAnnotation} onErase={props.onErase} />
   );
 
@@ -352,7 +559,7 @@ export default function PdfReader(props: Props) {
          onPointerDown={onPenDown} onPointerMove={onPenMove} onPointerUp={onPenUp} onPointerCancel={onPenUp}
          onKeyUp={(e) => { if (e.shiftKey) readSelection(selTool); }}
          data-tool={tool} data-paper={paper}
-         style={{ cursor: tool === "note" ? "crosshair" : selTool ? "text" : tool === "eraser" ? "cell" : "auto" }}>
+         style={{ cursor: tool === "note" || drawTool ? "crosshair" : tool === "eraser" ? "cell" : "auto" }}>
       {/* H-4: Document "w-max min-w-full" — sayfa kaptan genisleyince kap da genisler, sol kenar kaydirilabilir */}
       <Document
         file={fileUrl}
@@ -427,7 +634,7 @@ export default function PdfReader(props: Props) {
   );
 }
 
-function PageBlock({ n, width, live, ratio, onRatio, annotations, onClick, onSelectAnnotation, onErase, eraser, paper, bloomId }: {
+function PageBlock({ n, width, live, ratio, onRatio, annotations, onClick, onSelectAnnotation, onErase, eraser, paper, bloomId, drafts }: {
   n: number; width: number; live: boolean; ratio: number; onRatio: (n: number, r: number) => void;
   annotations: Annotation[];
   onClick: (n: number, e: React.MouseEvent) => void;
@@ -439,6 +646,8 @@ function PageBlock({ n, width, live, ratio, onRatio, annotations, onClick, onSel
   paper?: PaperTone;
   /** Yeni biriken vurgu: .ink-bloom (soldan saga murekkep yayilmasi) */
   bloomId?: string | null;
+  /** Bu sayfada kaydedilmeyi bekleyen el yazisi */
+  drafts?: InkDraft[];
 }) {
   const h = Math.round(width * ratio);
   if (!live) {
@@ -449,7 +658,8 @@ function PageBlock({ n, width, live, ratio, onRatio, annotations, onClick, onSel
       </div>
     );
   }
-  const anns = annotations.filter((a) => a.page_number === n);
+  const anns = annotations.filter((a) => a.page_number === n && a.anchor.type !== "ink");
+  const inks = annotations.filter((a) => a.page_number === n && a.anchor.type === "ink");
   return (
     <div className="paper-page reader-page is-live" data-page={n} style={{ width, minHeight: h }} onClick={(e) => onClick(n, e)}>
       <Page pageNumber={n} width={width} renderAnnotationLayer={false} renderTextLayer
@@ -484,12 +694,42 @@ function PageBlock({ n, width, live, ratio, onRatio, annotations, onClick, onSel
           )
         )}
       </div>
+      {(inks.length > 0 || (drafts && drafts.length > 0)) && (
+        <svg className="ink-layer" viewBox={`0 0 1000 ${Math.round(1000 * ratio)}`} aria-hidden={inks.length === 0 ? true : undefined}>
+          {inks.map((a) => (
+            <InkShape key={a.id} id={a.id} strokes={a.anchor.strokes || []}
+                      label={`El yazısı notu, sayfa ${n}${eraser ? " (silmek için dokun)" : ""}`}
+                      onPick={() => { if (eraser) onErase(a); else onSelectAnnotation(a); }} />
+          ))}
+          {drafts?.map((d) => <InkShape key={d.key} strokes={d.strokes} />)}
+        </svg>
+      )}
       <div className="page-num absolute -bottom-6 left-0 right-0 text-center text-xs" style={{ color: "var(--r-ink-2)" }}>
         {n}
       </div>
     </div>
   );
 }
+
+/** El yazisi cizimi: her darbe basinca gore kalinlasan dolgulu yol; kayitli notta genis gorunmez dokunma yolu
+ *  (silgi / secim icin, .ink-hit). Yollar yalniz darbeler degisince yeniden hesaplanir. */
+const InkShape = memo(function InkShape({ id, strokes, label, onPick }: {
+  id?: string; strokes: InkStroke[]; label?: string; onPick?: () => void;
+}) {
+  const paths = useMemo(() => strokes.map((st) => ({
+    c: st.c, d: strokePath(st.p, st.w),
+    hit: st.p.map((q, i) => `${i ? "L" : "M"}${(q[0] * 1000).toFixed(1)},${(q[1] * 1000).toFixed(1)}`).join("") + (st.p.length === 1 ? "l0.1,0" : ""),
+  })), [strokes]);
+  return (
+    <g data-ann={id} role={id ? "img" : undefined} aria-label={label}>
+      {paths.map((p, i) => <path key={i} d={p.d} fill={p.c} />)}
+      {id && paths.map((p, i) => (
+        <path key={"h" + i} d={p.hit} className="ink-hit" data-ann={id}
+              onClick={(e) => { e.stopPropagation(); onPick?.(); }} />
+      ))}
+    </g>
+  );
+});
 
 function Centered({ children }: { children: React.ReactNode }) {
   return <div className="flex h-full flex-col items-center justify-center p-10 text-sm" style={{ color: "var(--paper-surround-ink, var(--r-ink-2))" }}>{children}</div>;

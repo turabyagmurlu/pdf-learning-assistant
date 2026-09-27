@@ -1,7 +1,8 @@
 "use client";
 import { useMemo, useState } from "react";
 import { Annotation, annotationKindLabel, highlightStyle, darken, pigmentOf, pigmentName, HIGHLIGHT_COLORS } from "@/lib/reader";
-import { Trash2, StickyNote, Highlighter, Underline, Search, Quote } from "lucide-react";
+import { Trash2, StickyNote, Highlighter, Underline, Search, Quote, PenLine } from "lucide-react";
+import InkPreview from "@/components/reader/InkPreview";
 
 /** #RRGGBB -> rgba (vurgu kademesi listede de gorunsun; metin okunakli kalsin) */
 function withAlpha(hex: string, a: number) {
@@ -56,20 +57,23 @@ export default function NotesPanel({ annotations, docTitle, onJump, onDelete, on
       <div className="flex-1 overflow-auto p-3 space-y-2">
         {items.length === 0 ? (
           <div className="mt-8 text-center text-sm text-text-secondary">
-            Henüz not ya da vurgu yok. Metni seçip bir renk seç ya da kenar notu aracını kullan.
+            Henüz not ya da vurgu yok. Metni seçip bir renk seç, kenar notu ekle ya da Kalem ile sayfaya yaz.
           </div>
         ) : items.map((a) => (
           <div key={a.id} className="group relative overflow-hidden rounded-lg border bg-surface p-2.5 pl-3.5 transition hover:border-accent-purple/50">
             {/* pigment seridi: vurgunun rengi (kenar notu: lapis) */}
             <span aria-hidden className="absolute inset-y-0 left-0 w-1"
-                  style={{ background: a.anchor.type === "sticky" ? "var(--accent-purple)" : colorOf(a) }} />
+                  style={{ background: a.anchor.type === "sticky" ? "var(--accent-purple)" : a.anchor.type === "ink" ? (a.anchor.strokes?.[0]?.c || "var(--text-primary)") : colorOf(a) }} />
             <div className="flex items-center justify-between text-xs text-text-secondary">
               <span className="flex items-center gap-1" title={annotationKindLabel(a)}>
                 {a.anchor.type === "sticky" ? <StickyNote size={12} aria-hidden />
+                  : a.anchor.type === "ink" ? <PenLine size={12} aria-hidden />
                   : a.anchor.style === "underline" ? <Underline size={12} aria-hidden style={{ color: darken(colorOf(a)) }} />
                   : <Highlighter size={12} aria-hidden />}
-                <span className="sr-only">{annotationKindLabel(a)},</span> s.{a.page_number}
-                {a.anchor.type !== "sticky" && <span className="truncate"> · {pigmentName(colorOf(a))}</span>}
+                {a.anchor.type === "ink"
+                  ? <span>El yazısı notu · s. {a.page_number}</span>
+                  : <><span className="sr-only">{annotationKindLabel(a)},</span> s.{a.page_number}</>}
+                {a.anchor.type !== "sticky" && a.anchor.type !== "ink" && <span className="truncate"> · {pigmentName(colorOf(a))}</span>}
               </span>
               <span className="-my-1 flex items-center">
                 {a.selected_text && (
@@ -81,10 +85,16 @@ export default function NotesPanel({ annotations, docTitle, onJump, onDelete, on
                 )}
                 <button type="button" className="flex h-10 w-10 items-center justify-center rounded-lg text-text-secondary hover:bg-surface-hover hover:text-danger"
                         title="Çöp kutusuna taşı (30 gün içinde geri alabilirsin)"
-                        aria-label={`Sayfa ${a.page_number} ${a.anchor.type === "sticky" ? "kenar notunu" : a.anchor.style === "underline" ? "alt çizgisini" : "vurgusunu"} çöp kutusuna taşı`}
+                        aria-label={`Sayfa ${a.page_number} ${a.anchor.type === "sticky" ? "kenar notunu" : a.anchor.type === "ink" ? "el yazısı notunu" : a.anchor.style === "underline" ? "alt çizgisini" : "vurgusunu"} çöp kutusuna taşı`}
                         onClick={() => onDelete(a.id)}><Trash2 size={15} aria-hidden /></button>
               </span>
             </div>
+            {a.anchor.type === "ink" && a.anchor.strokes?.length ? (
+              <button type="button" onClick={() => onJump(a)} className="mt-1.5 block w-full text-left"
+                      aria-label={`Sayfa ${a.page_number}'e git: el yazısı notu`}>
+                <InkPreview strokes={a.anchor.strokes} box={a.anchor.box} maxHeight={110} label={`El yazısı notu · s. ${a.page_number}`} />
+              </button>
+            ) : null}
             {a.anchor.type !== "sticky" && a.selected_text && (
               <button type="button" onClick={() => onJump(a)} className="mt-1 block w-full text-left" aria-label={`Sayfa ${a.page_number}'e git: ${(a.selected_text || "").slice(0, 80)}`}>
                 <span className="rounded px-1 text-sm text-text-primary line-clamp-3" style={quoteStyle(a)}>{a.selected_text}</span>
@@ -93,7 +103,7 @@ export default function NotesPanel({ annotations, docTitle, onJump, onDelete, on
             {a.note_content ? (
               <button type="button" onClick={() => onEditNote(a)} aria-label={`Notu düzenle: ${a.note_content.slice(0, 80)}`}
                       className="mt-1.5 block w-full cursor-text text-left text-sm text-text-primary line-clamp-4">{a.note_content}</button>
-            ) : a.anchor.type === "sticky" ? (
+            ) : a.anchor.type === "sticky" || a.anchor.type === "ink" ? (
               <button type="button" onClick={() => onEditNote(a)} className="mt-1 min-h-[40px] text-sm text-accent-purple">Not ekle…</button>
             ) : (
               <button type="button" onClick={() => onEditNote(a)} className="mt-1 min-h-[40px] text-sm text-accent-purple">+ Not ekle</button>

@@ -7,6 +7,9 @@ import {
   OPACITY_STEPS, DEFAULT_OPACITY, annotationMarks, pigmentOf, pigmentName,
 } from "@/lib/reader";
 import { stageInfo } from "@/lib/docstage";
+import { INK_COLORS, INK_WIDTHS, INK_MAX_STROKES, INK_MAX_POINTS, inkBox, type InkStroke } from "@/lib/ink";
+import InkPreview from "@/components/reader/InkPreview";
+import type { InkDraft } from "@/components/reader/PdfReader";
 import { useAnnotations } from "@/hooks/useAnnotations";
 import { usePoll } from "@/hooks/usePoll";
 import ReaderToolbar, { ReaderMoreMenu, ReaderBottomBar, Theme, Tool, usePaper } from "@/components/reader/ReaderToolbar";
@@ -22,6 +25,10 @@ import Modal from "@/components/Modal";
 import { toast as notify } from "@/components/Toast";
 import { useRouter } from "next/navigation";
 import { X, Sparkles, Volume2, Link2, Pin, PinOff, AlignLeft, FileText, PenLine, Highlighter } from "lucide-react";
+
+/** El yazisi: bu kadar sure yeni darbe gelmezse darbeler tek not olarak kaydedilir */
+const INK_IDLE_MS = 1200;
+const PEN_HINT_KEY = "reader.penHint";
 // Telefon paketi (Ajan T): klavye/gorunur alan degiskenleri (--vvh, --kb), pinch/cift dokunus, metin gorunumu
 import { useVisualViewport } from "@/hooks/useVisualViewport";
 import PinchZoom from "@/components/reader/PinchZoom";
@@ -80,11 +87,14 @@ export default function DocumentPage({ params }: { params: { id: string } }) {
   const [spread, setSpread] = useState(false);
   const [tool, setToolRaw] = useState<Tool>("none");
   // Kalem paleti (Ajan P): renk, kademe, konum, kucuk mu — cihazda saklanir. prevTool: kalemle cift dokunusta gecis.
-  const [pen, setPen] = useState<PenPrefs>({ color: HIGHLIGHT_COLORS[0].value, opacity: DEFAULT_OPACITY, collapsed: false, pos: null });
+  const [pen, setPen] = useState<PenPrefs>({ color: HIGHLIGHT_COLORS[0].value, opacity: DEFAULT_OPACITY, collapsed: false, pos: null,
+                                            inkColor: INK_COLORS[0].value, inkWidth: INK_WIDTHS[1].value });
   const penLoaded = useRef(false);
   const prevToolRef = useRef<Tool>("highlight");
   const toolRef = useRef<Tool>("none");
   function setTool(t: Tool) {
+    // kalemden cikinca bekleyen el yazisi hemen kaydedilir
+    if (toolRef.current === "ink" && t !== "ink") void flushInk();
     if (t !== toolRef.current) { if (toolRef.current !== "none") prevToolRef.current = toolRef.current; toolRef.current = t; }
     setToolRaw(t);
     // araca gecince palet acik gelsin (kucultulmus degil)
@@ -158,7 +168,9 @@ export default function DocumentPage({ params }: { params: { id: string } }) {
   }
 
   // geri al / yinele (vurgu ve not ekleme-silme; ustune vurgulamada degistirme tek adim)
-  type HistOp = { kind: "add"; ann: Annotation } | { kind: "remove"; ann: Annotation } | { kind: "group"; ops: HistOp[] };
+  // "ink": kayitli el yazisindan son darbe geri alindi (yinele: darbeler geri gelir)
+  type HistOp = { kind: "add"; ann: Annotation } | { kind: "remove"; ann: Annotation } | { kind: "group"; ops: HistOp[] }
+    | { kind: "ink"; before: Annotation; after: Annotation };
   const undoRef = useRef<HistOp[]>([]);
   const redoRef = useRef<HistOp[]>([]);
   const [histTick, setHistTick] = useState(0);
@@ -181,6 +193,7 @@ export default function DocumentPage({ params }: { params: { id: string } }) {
     return (await recreate(a)) || a;
   }
   async function applyUndo(op: HistOp): Promise<HistOp> {
+    if (op.kind === "ink") { await patch(op.after.id, { anchor: op.before.anchor }); return op; }
     if (op.kind === "add") { await remove(op.ann.id); return { kind: "add", ann: op.ann }; }
     if (op.kind === "remove") { const c = await bringBack(op.ann); return { kind: "remove", ann: c }; }
     const out: HistOp[] = [];
@@ -188,6 +201,7 @@ export default function DocumentPage({ params }: { params: { id: string } }) {
     return { kind: "group", ops: out };
   }
   async function applyRedo(op: HistOp): Promise<HistOp> {
+    if (op.kind === "ink") { await patch(op.after.id, { anchor: op.after.anchor }); return op; }
     if (op.kind === "add") { const c = await bringBack(op.ann); return { kind: "add", ann: c }; }
     if (op.kind === "remove") { await remove(op.ann.id); return { kind: "remove", ann: op.ann }; }
     const out: HistOp[] = [];
@@ -195,16 +209,111 @@ export default function DocumentPage({ params }: { params: { id: string } }) {
     return { kind: "group", ops: out };
   }
   async function undo() {
+    // 1) henuz kaydedilmemis el yazisi: son darbe
+    if (undoInkStroke()) { say("Son çizgi geri alındı", 1200); setHistTick((t) => t + 1); return; }
     const op = undoRef.current.pop(); if (!op) return;
+    // 2) kayitli el yazisi (birden cok darbe): yalniz son darbe geri alinir, not kalir
+    const strokes = op.kind === "add" && op.ann.anchor.type === "ink" ? op.ann.anchor.strokes || [] : [];
+    if (op.kind === "add" && strokes.length > 1) {
+      const left = strokes.slice(0, -1);
+      const reduced: Annotation = { ...op.ann, anchor: { ...op.ann.anchor, strokes: left, box: inkBox(left) } };
+      await patch(op.ann.id, { anchor: reduced.anchor });
+      undoRef.current.push({ kind: "add", ann: reduced });
+      redoRef.current.push({ kind: "ink", before: reduced, after: op.ann });
+      say("Son çizgi geri alındı", 1200); setEditing(null); setHistTick((t) => t + 1);
+      return;
+    }
     redoRef.current.push(await applyUndo(op));
-    say(op.kind === "add" ? "Vurgu geri alındı" : op.kind === "remove" ? "Silme geri alındı" : "Geri alındı");
+    say(op.kind === "add" ? (op.ann.anchor.type === "ink" ? "El yazısı geri alındı" : "Vurgu geri alındı")
+        : op.kind === "remove" ? "Silme geri alındı" : "Geri alındı");
     setEditing(null); setHistTick((t) => t + 1);
   }
   async function redo() {
     const op = redoRef.current.pop(); if (!op) return;
-    undoRef.current.push(await applyRedo(op));
+    if (op.kind === "ink") {
+      await applyRedo(op);
+      const top = undoRef.current[undoRef.current.length - 1];
+      if (top && top.kind === "add" && top.ann.id === op.after.id) undoRef.current.pop();
+      undoRef.current.push({ kind: "add", ann: op.after });
+    } else undoRef.current.push(await applyRedo(op));
     say("Yinelendi"); setEditing(null); setHistTick((t) => t + 1);
   }
+
+  // ===== El yazisi (Kalem araci, Ajan K) =====
+  // Darbeler once "bekleyen taslak"ta tutulur (sayfada hemen gorunur); INK_IDLE_MS boyunca yeni darbe
+  // gelmezse tek not olarak kaydedilir (POST /documents/{id}/notes, anchor.type "ink"). Baska sayfaya
+  // yazinca, araci birakinca ya da sekme gizlenince hemen kaydedilir.
+  const [inkDrafts, setInkDrafts] = useState<InkDraft[]>([]);
+  const inkRef = useRef<{ active: InkDraft | null; ratio: number; timer: ReturnType<typeof setTimeout> | null }>({ active: null, ratio: 1.294, timer: null });
+  function clearInkTimer() { const r = inkRef.current; if (r.timer) { clearTimeout(r.timer); r.timer = null; } }
+  function onInkStart() { clearInkTimer(); }
+  async function flushInk() {
+    const r = inkRef.current;
+    clearInkTimer();
+    const d = r.active;
+    r.active = null;
+    if (!d) return;
+    if (!d.strokes.length) { setInkDrafts((ds) => ds.filter((x) => x.key !== d.key)); return; }
+    const created = await add({ page_number: d.page, selected_text: null, note_content: "", highlight_color: null,
+                                anchor: { type: "ink", strokes: d.strokes, box: inkBox(d.strokes), r: +r.ratio.toFixed(3) } });
+    setInkDrafts((ds) => ds.filter((x) => x.key !== d.key));
+    if (created) { pushHist({ kind: "add", ann: created }); celebrateAccumulate(created.id); }
+    else say("El yazın kaydedilemedi. Bağlantını kontrol edip yeniden yaz.", 3000);
+  }
+  function onInkStroke(pg: number, stroke: InkStroke, ratio: number) {
+    const r = inkRef.current;
+    clearInkTimer();
+    if (r.active && r.active.page !== pg) void flushInk();
+    const base = r.active || { key: `ink-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`, page: pg, strokes: [] };
+    const next: InkDraft = { ...base, strokes: [...base.strokes, stroke] };
+    r.active = next;
+    r.ratio = ratio;
+    setInkDrafts((ds) => [...ds.filter((x) => x.key !== next.key), next]);
+    setHistTick((t) => t + 1);
+    const pts = next.strokes.reduce((n, st) => n + st.p.length, 0);
+    if (next.strokes.length >= INK_MAX_STROKES || pts >= INK_MAX_POINTS - 300) { void flushInk(); return; }
+    r.timer = setTimeout(() => { void flushInk(); }, INK_IDLE_MS);
+  }
+  /** Bekleyen (kaydedilmemis) el yazisindan son darbeyi kaldirir; kaldiracak darbe yoksa false. */
+  function undoInkStroke(): boolean {
+    const r = inkRef.current;
+    const d = r.active;
+    if (!d || !d.strokes.length) return false;
+    clearInkTimer();
+    const next: InkDraft = { ...d, strokes: d.strokes.slice(0, -1) };
+    if (!next.strokes.length) { r.active = null; setInkDrafts((ds) => ds.filter((x) => x.key !== d.key)); }
+    else {
+      r.active = next;
+      setInkDrafts((ds) => ds.map((x) => (x.key === d.key ? next : x)));
+      r.timer = setTimeout(() => { void flushInk(); }, INK_IDLE_MS);
+    }
+    return true;
+  }
+  // sekme gizlenince / sayfadan cikinca bekleyen el yazisi kaydedilsin
+  const flushRef = useRef(flushInk);
+  flushRef.current = flushInk;
+  useEffect(() => {
+    const onHide = () => { if (document.visibilityState === "hidden") void flushRef.current(); };
+    document.addEventListener("visibilitychange", onHide);
+    return () => { document.removeEventListener("visibilitychange", onHide); void flushRef.current(); };
+  }, []);
+
+  // Kalem ilk kez sayfaya degdi ve arac kapali: palet acilir (oturumda bir kez), ipucu cihazda bir kez
+  const [penHint, setPenHint] = useState(false);
+  const penIdleShown = useRef(false);
+  const penHintTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  function onPenIdle() {
+    if (penIdleShown.current || toolRef.current !== "none") return;
+    penIdleShown.current = true;
+    setTool("highlight");
+    let seen = false;
+    try { seen = localStorage.getItem(PEN_HINT_KEY) === "1"; localStorage.setItem(PEN_HINT_KEY, "1"); } catch {}
+    if (seen) return;
+    setPenHint(true);
+    if (penHintTimer.current) clearTimeout(penHintTimer.current);
+    penHintTimer.current = setTimeout(() => setPenHint(false), 8000);
+  }
+  useEffect(() => () => { if (penHintTimer.current) clearTimeout(penHintTimer.current); }, []);
   async function removeTracked(annId: string) {
     const a = annotations.find((x) => x.id === annId);
     await remove(annId);
@@ -358,13 +467,19 @@ export default function DocumentPage({ params }: { params: { id: string } }) {
       if (e.key === "ArrowRight" || e.key === "PageDown") { e.preventDefault(); setPage((p) => Math.min(numPages || p, p + 1)); }
       else if (e.key === "ArrowLeft" || e.key === "PageUp") { e.preventDefault(); setPage((p) => Math.max(1, p - 1)); }
       else if (e.key === "f" && isLg) setFocus((f) => !f);
-      // kalem paleti: 1-5 renk, H vurgu, U alt cizgi, E silgi (ayni tusa tekrar basinca arac kapanir)
+      // kalem paleti: 1-5 renk, P kalem, H vurgu, U alt cizgi, E silgi (ayni tusa tekrar basinca arac kapanir)
+      else if (/^[1-5]$/.test(e.key) && viewMode === "page" && toolRef.current === "ink") {
+        const c = INK_COLORS[Number(e.key) - 1];
+        setPen((p) => ({ ...p, inkColor: c.value }));
+        say(`Mürekkep: ${c.label}`, 1200);
+      }
       else if (/^[1-5]$/.test(e.key) && viewMode === "page") {
         const c = HIGHLIGHT_COLORS[Number(e.key) - 1];
         setPen((p) => ({ ...p, color: c.value }));
         if (toolRef.current === "none" || toolRef.current === "eraser") setTool("highlight");
         say(`Renk: ${pigmentName(c.value)}`, 1200);
       }
+      else if ((e.key === "p" || e.key === "P") && viewMode === "page") setTool(toolRef.current === "ink" ? "none" : "ink");
       else if ((e.key === "h" || e.key === "H") && viewMode === "page") setTool(toolRef.current === "highlight" ? "none" : "highlight");
       else if ((e.key === "u" || e.key === "U") && viewMode === "page") setTool(toolRef.current === "underline" ? "none" : "underline");
       else if ((e.key === "e" || e.key === "E") && viewMode === "page") setTool(toolRef.current === "eraser" ? "none" : "eraser");
@@ -459,7 +574,7 @@ export default function DocumentPage({ params }: { params: { id: string } }) {
   }
   function onErase(a: Annotation) {
     void removeTracked(a.id);
-    say(`${a.anchor.type === "sticky" ? "Kenar notu" : a.anchor.style === "underline" ? "Alt çizgi" : "Vurgu"} silindi · Ctrl+Z ile geri al`, 2500);
+    say(`${a.anchor.type === "sticky" ? "Kenar notu" : a.anchor.type === "ink" ? "El yazısı" : a.anchor.style === "underline" ? "Alt çizgi" : "Vurgu"} silindi · Ctrl+Z ile geri al`, 2500);
   }
   async function onCreateSticky(s: { page: number; x: number; y: number }) {
     const created = await add({ page_number: s.page, selected_text: null, note_content: "", highlight_color: null, anchor: { type: "sticky", x: s.x, y: s.y } });
@@ -540,7 +655,8 @@ export default function DocumentPage({ params }: { params: { id: string } }) {
     page, numPages, setPage, scale, setScale, spread, setSpread, tool, setTool, theme, setTheme,
     focus, setFocus, leftOpen, setLeftOpen: openLeft, rightOpen, setRightOpen: openRight, onExport,
     onUndo: undo, onRedo: redo, paper, paperTone, setPaper,
-    canUndo: histTick >= 0 && undoRef.current.length > 0, canRedo: histTick >= 0 && redoRef.current.length > 0,
+    canUndo: histTick >= 0 && (undoRef.current.length > 0 || !!inkRef.current.active?.strokes.length),
+    canRedo: histTick >= 0 && redoRef.current.length > 0,
   };
   const st = stageInfo(doc);
 
@@ -715,6 +831,9 @@ export default function DocumentPage({ params }: { params: { id: string } }) {
         <PdfReader
           fileUrl={fileUrl} page={page} scale={scale} spread={isLg && spread} tool={tool}
           pen={{ color: pen.color, opacity: pen.opacity }}
+          ink={{ color: pen.inkColor, width: pen.inkWidth }}
+          inkDrafts={inkDrafts} onInkStroke={onInkStroke} onInkStart={onInkStart} onInkUndo={undoInkStroke}
+          onPenIdle={onPenIdle}
           annotations={annotations}
           onNumPages={setNumPages} onVisiblePage={setPage}
           onCreateHighlight={onCreateHighlight} onCreateSticky={onCreateSticky}
@@ -780,10 +899,22 @@ export default function DocumentPage({ params }: { params: { id: string } }) {
             <PenPalette tool={tool} setTool={setTool}
                         color={pen.color} setColor={(c) => setPen((p) => ({ ...p, color: c }))}
                         opacity={pen.opacity} setOpacity={(o) => setPen((p) => ({ ...p, opacity: o }))}
+                        inkColor={pen.inkColor} setInkColor={(c) => setPen((p) => ({ ...p, inkColor: c }))}
+                        inkWidth={pen.inkWidth} setInkWidth={(w) => setPen((p) => ({ ...p, inkWidth: w }))}
                         collapsed={pen.collapsed} setCollapsed={(b) => setPen((p) => ({ ...p, collapsed: b }))}
                         pos={pen.pos} setPos={(pos) => setPen((p) => ({ ...p, pos }))}
                         dock={isLg ? "top" : "bottom"} onClose={() => setTool("none")}
-                        onUndo={undo} canUndo={histTick >= 0 && undoRef.current.length > 0} />
+                        onUndo={undo} canUndo={histTick >= 0 && (undoRef.current.length > 0 || !!inkRef.current.active?.strokes.length)} />
+          )}
+          {/* Ilk kalem dokunusu ipucu (cihazda bir kez) */}
+          {penHint && tool !== "none" && viewMode === "page" && (
+            <div role="status" className={`pen-hint fade-in absolute left-1/2 z-40 flex -translate-x-1/2 items-center gap-1 rounded-xl bg-text-primary py-1 pl-3 pr-1 text-sm text-background shadow-lg ${isLg ? "top-[76px]" : "bottom-[88px]"}`}>
+              <span>Kalemle yazmak için „Kalem“i, işaretlemek için „Vurgu“yu seç.</span>
+              <button type="button" onClick={() => setPenHint(false)} aria-label="İpucunu kapat"
+                      className="flex h-11 w-11 shrink-0 items-center justify-center rounded-lg hover:bg-white/10">
+                <X size={16} aria-hidden />
+              </button>
+            </div>
           )}
           {/* okuma ilerlemesi */}
           <div aria-hidden className="pointer-events-none absolute bottom-0 left-0 h-1 bg-accent-purple/70 transition-all" style={{ width: `${progress}%` }} />
@@ -878,7 +1009,7 @@ export default function DocumentPage({ params }: { params: { id: string } }) {
       {editing && (
         <NoteEditor ann={editing} onClose={() => setEditing(null)}
                     onSave={(content, color, style, opacity) => {
-                      const anchorPatch = editing.anchor.type === "sticky" ? {}
+                      const anchorPatch = editing.anchor.type === "sticky" || editing.anchor.type === "ink" ? {}
                         : { anchor: { ...editing.anchor, style: style || editing.anchor.style || "highlight", opacity: opacity ?? editing.anchor.opacity ?? DEFAULT_OPACITY } };
                       patch(editing.id, { note_content: content, ...(color ? { highlight_color: color } : {}), ...anchorPatch });
                       setEditing(null);
@@ -898,13 +1029,18 @@ function NoteEditor({ ann, onClose, onSave, onDelete }: {
   const [color, setColor] = useState(pigmentOf(ann.highlight_color || HIGHLIGHT_COLORS[0].value));
   const [style, setStyle] = useState<HighlightStyle>(ann.anchor.style === "underline" ? "underline" : "highlight");
   const [opacity, setOpacity] = useState<number>(ann.anchor.opacity ?? DEFAULT_OPACITY);
-  const sticky = ann.anchor.type === "sticky";
+  const ink = ann.anchor.type === "ink";
+  // kenar notu ve el yazisi: renk / stil secimi yok
+  const sticky = ann.anchor.type === "sticky" || ink;
   const save = () => onSave(text, !sticky ? color : undefined, !sticky ? style : undefined, !sticky ? opacity : undefined);
   const preview: React.CSSProperties = style === "underline"
     ? { background: "transparent", borderBottom: `${(OPACITY_STEPS.find((s) => s.value === opacity) || OPACITY_STEPS[2]).underlinePx}px solid ${color}` }
     : { background: color, opacity: Math.max(0.5, opacity) };
   return (
-    <Modal open onClose={onClose} title={`${sticky ? "Kenar notu" : style === "underline" ? "Alt çizgi notu" : "Vurgu notu"} · s.${ann.page_number}`} size="md">
+    <Modal open onClose={onClose} title={`${ink ? "El yazısı notu" : sticky ? "Kenar notu" : style === "underline" ? "Alt çizgi notu" : "Vurgu notu"} · s.${ann.page_number}`} size="md">
+      {ink && ann.anchor.strokes && (
+        <InkPreview strokes={ann.anchor.strokes} box={ann.anchor.box} label={`El yazısı notu · s. ${ann.page_number}`} className="mb-3" maxHeight={220} />
+      )}
       {ann.selected_text && (
         <p className="mb-3 rounded-md px-2 py-1 text-sm text-[#2A2017]" style={preview}>{ann.selected_text}</p>
       )}

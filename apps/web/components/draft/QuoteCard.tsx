@@ -4,9 +4,11 @@
  * altında küçük "s. 12 · Kaynak adı" (tıklayınca kaynağın o sayfası), kullanıcının yorumu
  * el yazısı hissinde küçük bir kenar notu. style: "underline" → pigment alt çizgi, "sticky" → not kâğıdı.
  * Yeni biriken (auto) alıntılar ilk görünüşte `.gilded` (altın parıltı) ile belirir.
+ * style "ink" (el yazısı notu): metin yerine kutuya ölçekli çizim + "El yazısı notu · s. N".
  */
 import type { CSSProperties } from "react";
 import { HIGHLIGHT_COLORS, pigmentOf } from "@/lib/reader";
+import InkPreview from "@/components/reader/InkPreview";
 import type { Block } from "@/components/DraftEditor";
 
 type QuoteBlock = Extract<Block, { type: "quote" }>;
@@ -27,12 +29,14 @@ export function quotePigment(b: { color?: string | null }) {
 export default function QuoteCard({ b, onOpen, gilded, compact }: {
   b: QuoteBlock; onOpen: () => void; gilded?: boolean; compact?: boolean;
 }) {
-  const pig = quotePigment(b);
   const style = b.style || "highlight";
+  const ink = style === "ink" && b.ink?.strokes?.length ? b.ink : null;
+  // el yazısında şerit mürekkebin rengini alır
+  const pig = ink ? ink.strokes[0].c : quotePigment(b);
   const sticky = style === "sticky";
   const text = (b.text || "").trim();
   const note = (b.note || "").trim();
-  const cite = [b.page ? `s. ${b.page}` : "", b.source || "Kaynak"].filter(Boolean).join(" · ");
+  const cite = [ink ? "El yazısı notu" : "", b.page ? `s. ${b.page}` : "", b.source || "Kaynak"].filter(Boolean).join(" · ");
 
   // Metin görünümü: vurguda yumuşak pigment zemin (fosforlu kalem gibi alt yarı), alt çizgide pigment çizgi
   const textStyle: CSSProperties = style === "underline"
@@ -50,6 +54,10 @@ export default function QuoteCard({ b, onOpen, gilded, compact }: {
 
       <div className={cx(sticky && "rounded-md px-4 py-3 shadow-soft")}
            style={sticky ? { background: tint(pig, 0.42), transform: "rotate(-0.6deg)" } : undefined}>
+        {ink && (
+          <InkPreview strokes={ink.strokes} box={ink.box} maxHeight={compact ? 110 : 160}
+                      label={`El yazısı notu${b.page ? ` · s. ${b.page}` : ""}`} className="max-w-[34rem]" />
+        )}
         {text && (
           <blockquote className={cx("font-reading italic text-text-primary", compact ? "text-[15px] leading-[1.7]" : "text-[16px] leading-[1.8] md:text-[17px]")}>
             <span aria-hidden className="mr-0.5 font-heading not-italic text-[color:var(--gold)]">“</span>

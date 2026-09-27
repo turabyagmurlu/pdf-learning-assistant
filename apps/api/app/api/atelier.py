@@ -1,7 +1,8 @@
 """Atolye (TY PDF 2.0): taslaklardaki alintilarla okuma ve calisma pratikleri. Yapay zeka HARCAMAZ.
 
 - GET  /atelier/deck?scope=all|collection:<id>|document:<id>&mode=due|all&limit=40
-       -> {items:[{key, kind, text, note, color, style, page, document_id, source, box, due, seen}], total, due}
+       -> {items:[{key, kind, text, note, color, style, page, document_id, source, box, due, seen, ink?}], total, due}
+       (el yazisi karti: style "ink", text "El yazısı notu", ink:{strokes, box})
 - POST /atelier/review {key, result:"again"|"hard"|"good"|"easy"} -> {box, due}
 - GET  /atelier/today  -> {due, new_available, reviewed_today, streak_days, week, recent, resume, scopes}
 - GET  /atelier/counts -> {due_total, by_collection:{cid: n}}
@@ -73,8 +74,12 @@ def extract_cards(blocks: list[dict], scope_kind: str, scope_id: str, scope_titl
         t = b.get("type")
         text = _txt(b.get("text"))
         note_txt = _txt(b.get("note"))
+        # el yazisi notu: metin yok, darbeler kartta tasinir (Hatirla'da perde uygulanmaz)
+        ink = b.get("ink") if t == "quote" and b.get("style") == "ink" and isinstance(b.get("ink"), dict) else None
+        if not text and ink:
+            text = "El yazısı notu"
         # kenar notu: alinti metni bos, yorumu dolu -> kartin metni yorumun kendisi
-        if not text and t == "quote" and note_txt:
+        elif not text and t == "quote" and note_txt:
             text, b = note_txt, {**b, "note": None, "style": b.get("style") or "sticky"}
         if not text:
             continue
@@ -89,7 +94,8 @@ def extract_cards(blocks: list[dict], scope_kind: str, scope_id: str, scope_titl
                         "page": page if isinstance(page, int) else None,
                         "document_id": str(b.get("document_id") or "") or None,
                         "source": _txt(b.get("source")) or None,
-                        "at": str(b.get("at") or ""), "note_id": nid or None, "order": i})
+                        "at": str(b.get("at") or ""), "note_id": nid or None, "order": i,
+                        **({"ink": ink} if ink else {})})
         elif t == "p" and len(text) >= MIN_P_CHARS:
             out.append({"key": f"blk:{scope_kind}:{scope_id}:{b.get('id') or i}", "kind": "p", "text": text,
                         "note": None, "color": None, "style": None, "page": None,
@@ -103,7 +109,8 @@ def dedupe(cards: list[dict]) -> list[dict]:
     seen: set = set()
     out = []
     for c in cards:
-        k2 = ("q", c.get("document_id"), c["text"].lower()) if c["kind"] == "quote" else None
+        # el yazisi kartlarinin metni ayni ("El yazısı notu"): yalniz anahtarla tekillenir
+        k2 = ("q", c.get("document_id"), c["text"].lower()) if c["kind"] == "quote" and not c.get("ink") else None
         if c["key"] in seen or (k2 and k2 in seen):
             continue
         seen.add(c["key"])
@@ -153,7 +160,7 @@ def card_out(c: dict, st: dict | None) -> dict:
     return {"key": c["key"], "kind": c["kind"], "text": c["text"], "note": c["note"], "color": c["color"],
             "style": c["style"], "page": c["page"], "document_id": c["document_id"], "source": c["source"],
             "box": int(st["box"]) if st else 0, "due": due.isoformat() if due else None,
-            "seen": int(st["seen"]) if st else 0}
+            "seen": int(st["seen"]) if st else 0, **({"ink": c["ink"]} if c.get("ink") else {})}
 
 
 def streak_days(active_days: set[date], today: date) -> int:

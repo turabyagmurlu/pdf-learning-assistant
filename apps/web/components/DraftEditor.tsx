@@ -16,6 +16,7 @@ import { api, API, getToken, errorMessage } from "@/lib/api";
 import { docHref } from "@/lib/links";
 import { mdToPlain, mdToHtml, mdNormalize } from "@/lib/markdown";
 import { pigmentName } from "@/lib/reader";
+import type { InkStroke } from "@/lib/ink";
 import {
   ArrowUp, ArrowDown, X, Plus, Sparkles, RefreshCw, Heading2, Wand2, Loader2, Check,
   Download, ChevronDown, History, Share2, TextCursorInput, ListOrdered, BookOpen,
@@ -40,7 +41,8 @@ export type Block =
   | { id: string; type: "h"; text: string }
   | { id: string; type: "quote"; text: string; note?: string; color?: string | null; source: string; page: number | null; document_id: string;
       /** kaynağı olan vurgu (notes.id) */ note_id?: string;
-      style?: "highlight" | "underline" | "sticky";
+      style?: "highlight" | "underline" | "sticky" | "ink";
+      /** El yazısı notu (style "ink"): darbeler + kutu (lib/ink) */ ink?: { strokes: InkStroke[]; box: [number, number, number, number] };
       /** kendiliğinden biriken */ auto?: boolean;
       /** ISO zaman */ at?: string }
   | { id: string; type: "answer"; q: string; text: string; sources: { title: string; page?: number | null; document_id: string }[] };
@@ -78,7 +80,7 @@ export function toMarkdown(title: string, blocks: Block[]) {
     else if (b.type === "p") { if (b.text.trim()) out.push(mdNormalize(b.text.trim()), ""); }
     else if (b.type === "quote") {
       if (b.text.trim()) out.push(`> ${b.text.trim().replace(/\n+/g, " ")}`, `> — ${cite(b)}`, "");
-      else out.push(`_— ${cite(b)}_`, "");
+      else out.push(b.style === "ink" ? `_El yazısı notu — ${cite(b)}_` : `_— ${cite(b)}_`, "");
       if (b.note) out.push(`_${b.note.trim()}_`, "");
     }
     else if (b.type === "answer") out.push(`**${b.q}**`, "", mdNormalize(b.text.trim()), "", `_Kaynaklar: ${b.sources.map((s, i) => `[K${i + 1}] ${s.title}${s.page ? ", s. " + s.page : ""}`).join("; ")}_`, "");
@@ -102,7 +104,7 @@ export function toPlainText(title: string, blocks: Block[]) {
   for (const b of blocks) {
     if (b.type === "h") out.push(b.text.trim().toUpperCase(), "");
     else if (b.type === "p") { if (b.text.trim()) out.push(mdToPlain(b.text.trim()), ""); }
-    else if (b.type === "quote") { out.push(b.text.trim() ? `“${b.text.trim()}” — ${cite(b)}` : `— ${cite(b)}`, ""); if (b.note) out.push(b.note.trim(), ""); }
+    else if (b.type === "quote") { out.push(b.text.trim() ? `“${b.text.trim()}” — ${cite(b)}` : `${b.style === "ink" ? "El yazısı notu " : ""}— ${cite(b)}`, ""); if (b.note) out.push(b.note.trim(), ""); }
     else if (b.type === "answer") out.push(b.q, "", mdToPlain(b.text.trim(), citeText(b.sources)), "");
   }
   return out.join("\n").trim();

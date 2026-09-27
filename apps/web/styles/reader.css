@@ -293,3 +293,24 @@
 @media (max-width: 1023px) {
   .reader-page { box-shadow: 0 1px 2px rgba(31,29,26,0.06), 0 6px 18px rgba(31,29,26,0.10); }
 }
+
+/* ===== Kalem (Ajan K): fosforlu kalem darbesi + el yazisi =====
+   Cizerken (.pen-drawing) yerel metin secimi ve kaydirma kapali; parmak dokunusu yalniz cizim yokken kaydirir.
+   El yazisi katmani sayfa genisligine gore olceklenir (viewBox 1000 birim), yakinlastirmada keskin kalir. */
+.reader-surround.pen-drawing, .reader-surround.pen-drawing .textLayer, .reader-surround.pen-drawing .textLayer * {
+  user-select: none; -webkit-user-select: none; -webkit-touch-callout: none; touch-action: none;
+}
+/* Kalem aracinda metin secilmez (parmak kaydirir, kalem yazar) */
+.reader-surround[data-tool="ink"] .textLayer { user-select: none; -webkit-user-select: none; -webkit-touch-callout: none; }
+.reader-surround[data-tool="ink"] { cursor: crosshair; }
+.ink-layer, .ink-live { position: absolute; left: 0; top: 0; width: 100%; height: auto; overflow: visible; pointer-events: none; }
+.ink-live-mark { mix-blend-mode: multiply; }
+.reader-surround[data-paper="night"] .ink-live-mark { mix-blend-mode: normal; }
+.ink-hit { fill: none; stroke: transparent; stroke-width: 18; stroke-linecap: round; stroke-linejoin: round; pointer-events: none; cursor: pointer; }
+.reader-surround[data-tool="none"] .ink-hit, .reader-surround[data-tool="eraser"] .ink-hit { pointer-events: stroke; }
+.reader-surround[data-tool="eraser"] .ink-layer g[data-ann] { filter: drop-shadow(0 0 1.5px var(--danger, #B3402D)); }
+.reader-surround[data-tool="eraser"] .ink-hit { cursor: cell; }
+/* Gece kagidinda koyu murekkep acik gorunsun */
+.reader-surround[data-paper="night"] .ink-layer { filter: invert(0.88) hue-rotate(180deg); }
+/* Ilk kalem dokunusu ipucu balonu */
+.pen-hint { max-width: min(340px, calc(100vw - 32px)); }

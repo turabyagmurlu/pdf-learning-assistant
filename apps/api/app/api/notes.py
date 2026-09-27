@@ -3,6 +3,7 @@
 anchor JSON'u (sutun eklemeden):
   {type:"highlight", rects:[...], style:"highlight"|"underline", opacity:0.35|0.55|0.8}
   {type:"sticky", x, y}
+  {type:"ink", strokes:[{c, w, p:[[x,y,basinc],...]}], box:[x,y,w,h], r}  (el yazisi; x,y sayfa genisligine gore 0-1)
 Silme yumusaktir (deleted_at); 30 gun icinde POST /trash/note/{id}/restore ile geri gelir.
 
 Biriktirme (TY PDF 2.0): ekleme/duzenleme/silme sonrasi services.accumulate kancalari belge ve
@@ -15,8 +16,23 @@ from pydantic import BaseModel
 from app.deps import db, current_user
 from app.core.errors import NotFound
 from app.services import accumulate
+from app.api.drafts import clean_ink
 
 router = APIRouter(tags=["notes"])
+
+
+def _safe_anchor(a: dict | None) -> dict | None:
+    """El yazisi anchor'u sinirlanir (60 darbe / 4000 nokta); digerleri aynen."""
+    if not isinstance(a, dict) or a.get("type") != "ink":
+        return a
+    ink = clean_ink(a)
+    if not ink:
+        return {"type": "ink", "strokes": [], "box": [0, 0, 0, 0]}
+    out = {"type": "ink", **ink}
+    r = a.get("r")
+    if isinstance(r, (int, float)) and 0 < r < 10:
+        out["r"] = round(float(r), 3)
+    return out
 
 
 class NoteIn(BaseModel):
@@ -40,7 +56,7 @@ async def add_note(doc_id: str, body: NoteIn, conn=Depends(db), user=Depends(cur
                               highlight_color, anchor, tags)
            VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)""",
         nid, user["id"], doc_id, body.page_number, body.selected_text, body.note_content,
-        body.highlight_color, body.anchor, body.tags)
+        body.highlight_color, _safe_anchor(body.anchor), body.tags)
     await accumulate.safe(accumulate.accumulate_note, conn, user["id"], nid)
     return {"id": nid}
 
@@ -103,7 +119,7 @@ async def patch_note(note_id: str, body: NotePatch, conn=Depends(db), user=Depen
     if body.tags is not None:
         sets.append(f"tags=${i}"); vals.append(body.tags); i += 1
     if body.anchor is not None:
-        sets.append(f"anchor=${i}"); vals.append(body.anchor); i += 1
+        sets.append(f"anchor=${i}"); vals.append(_safe_anchor(body.anchor)); i += 1
     if sets:
         vals.append(note_id)
         await conn.execute(f"UPDATE notes SET {', '.join(sets)} WHERE id=${i}", *vals)

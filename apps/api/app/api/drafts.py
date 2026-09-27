@@ -82,7 +82,65 @@ def _clean(s: Any, n: int) -> str:
     return re.sub(r"[ \t]+", " ", str(s or "")).strip()[:n]
 
 
-QUOTE_STYLES = ("highlight", "underline", "sticky")
+QUOTE_STYLES = ("highlight", "underline", "sticky", "ink")
+
+# El yazisi notu (okuyucudaki Kalem araci): {strokes:[{c, w, p:[[x,y,basinc],...]}], box:[x,y,w,h]}
+INK_MAX_STROKES = 60
+INK_MAX_POINTS = 4000
+_HEX = re.compile(r"^#[0-9a-fA-F]{3,8}$")
+
+
+def _num(v: Any) -> float | None:
+    try:
+        f = float(v)
+    except Exception:  # noqa
+        return None
+    return f if f == f and abs(f) != float("inf") else None
+
+
+def clean_ink(v: Any) -> dict | None:
+    """El yazisi verisini dogrular ve sinirlar (60 darbe / 4000 nokta; fazlaysa noktalar seyreltilir).
+    Koordinatlar 3, basinc 2 basamak. Gecerli darbe yoksa None."""
+    if not isinstance(v, dict) or not isinstance(v.get("strokes"), list):
+        return None
+    raw = [s for s in v["strokes"][:INK_MAX_STROKES] if isinstance(s, dict) and isinstance(s.get("p"), list)]
+    total = sum(len(s["p"]) for s in raw)
+    step = max(1, -(-total // INK_MAX_POINTS))          # tavan bolme: seyreltme adimi
+    strokes: list[dict] = []
+    count = 0
+    for s in raw:
+        pts_in = s["p"]
+        if step > 1 and len(pts_in) > 2:
+            pts_in = pts_in[::step] + ([pts_in[-1]] if (len(pts_in) - 1) % step else [])
+        pts: list[list[float]] = []
+        for q in pts_in:
+            if count >= INK_MAX_POINTS:
+                break
+            if not isinstance(q, (list, tuple)) or len(q) < 2:
+                continue
+            x, y = _num(q[0]), _num(q[1])
+            if x is None or y is None:
+                continue
+            pr = _num(q[2]) if len(q) > 2 else 0.5
+            pr = 0.5 if pr is None else min(1.0, max(0.0, pr))
+            pts.append([round(min(2.0, max(-0.5, x)), 3), round(min(3.0, max(-0.5, y)), 3), round(pr, 2)])
+            count += 1
+        if not pts:
+            continue
+        c = str(s.get("c") or "#1B2233")[:20]
+        w = _num(s.get("w"))
+        strokes.append({"c": c if _HEX.match(c) else "#1B2233",
+                        "w": round(min(20.0, max(0.5, w)), 2) if w else 3.6, "p": pts})
+    if not strokes:
+        return None
+    box = v.get("box")
+    if isinstance(box, (list, tuple)) and len(box) == 4 and all(_num(b) is not None for b in box):
+        box = [round(float(b), 3) for b in box]
+    else:
+        xs = [p[0] for s in strokes for p in s["p"]]
+        ys = [p[1] for s in strokes for p in s["p"]]
+        box = [round(min(xs), 3), round(min(ys), 3), round(max(xs) - min(xs), 3), round(max(ys) - min(ys), 3)]
+    return {"strokes": strokes, "box": box}
 
 
 async def clean_blocks(conn, uid, raw_blocks: list[dict]) -> list[dict]:
@@ -115,7 +173,9 @@ async def clean_blocks(conn, uid, raw_blocks: list[dict]) -> list[dict]:
         if t == "quote":
             text = _clean(re.sub(r"\s+", " ", str(b.get("text") or "")), 4000)
             did = str(b.get("document_id") or "")
-            if not text or did not in titles:
+            ink = clean_ink(b.get("ink")) if b.get("style") == "ink" else None
+            # metni bos alinti yalniz el yazisi ya da yorumlu kenar notuysa kalir
+            if (not text and not ink and not _clean(b.get("note"), 2000)) or did not in titles:
                 continue
             page = b.get("page")
             try:
@@ -131,8 +191,10 @@ async def clean_blocks(conn, uid, raw_blocks: list[dict]) -> list[dict]:
             if nid and nid in own_notes:
                 q["note_id"] = nid
             st = b.get("style")
-            if st in QUOTE_STYLES:
+            if st in QUOTE_STYLES and (st != "ink" or ink):
                 q["style"] = st
+            if ink:
+                q["ink"] = ink
             if b.get("auto") is True:
                 q["auto"] = True
             at = _clean(b.get("at"), 40)
