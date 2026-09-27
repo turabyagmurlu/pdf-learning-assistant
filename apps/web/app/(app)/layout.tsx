@@ -244,8 +244,8 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
                !bare && "md:flex")}
              aria-label="Kenar menüsü">
         <Link href="/today" className="flex items-center gap-2.5 px-2 py-3 md:justify-center md:px-0 lg:justify-start lg:px-2" aria-label="TY PDF ana sayfa">
-          <span className="hidden md:inline lg:hidden"><BrandMarkSvg variant={dark ? "night" : "day"} size={28} title="TY PDF" /></span>
-          <span className="hidden lg:inline"><BrandMarkSvg variant={dark ? "night" : "day"} size={34} title="TY PDF" /></span>
+          <span className="hidden md:inline lg:hidden"><BrandMarkSvg variant={dark ? "night" : "day"} size={28} title="TY PDF" uid="rail" /></span>
+          <span className="hidden lg:inline"><BrandMarkSvg variant={dark ? "night" : "day"} size={34} title="TY PDF" uid="side" /></span>
           <span className="hidden font-heading text-lg leading-tight lg:inline">TY PDF</span>
         </Link>
         {sub && (
@@ -320,7 +320,7 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
                           className="-ml-2 flex min-h-[44px] items-center gap-1.5 rounded-md px-2 text-sm font-medium text-text-primary active:bg-surface-muted" />
             ) : (
               <Link href="/today" className="flex min-h-[44px] items-center gap-2">
-                <BrandMarkSvg variant={dark ? "night" : "day"} size={28} title="TY PDF" />
+                <BrandMarkSvg variant={dark ? "night" : "day"} size={28} title="TY PDF" uid="mob" />
                 <span className="font-heading text-base">TY PDF</span>
               </Link>
             )}

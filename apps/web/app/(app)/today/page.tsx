@@ -18,7 +18,7 @@ import { atelierHref } from "@/hooks/useAtelier";
 
 const cx = (...a: (string | false | null | undefined)[]) => a.filter(Boolean).join(" ");
 
-type Recent = { note_id: string; text: string; color?: string | null; page?: number | null; document_id: string; source?: string | null; at?: string | null };
+type Recent = { note_id: string; text: string; note?: string | null; color?: string | null; page?: number | null; document_id: string; source?: string | null; at?: string | null };
 type Scope = { kind: "collection"; id: string; title: string; cover_color?: string | null; cover_icon?: string | null; due: number };
 type Today = {
   due: number; new_available: number; reviewed_today: number; streak_days: number;
@@ -209,10 +209,10 @@ export default function TodayPage() {
                 {d.recent.slice(0, 6).map((r) => (
                   <li key={r.note_id}>
                     <Link href={docHref(r.document_id, { page: r.page ?? null })}
-                          aria-label={`${r.text.slice(0, 80)} — ${r.source || "kaynak"}${r.page ? `, sayfa ${r.page}` : ""}; kaynağında aç`}
+                          aria-label={`${(r.text || r.note || "Kenar notu").slice(0, 80)} — ${r.source || "kaynak"}${r.page ? `, sayfa ${r.page}` : ""}; kaynağında aç`}
                           className="lift relative flex h-full flex-col overflow-hidden rounded-2xl border bg-surface py-4 pl-6 pr-4 shadow-soft">
                       <span aria-hidden className="absolute bottom-4 left-0 top-4 w-1 rounded-r-full" style={{ background: r.color ? pigmentOf(r.color) : "var(--gold)" }} />
-                      <span className="line-clamp-4 font-reading text-[17px] italic leading-relaxed text-text-primary">{r.text}</span>
+                      <span className={"line-clamp-4 font-reading text-[17px] leading-relaxed text-text-primary " + (r.text ? "italic" : "")}>{r.text || r.note || "Kenar notu"}</span>
                       <span className="mt-auto flex items-center gap-2 pt-3 text-sm text-text-secondary">
                         {r.page ? <Folio page={r.page} /> : null}
                         <span className="min-w-0 truncate">{r.source}</span>

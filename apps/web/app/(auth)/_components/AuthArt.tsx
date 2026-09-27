@@ -22,7 +22,7 @@ export function AuthArtPanel() {
                "radial-gradient(60% 50% at 92% 96%, var(--accent-soft) 0%, transparent 70%)," +
                "radial-gradient(140% 120% at 50% 45%, transparent 60%, var(--ink-soft) 100%)" }}>
       <div className="flex items-center gap-phi-2">
-        <BrandMarkSvg variant={dark ? "night" : "day"} size={36} />
+        <BrandMarkSvg variant={dark ? "night" : "day"} size={36} uid="auth" />
         <span className="eyebrow">Okuma ve çalışma atölyesi</span>
       </div>
 

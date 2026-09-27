@@ -30,10 +30,12 @@ export const MONO_Y =
   "L153.6 66 L153.6 68.2 C149.8 68.8 147.8 70.4 145.2 75 L132.4 98.6 L132.4 126.8 C132.4 130.2 134.6 131.5 139.6 132 L139.6 134.2 " +
   "L114.8 134.2 L114.8 132 C119.8 131.5 122 130.2 122 126.8 L122 99.4 L108 74.2 C105.6 70 104.4 68.8 101.4 68.2 Z";
 
-export function BrandMarkSvg({ variant = "day", size = 32, rounded = true, title }: {
+export function BrandMarkSvg({ variant = "day", size = 32, rounded = true, title, uid = "" }: {
   variant?: BrandVariant; size?: number; rounded?: boolean; title?: string;
+  /** Ayni sayfada birden cok kopya varsa (biri gizli olabilir) her birine ayri kimlik: gizli kopyanin gradyani digerlerini bosaltmasin. */
+  uid?: string;
 }) {
-  const id = "bm-" + variant + (rounded ? "-r" : "-s");
+  const id = "bm-" + variant + (rounded ? "-r" : "-s") + (uid ? "-" + uid : "");
   const night = variant === "night";
   const letter = night ? BRAND.gold : BRAND.cream;
   return (

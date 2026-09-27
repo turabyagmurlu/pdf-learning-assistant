@@ -208,6 +208,8 @@ async def lifespan(app: FastAPI):
     trash_purger = _asyncio.create_task(_trash_purge_loop())   # 30 gunden eski cop ogeleri, gunde bir
     # Eski kaynaklarda file_hash bos: bir kez arka planda doldur (kopya yuklemeyi yakalamak icin)
     hasher = _asyncio.create_task(_backfill_hashes_once())
+    # 2.0: mevcut vurgulari belge taslaklarina bir kez aktar (Atolye ilk gunden dolu)
+    doc_draft_filler = _asyncio.create_task(_backfill_doc_drafts_once())
     # Ses onbellegi butcesi: gunde bir kez en eski kayitlari sil (S1/M6)
     tts_trimmer = _asyncio.create_task(_tts_trim_loop())
     # Yarim kalmis belgeleri kaldigi yerden isle (sunucu uyuyup uyandiginda sart)
@@ -221,6 +223,7 @@ async def lifespan(app: FastAPI):
     backuper.cancel()
     trash_purger.cancel()
     hasher.cancel()
+    doc_draft_filler.cancel()
     tts_trimmer.cancel()
     try:
         await _flush_usage()
@@ -330,6 +333,32 @@ async def _backfill_hashes_once():
                     "INSERT INTO typdf_migrations (name) VALUES ('file_hash_backfill') ON CONFLICT (name) DO NOTHING")
     except Exception as e:  # noqa
         print("file_hash doldurma basarisiz:", repr(e))
+
+
+async def _backfill_doc_drafts_once():
+    """2.0: mevcut vurgulari her belgenin (yeni, bos) taslagina bir kez aktarir -> Atolye ilk gunden dolu.
+    Defter taslaklarina dokunmaz (orada "Mevcut vurgularini getir" dugmesi var). typdf_migrations isaretli."""
+    import asyncio as _asyncio
+    await _asyncio.sleep(45)
+    try:
+        from app.db.session import get_pool
+        from app.services.accumulate import import_highlights
+        pool = await get_pool()
+        async with pool.acquire() as conn:
+            if await conn.fetchval("SELECT 1 FROM typdf_migrations WHERE name='v2_doc_draft_backfill'"):
+                return
+            rows = await conn.fetch(
+                """SELECT DISTINCT d.id, d.user_id FROM documents d JOIN notes n ON n.document_id = d.id
+                   WHERE d.deleted_at IS NULL AND n.deleted_at IS NULL""")
+            for r in rows:
+                try:
+                    await import_highlights(conn, r["user_id"], "documents", str(r["id"]), [str(r["id"])])
+                except Exception as e:  # noqa
+                    print("belge taslagi aktarimi basarisiz:", r["id"], repr(e))
+            await conn.execute(
+                "INSERT INTO typdf_migrations (name) VALUES ('v2_doc_draft_backfill') ON CONFLICT (name) DO NOTHING")
+    except Exception as e:  # noqa
+        print("belge taslagi aktarimi basarisiz:", repr(e))
 
 
 async def _flush_usage():
