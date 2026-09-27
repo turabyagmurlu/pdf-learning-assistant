@@ -8,6 +8,7 @@ import { useRefreshOn } from "@/components/Wake";
 import { toast } from "@/components/Toast";
 import Button from "@/components/ui/Button";
 import { coverOf } from "@/lib/covers";
+import { useAtelierCounts } from "@/hooks/useAtelier";
 import {
   Notebook, Plus, Highlighter, PenLine, Check, BookMarked, Share2, Clock, X, Loader2, Sparkles, MessageSquare, Upload, HelpCircle,
 } from "lucide-react";
@@ -56,6 +57,8 @@ export default function NotebooksPage() {
   const [sampleBusy, setSampleBusy] = useState(false);
   const busyRef = useRef(false);
   const fid = useId();
+  // Atolye: defter basina tekrar bekleyen kart (kapak rozeti)
+  const dueBy = useAtelierCounts()?.by_collection || {};
 
   async function load() {
     setLoadErr("");
@@ -230,13 +233,21 @@ export default function NotebooksPage() {
         <div className="grid grid-cols-1 gap-5 sm:grid-cols-2 lg:grid-cols-3">
           {list.map((nb) => {
             const cv = coverOf(nb);
+            const due = dueBy[nb.id] || 0;
             return (
             <button type="button" key={nb.id} onClick={() => router.push("/collections/" + nb.id)}
-                    aria-label={`${nb.title} defterini aç: ${nb.doc_count} kaynak`}
+                    aria-label={`${nb.title} defterini aç: ${nb.doc_count} kaynak${due ? `, ${due} tekrar bekliyor` : ""}`}
                     className="lift group flex flex-col overflow-hidden rounded-2xl border bg-surface text-left hover:border-border-strong">
               {/* Kapak: renkli yuzey, sol ustte simge, altta baslik + kaynak sayisi */}
               <div className={cx("flex min-h-[132px] flex-col justify-between gap-3 p-4", cv.tone.bg)}>
-                <cv.Icon size={26} strokeWidth={1.9} className={cv.tone.fg} aria-hidden="true" />
+                <div className="flex items-start justify-between gap-2">
+                  <cv.Icon size={26} strokeWidth={1.9} className={cv.tone.fg} aria-hidden="true" />
+                  {due > 0 && (
+                    <span aria-hidden="true" className="rounded-full border border-gold bg-surface px-2 py-0.5 text-xs font-semibold text-gold-ink shadow-soft">
+                      {due > 99 ? "99+" : due} tekrar
+                    </span>
+                  )}
+                </div>
                 <div className="min-w-0">
                   <h3 className={cx("line-clamp-2 font-heading text-title leading-tight", cv.tone.fg)}>{nb.title}</h3>
                   <p className={cx("mt-1 text-sm", cv.tone.fgSoft)}>

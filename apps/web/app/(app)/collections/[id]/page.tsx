@@ -12,7 +12,7 @@ import {
   BookOpen, Sparkles, PenLine, Loader2, Pencil, Check, Plus, X, Trash2,
   RefreshCw, Tags, Link2, Globe, MessageSquare, StickyNote, Library,
 } from "lucide-react";
-import { api } from "@/lib/api";
+import { api, errorMessage } from "@/lib/api";
 import { docHref } from "@/lib/links";
 import { topicColor } from "@/lib/palette";
 import { ACCEPT, LIMIT_HINT } from "@/lib/sources";
@@ -27,7 +27,6 @@ import { Skeleton, CardSkeleton } from "@/components/Skeleton";
 import AddSourceDialog, { AddSegment, PRIVACY_NOTE } from "@/components/AddSourceDialog";
 import { Cost, costTitle, ErrNote, Err, toErr } from "@/components/CostBadge";
 import { usePoll } from "@/hooks/usePoll";
-import type { Block } from "@/components/DraftEditor";
 import { TabBar, LockedPanel, TabKey, parseTab, groupOf, lockReason } from "./tabs";
 import ChatTab, { Sugg, Turn } from "./ChatTab";
 import { GlossaryTab, MapTab, TimelineTab } from "./ExtractTabs";
@@ -38,7 +37,6 @@ import { waitInfo } from "./stage";
 const Loading = () => <Skeleton className="h-64 w-full rounded-2xl" />;
 const DraftEditor = dynamic(() => import("@/components/DraftEditor"), { ssr: false, loading: Loading });
 const ComparePanel = dynamic(() => import("@/components/ComparePanel"), { ssr: false, loading: Loading });
-const Bibliography = dynamic(() => import("@/components/Bibliography"), { ssr: false, loading: Loading });
 
 type Doc = {
   id: string; title: string; status: string; page_count?: number | null;
@@ -213,18 +211,17 @@ function CollectionPage({ id }: { id: string }) {
   const [askedLocal, setAskedLocal] = useState(false);
 
   /* ---------- taslak ---------- */
-  const [inbox, setInbox] = useState<Block[]>([]);
-  const [material, setMaterial] = useState<any[] | null>(null);
-  function answerToDraft(t: Turn) {
-    setInbox((q) => [...q, { id: Math.random().toString(36).slice(2, 10), type: "answer", q: t.q, text: t.answer.trim(),
-      sources: (t.sources || []).map((s: any) => ({ title: s.title, page: s.page ?? null, document_id: s.document_id })) }]);
-    setTab("taslak");
+  // Sohbet cevabı → taslağın sonuna (sunucuda atomik); Taslak sekmesi açılınca editör güncel taslağı çeker.
+  async function answerToDraft(t: Turn) {
+    try {
+      await api(`/collections/${id}/draft/blocks`, { method: "POST", body: JSON.stringify({ blocks: [{ type: "answer", q: t.q, text: t.answer.trim(),
+        sources: (t.sources || []).map((s: any) => ({ title: s.title, page: s.page ?? null, document_id: s.document_id })) }] }) }, 1);
+      setTab("taslak");
+      toast("Sohbet cevabı taslağın sonuna eklendi");
+    } catch (e) {
+      toast.error(errorMessage(e, "Taslağa eklenemedi. Birkaç saniye sonra tekrar dene."));
+    }
   }
-  async function loadMaterial() {
-    try { const all = await api("/notes"); setMaterial((all || []).filter((n: any) => n.collection_id === id || (Array.isArray(n.collection_ids) && n.collection_ids.includes(id)))); }
-    catch { setMaterial([]); }
-  }
-  useEffect(() => { if (tab === "taslak" && material === null) loadMaterial(); /* eslint-disable-line */ }, [tab]);
   const [compareTopic, setCompareTopic] = useState("");
 
   /* ---------- konu gruplari ---------- */
@@ -681,14 +678,8 @@ function CollectionPage({ id }: { id: string }) {
         )}
 
         {tab === "taslak" && (
-          <DraftEditor notebookId={id} title={col.title} initial={col.draft}
-                       initialRev={typeof col.draft_rev === "number" ? col.draft_rev : null}
-                       material={material} onReloadMaterial={loadMaterial}
-                       inbox={inbox} onInboxConsumed={() => setInbox([])}
-                       onSaved={(ser, rev) => setData((d: any) => d ? { ...d, collection: { ...d.collection, draft: ser, ...(typeof rev === "number" ? { draft_rev: rev } : {}) } } : d)} />
+          <DraftEditor scope={{ kind: "collection", id }} title={col.title} />
         )}
-
-        {tab === "kaynakca" && <Bibliography notebookId={id} />}
 
         {tab === "sozluk" && !why && <GlossaryTab id={id} readyN={readyN} confirm={confirm} />}
         {tab === "harita" && !why && <MapTab id={id} readyN={readyN} confirm={confirm} />}

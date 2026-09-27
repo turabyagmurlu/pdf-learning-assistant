@@ -4,7 +4,7 @@ import { Document, Page, pdfjs } from "react-pdf";
 import "react-pdf/dist/Page/TextLayer.css";
 import "react-pdf/dist/Page/AnnotationLayer.css";
 import "@/styles/reader.css";
-import { Annotation, Rect, HIGHLIGHT_COLORS, PenTool, HighlightStyle, PaperTone, highlightStyle, darken, annotationMarks } from "@/lib/reader";
+import { Annotation, Rect, HIGHLIGHT_COLORS, PenTool, HighlightStyle, PaperTone, highlightStyle, darken, annotationMarks, pigmentOf, pigmentName } from "@/lib/reader";
 import HighlightMap from "@/components/reader/HighlightMap";
 import { StickyNote, MessageSquare, PenLine, Underline } from "lucide-react";
 
@@ -57,6 +57,8 @@ interface Props {
   onAddToDraft?: (text: string, page: number) => void;
   /** Okuma kagidi tonu (yalniz sayfa yuzeyi): white | cream | night. Verilmezse okuyucu temasi. */
   paper?: PaperTone;
+  /** Yeni biriken vurgu (2.0): bu kimlikli vurgu .ink-bloom ile belirir */
+  bloomId?: string | null;
 }
 
 const PAGE_MAX = 820;   // genis ekranda sayfa genisligi (px, olcek 1)
@@ -66,7 +68,8 @@ const WINDOW = 2;       // gorunen sayfanin +-2 komsusu cizilir; digerleri yer t
 type Sel = { page: number; rects: Rect[]; text: string; top: number; left: number };
 
 export default function PdfReader(props: Props) {
-  const { fileUrl, page, scale, spread, tool, annotations, pen: penState, paper } = props;
+  const { fileUrl, page, scale, spread, tool, annotations, pen: penState, paper, bloomId } = props;
+  const penHex = pigmentOf(penState.color);
   // vurgu haritasi isaretleri (sayfa + sayfa ici y + renk + ipucu)
   const marks = useMemo(() => annotationMarks(annotations), [annotations]);
   // secimle dogrudan vurgulayan araclar (H-5 otomatik vurgu bunlarda calisir)
@@ -337,7 +340,7 @@ export default function PdfReader(props: Props) {
 
   const block = (n: number) => (
     <PageBlock key={n} n={n} width={width} live={isLive(n)} ratio={ratios[n] || ratio} onRatio={onRatio}
-               annotations={annotations} onClick={onPageClick} eraser={tool === "eraser"} paper={paper}
+               annotations={annotations} onClick={onPageClick} eraser={tool === "eraser"} paper={paper} bloomId={bloomId}
                onSelectAnnotation={props.onSelectAnnotation} onErase={props.onErase} />
   );
 
@@ -382,18 +385,22 @@ export default function PdfReader(props: Props) {
              style={{ top: sel.top, left: sel.left }}
              onPointerDown={() => { bubbleDownAt.current = Date.now(); }}
              onMouseDown={(e) => e.preventDefault()}>
-          {HIGHLIGHT_COLORS.map((c) => (
-            <button key={c.key} type="button" title={`${c.label} ile vurgula`} aria-label={`${c.label} ile vurgula`}
-                    onClick={() => commitHighlight(c.value)}
-                    className="flex h-10 w-10 items-center justify-center rounded-lg hover:bg-surface-hover">
-              <span className={`h-6 w-6 rounded-full border ${c.value === penState.color ? "border-accent-purple ring-2 ring-accent-purple/40" : "border-black/15"}`}
-                    style={{ background: c.value }} />
-            </button>
-          ))}
+          {HIGHLIGHT_COLORS.map((c) => {
+            const hex = pigmentOf(c.value);
+            const name = pigmentName(c.value);
+            return (
+              <button key={c.key} type="button" title={`${name} ile vurgula`} aria-label={`${name} ile vurgula`}
+                      onClick={() => commitHighlight(c.value)}
+                      className="flex h-10 w-10 items-center justify-center rounded-lg hover:bg-surface-hover">
+                <span className={`h-6 w-6 rounded-full border ${hex === penHex ? "border-accent-purple ring-2 ring-accent-purple/40" : "border-black/15"}`}
+                      style={{ background: hex }} />
+              </button>
+            );
+          })}
           <button type="button" onClick={() => commitHighlight(penState.color, false, "underline")}
                   className="flex h-10 w-10 items-center justify-center rounded-lg hover:bg-surface-hover"
-                  aria-label="Altını çiz" title="Altını çiz (seçili renkle)">
-            <Underline size={17} aria-hidden style={{ color: darken(penState.color) }} />
+                  aria-label={`Altını çiz (${pigmentName(penState.color)})`} title="Altını çiz (seçili renkle)">
+            <Underline size={17} aria-hidden style={{ color: darken(penHex) }} />
           </button>
           <button type="button" onClick={() => commitHighlight(penState.color, true)}
                   className="h-10 rounded-lg px-2 text-sm hover:bg-surface-hover" aria-label="Vurgula ve not ekle">+ Not</button>
@@ -420,7 +427,7 @@ export default function PdfReader(props: Props) {
   );
 }
 
-function PageBlock({ n, width, live, ratio, onRatio, annotations, onClick, onSelectAnnotation, onErase, eraser, paper }: {
+function PageBlock({ n, width, live, ratio, onRatio, annotations, onClick, onSelectAnnotation, onErase, eraser, paper, bloomId }: {
   n: number; width: number; live: boolean; ratio: number; onRatio: (n: number, r: number) => void;
   annotations: Annotation[];
   onClick: (n: number, e: React.MouseEvent) => void;
@@ -430,6 +437,8 @@ function PageBlock({ n, width, live, ratio, onRatio, annotations, onClick, onSel
   eraser: boolean;
   /** Kagit tonu: Gece'de vurgular ters cevrilmis sayfada okunur kalacak sekilde cizilir */
   paper?: PaperTone;
+  /** Yeni biriken vurgu: .ink-bloom (soldan saga murekkep yayilmasi) */
+  bloomId?: string | null;
 }) {
   const h = Math.round(width * ratio);
   if (!live) {
@@ -457,9 +466,10 @@ function PageBlock({ n, width, live, ratio, onRatio, annotations, onClick, onSel
             </button>
           ) : (
             (a.anchor.rects ?? []).map((r, i) => {
-              const hs = highlightStyle(a, paper);
+              // pigment: eski kayitli hex'ler de yeni pigmentle cizilir
+              const hs = highlightStyle({ ...a, highlight_color: pigmentOf(a.highlight_color || HIGHLIGHT_COLORS[0].value) }, paper);
               return (
-                <div key={a.id + i} className={`hl-rect ${hs.underline ? "hl-underline" : ""} ${eraser ? "hl-erasable" : ""}`}
+                <div key={a.id + i} className={`hl-rect ${hs.underline ? "hl-underline" : ""} ${eraser ? "hl-erasable" : ""} ${a.id === bloomId ? "ink-bloom" : ""}`}
                      data-ann={a.id}
                      style={{
                        left: `${r.x * 100}%`, top: `${r.y * 100}%`,

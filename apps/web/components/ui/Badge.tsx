@@ -1,14 +1,14 @@
 /**
  * Durum rozeti (TS-4). Etkilesimsiz; renk yalniz anlam tasir:
  * neutral (meta) · info ("hazırlanıyor") · success ("hazır") · warning · danger ("hata") · accent (secili/etiket).
- * Mor (accent) yalniz eylem/secim icin; durum icin info kullan.
+ * Lapis (accent) yalniz eylem/secim icin; durum icin info kullan. Sfumato: sicak tonlu durum zeminleri (token).
  */
 import type { HTMLAttributes, ReactNode } from "react";
 
 export type BadgeTone = "neutral" | "info" | "success" | "warning" | "danger" | "accent";
 
 const TONE: Record<BadgeTone, string> = {
-  neutral: "bg-surface-muted text-text-secondary",
+  neutral: "bg-surface-muted text-text-secondary shadow-[inset_0_0_0_1px_var(--border)]",
   info: "bg-info-bg text-info",
   success: "bg-success-bg text-success",
   warning: "bg-warning-bg text-warning",

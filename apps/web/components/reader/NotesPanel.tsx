@@ -1,6 +1,6 @@
 "use client";
 import { useMemo, useState } from "react";
-import { Annotation, annotationKindLabel, highlightStyle, darken } from "@/lib/reader";
+import { Annotation, annotationKindLabel, highlightStyle, darken, pigmentOf, pigmentName, HIGHLIGHT_COLORS } from "@/lib/reader";
 import { Trash2, StickyNote, Highlighter, Underline, Search, Quote } from "lucide-react";
 
 /** #RRGGBB -> rgba (vurgu kademesi listede de gorunsun; metin okunakli kalsin) */
@@ -11,9 +11,14 @@ function withAlpha(hex: string, a: number) {
 }
 /** Listedeki alinti: vurgu -> zemin (kademeyle), alt cizgi -> renkli alt cizgi (kalinlikla) */
 function quoteStyle(a: Annotation): React.CSSProperties {
-  const hs = highlightStyle(a);
+  const hs = highlightStyle({ ...a, highlight_color: colorOf(a) });
   if (hs.underline) return { background: "transparent", borderBottom: hs.borderBottom, borderRadius: 0, paddingBottom: 1 };
   return { background: withAlpha(hs.background, hs.opacity) };
+}
+
+/** Vurgunun pigmenti (eski kayitli hex'ler de yeni pigmentle gorunur) */
+function colorOf(a: Annotation): string {
+  return pigmentOf(a.highlight_color || HIGHLIGHT_COLORS[0].value);
 }
 
 interface Props {
@@ -44,8 +49,8 @@ export default function NotesPanel({ annotations, docTitle, onJump, onDelete, on
       <div className="border-b p-3">
         <div className="flex items-center gap-2 rounded-lg border bg-surface-muted px-2">
           <Search size={14} className="text-text-secondary" />
-          <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Notlarda ve vurgularda ara…"
-                 className="min-h-[40px] w-full bg-transparent text-sm outline-none" aria-label="Notlarda ve vurgularda ara" />
+          <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Vurgularda ve notlarda ara…"
+                 className="min-h-[40px] w-full bg-transparent text-sm outline-none" aria-label="Vurgularda ve notlarda ara" />
         </div>
       </div>
       <div className="flex-1 overflow-auto p-3 space-y-2">
@@ -54,13 +59,17 @@ export default function NotesPanel({ annotations, docTitle, onJump, onDelete, on
             Henüz not ya da vurgu yok. Metni seçip bir renk seç ya da kenar notu aracını kullan.
           </div>
         ) : items.map((a) => (
-          <div key={a.id} className="group rounded-lg border bg-surface p-2.5 hover:border-accent-purple/50 transition">
+          <div key={a.id} className="group relative overflow-hidden rounded-lg border bg-surface p-2.5 pl-3.5 transition hover:border-accent-purple/50">
+            {/* pigment seridi: vurgunun rengi (kenar notu: lapis) */}
+            <span aria-hidden className="absolute inset-y-0 left-0 w-1"
+                  style={{ background: a.anchor.type === "sticky" ? "var(--accent-purple)" : colorOf(a) }} />
             <div className="flex items-center justify-between text-xs text-text-secondary">
               <span className="flex items-center gap-1" title={annotationKindLabel(a)}>
                 {a.anchor.type === "sticky" ? <StickyNote size={12} aria-hidden />
-                  : a.anchor.style === "underline" ? <Underline size={12} aria-hidden style={{ color: darken(a.highlight_color || "#FFE78A") }} />
+                  : a.anchor.style === "underline" ? <Underline size={12} aria-hidden style={{ color: darken(colorOf(a)) }} />
                   : <Highlighter size={12} aria-hidden />}
                 <span className="sr-only">{annotationKindLabel(a)},</span> s.{a.page_number}
+                {a.anchor.type !== "sticky" && <span className="truncate"> · {pigmentName(colorOf(a))}</span>}
               </span>
               <span className="-my-1 flex items-center">
                 {a.selected_text && (

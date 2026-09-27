@@ -7,6 +7,7 @@ from app.core.errors import AppError
 from app.db.session import close_pool
 from app.storage.object_store import ensure_bucket
 from app.api import auth, documents, chat, notes, study, collections, research, drafts, exports
+from app.api import doc_drafts, atelier
 from app.deps import current_user
 
 
@@ -178,6 +179,14 @@ async def lifespan(app: FastAPI):
             await ensure_trash_schema(conn)
     except Exception as e:  # noqa
         print("cop kutusu migrasyonu basarisiz:", repr(e))
+    # TY PDF 2.0: belge taslagi + Atolye (aralikli tekrar durumu, gunluk calisma kaydi)
+    try:
+        from app.db.session import get_pool
+        pool = await get_pool()
+        async with pool.acquire() as conn:
+            await _migrate_v2(conn)
+    except Exception as e:  # noqa
+        print("v2 (belge taslagi / atolye) migrasyonu basarisiz:", repr(e))
     # Auth semasi (token_version, password_resets) trafik gelmeden hazir olsun
     try:
         from app.db.session import get_pool
@@ -259,6 +268,27 @@ async def _migrate_document_collections(conn):
                ON CONFLICT (document_id, collection_id) DO NOTHING""")
         await conn.execute(
             "INSERT INTO typdf_migrations (name) VALUES ('document_collections_backfill') ON CONFLICT (name) DO NOTHING")
+
+
+async def _migrate_v2(conn):
+    """Idempotent. documents.draft/draft_rev/draft_at (belge taslagi); study_state + study_log (Atolye)."""
+    await conn.execute("ALTER TABLE documents ADD COLUMN IF NOT EXISTS draft text")
+    await conn.execute("ALTER TABLE documents ADD COLUMN IF NOT EXISTS draft_rev int NOT NULL DEFAULT 0")
+    await conn.execute("ALTER TABLE documents ADD COLUMN IF NOT EXISTS draft_at timestamptz")
+    await conn.execute(
+        "CREATE TABLE IF NOT EXISTS study_state ("
+        " user_id uuid NOT NULL, key text NOT NULL,"
+        " box int NOT NULL DEFAULT 0, due timestamptz, seen int NOT NULL DEFAULT 0, last text,"
+        " updated_at timestamptz NOT NULL DEFAULT now(),"
+        " PRIMARY KEY (user_id, key))")
+    # gunluk yeni kart siniri (15) icin: kartin ilk goruldugu an
+    await conn.execute("ALTER TABLE study_state ADD COLUMN IF NOT EXISTS created_at timestamptz NOT NULL DEFAULT now()")
+    await conn.execute("CREATE INDEX IF NOT EXISTS study_state_due_idx ON study_state (user_id, due)")
+    await conn.execute(
+        "CREATE TABLE IF NOT EXISTS study_log ("
+        " user_id uuid NOT NULL, day date NOT NULL,"
+        " count int NOT NULL DEFAULT 0, known int NOT NULL DEFAULT 0,"
+        " PRIMARY KEY (user_id, day))")
 
 
 async def _migrate_reading_and_versions(conn):
@@ -504,4 +534,6 @@ app.include_router(collections.router)
 app.include_router(research.router)
 app.include_router(drafts.router)
 app.include_router(exports.router)
+app.include_router(doc_drafts.router)      # TY PDF 2.0: belge taslagi
+app.include_router(atelier.router)         # TY PDF 2.0: Atolye
 from app.api import lecture as _lecture; app.include_router(_lecture.router)  # noqa: E402,E702 - sesli ozet (S2)

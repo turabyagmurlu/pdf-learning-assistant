@@ -7,12 +7,14 @@
  *   Uygulama icinden gelindiyse gercek geri, dogrudan acildiysa deftere / Kutuphane'ye.
  * - Defter: `?from=<collection_id>` varsa o; yoksa kaynagin bagli oldugu ilk defter
  *   (`collection_ids[0]`, eski API'de `collection_id`); hic yoksa "Kütüphane".
+ * - Sagda "Atölye" kisayolu (2.0): bu kaynagin kapsami /atelier?scope=document:<id>; tekrar bekleyen
+ *   kart varsa altin rozet (Atölye uclari yoksa rozet gosterilmez, kisayol yine calisir).
  * - iOS ana ekran uygulamasinda (standalone) tarayici geri tusu olmadigi icin
  *   bu baslik okuyucudan cikisin garantisidir; ust guvenli alan dikkate alinir.
  */
 import { ReactNode, useEffect, useState } from "react";
 import Link from "next/link";
-import { ArrowLeft, ChevronRight, X } from "lucide-react";
+import { ArrowLeft, ChevronRight, Palette, X } from "lucide-react";
 import { api } from "@/lib/api";
 import { useGoBack } from "@/components/BackButton";
 
@@ -86,6 +88,39 @@ export function notebookHref(ctx: NotebookCtx): string {
   return ctx.id ? `/collections/${ctx.id}` : "/library";
 }
 
+/** Bu kaynakta tekrar bekleyen kart sayisi (Atölye). Uc yoksa / hata olursa null: rozet cikmaz.
+ *  GET /atelier/counts varsa once o denenir (by_document destekliyse ondan); yoksa belge destesinin
+ *  `due` alani (limit=1, hafif). Sonuc oturum boyunca 60 sn onbellekte. */
+function useAtelierDue(docId: string | null | undefined): number | null {
+  const [due, setDue] = useState<number | null>(null);
+  useEffect(() => {
+    if (!docId) { setDue(null); return; }
+    let alive = true;
+    const key = "typdf.atelierDue." + docId;
+    try {
+      const c = JSON.parse(sessionStorage.getItem(key) || "null");
+      if (c && typeof c.n === "number" && Date.now() - c.t < 60000) { setDue(c.n); return; }
+    } catch {}
+    (async () => {
+      let n: number | null = null;
+      try {
+        const counts: any = await api("/atelier/counts", {}, 1);
+        const byDoc = counts?.by_document;
+        if (byDoc && typeof byDoc === "object") n = Number(byDoc[docId] || 0);
+        else {
+          const deck: any = await api(`/atelier/deck?scope=${encodeURIComponent("document:" + docId)}&mode=due&limit=1`, {}, 1);
+          if (typeof deck?.due === "number") n = deck.due;
+        }
+      } catch { n = null; }
+      if (!alive) return;
+      setDue(n);
+      if (n !== null) { try { sessionStorage.setItem(key, JSON.stringify({ n, t: Date.now() })); } catch {} }
+    })();
+    return () => { alive = false; };
+  }, [docId]);
+  return due;
+}
+
 const DEVICE_LABEL: Record<string, string> = { phone: "Telefonda", mobile: "Telefonda", tablet: "Tablette", desktop: "Bilgisayarda", web: "Bilgisayarda" };
 
 export default function ReaderHeader({ doc, ctx, children, className, serverPage, serverDevice, currentPage, onGoServerPage }: {
@@ -103,6 +138,8 @@ export default function ReaderHeader({ doc, ctx, children, className, serverPage
   const [chipDismissed, setChipDismissed] = useState(false);
   const showChip = !chipDismissed && !!serverPage && serverPage > 0 && serverPage !== currentPage && !!onGoServerPage;
   const dev = DEVICE_LABEL[(serverDevice || "").toLowerCase()] || "Başka cihazda";
+  const docId: string | null = doc?.id ? String(doc.id) : null;
+  const due = useAtelierDue(docId);
   return (
     <header className={"flex shrink-0 flex-wrap items-center gap-1 border-b bg-surface px-1.5 sm:px-2 " + (className || "")}
             style={{ paddingTop: "env(safe-area-inset-top)" }}>
@@ -121,12 +158,27 @@ export default function ReaderHeader({ doc, ctx, children, className, serverPage
           </li>
           <li aria-hidden className="shrink-0 text-text-secondary"><ChevronRight size={14} /></li>
           <li className="min-w-0 flex-1">
-            <span aria-current="page" className="block truncate font-medium text-text-primary" title={doc?.title || ""}>
+            <span aria-current="page" className="font-heading block truncate text-[15px] text-text-primary sm:text-base" title={doc?.title || ""}>
               {doc?.title || "Kaynak"}
             </span>
           </li>
         </ol>
       </nav>
+      {docId && (
+        <Link href={`/atelier?scope=${encodeURIComponent("document:" + docId)}`}
+              aria-label={`Atölye: bu kaynağın alıntılarıyla çalış${due ? ` (${due} tekrar bekliyor)` : ""}`}
+              title="Atölye: bu kaynağın alıntılarıyla oku, hatırla, dinle"
+              className="relative flex h-11 min-w-[44px] shrink-0 items-center justify-center gap-1.5 rounded-lg px-2 text-sm text-text-secondary hover:bg-surface-muted hover:text-text-primary">
+          <Palette size={18} aria-hidden style={{ color: "var(--gold, #A57A2C)" }} />
+          <span className="hidden font-heading md:inline">Atölye</span>
+          {!!due && due > 0 && (
+            <span aria-hidden className="absolute right-0.5 top-0.5 min-w-[18px] rounded-full px-1 text-center text-xs font-semibold leading-[18px] md:static md:ml-0.5"
+                  style={{ background: "color-mix(in srgb, var(--gold, #A57A2C) 40%, #FBF3DF)", color: "#2A2017" }}>
+              {due > 99 ? "99+" : due}
+            </span>
+          )}
+        </Link>
+      )}
       {children}
       {showChip && (
         <div role="status" className="order-last flex w-full items-center gap-1 px-1 pb-1.5 pt-0.5 sm:w-auto sm:pb-0 sm:pt-0 lg:order-none lg:w-auto">

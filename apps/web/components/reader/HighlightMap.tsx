@@ -19,6 +19,13 @@
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { MapMark } from "@/lib/reader";
+import { pigmentOf } from "@/lib/reader";
+
+/** Cizgi rengi: vurgular pigmente (eski hex'ler de), kenar notu (eski okuyucu moru) lapis olur. */
+const STICKY_OLD = "#7B6CF0";
+function markColor(c: string): string {
+  return c.toUpperCase() === STICKY_OLD ? "var(--accent-purple, #2E4C8E)" : pigmentOf(c);
+}
 
 interface Props {
   /** Kaydirilan kap ([data-page] ogelerini icerir) */
@@ -182,7 +189,7 @@ export default function HighlightMap({ scrollRef, numPages, marks, layoutKey }: 
                 onPointerLeave={() => setHover((v) => (v === i ? null : v))}
                 onFocus={() => setFocusIdx(i)}
                 onClick={() => { setFocusIdx(i); jump(g.page, g.y); }}>
-          <span className="hl-map-mark" style={{ background: g.color, height: g.count > 1 ? 4 : 3 }} />
+          <span className="hl-map-mark" style={{ background: markColor(g.color), height: g.count > 1 ? 4 : 3 }} />
         </button>
       ))}
       {tip && (

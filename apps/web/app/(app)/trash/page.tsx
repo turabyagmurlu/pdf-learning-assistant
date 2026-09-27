@@ -14,7 +14,7 @@ import { toast } from "@/components/Toast";
 import { useConfirm } from "@/components/Confirm";
 import Button, { buttonClass } from "@/components/ui/Button";
 import SourceIcon, { sourceLabel } from "@/components/SourceIcon";
-import { darken } from "@/lib/reader";
+import { darken, pigmentOf } from "@/lib/reader";
 import { Notebook, StickyNote, Highlighter, Underline, MessageSquare, RotateCcw, Trash2, Clock, Library } from "lucide-react";
 
 type Kind = "document" | "collection" | "note" | "chat";
@@ -259,11 +259,11 @@ function ItemIcon({ it }: { it: Item }) {
   if (it.kind === "collection") return <Notebook size={18} />;
   if (it.kind === "chat") return <MessageSquare size={18} />;
   if (it.style === "sticky") return <StickyNote size={18} />;
-  if (it.style === "underline") return <Underline size={18} style={{ color: darken(it.highlight_color || "#FFE78A") }} />;
+  if (it.style === "underline") return <Underline size={18} style={{ color: darken(pigmentOf(it.highlight_color || "#F1D58C")) }} />;
   return <Highlighter size={18} />;
 }
 function noteQuoteStyle(it: Item): React.CSSProperties {
-  const c = it.highlight_color || "#FFE78A";
+  const c = pigmentOf(it.highlight_color || "#F1D58C");
   return it.style === "underline" ? { borderBottom: `2px solid ${darken(c)}`, borderRadius: 0 } : { background: c, color: "#1F1D1A" };
 }
 function meta(it: Item): string {

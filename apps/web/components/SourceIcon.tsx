@@ -15,7 +15,7 @@ export function sourceColor(kind?: string | null) {
 export function sourceTint(kind?: string | null) {
   switch (kind) {
     case "youtube": return "bg-red-100 dark:bg-red-500/15";
-    case "audio": return "bg-violet-100 dark:bg-violet-500/15";
+    case "audio": return "bg-accent-soft";
     case "docx": return "bg-blue-100 dark:bg-blue-500/15";
     case "xlsx": case "csv": return "bg-emerald-100 dark:bg-emerald-500/15";
     case "pptx": return "bg-orange-100 dark:bg-orange-500/15";

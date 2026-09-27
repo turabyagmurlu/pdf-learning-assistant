@@ -1,35 +1,35 @@
-"use client";
-import { BrandScene } from "@/components/BrandMark";
-import { useTheme } from "@/components/ThemeToggle";
+import GoldenSpiral from "@/components/art/GoldenSpiral";
 
-/** Editoryal sayfa basligi: ust cizgi, kucuk etiket, buyuk serif baslik, alt aciklama.
- *  hero=true → arkada dar bir S1/S2 seridi. */
+/** Editoryal sayfa basligi (Sfumato): altin ust etiket (eyebrow), Fraunces display baslik,
+ *  istege bagli Fraunces italik alt baslik, altta iki yani sonen altin hairline.
+ *  hero=true → arkada sisli (sfumato) bir parsomen seridi ve sagda soluk altin spiral cizimi. */
 export default function PageHeader({ eyebrow, title, subtitle, hero, right }: {
   eyebrow?: string; title: string; subtitle?: string; hero?: boolean; right?: React.ReactNode;
 }) {
-  const { dark } = useTheme();
   return (
-    <header className={hero ? "relative -mx-4 -mt-5 mb-8 overflow-hidden md:-mx-6 md:-mt-8" : "mb-8"}>
+    <header className={hero ? "relative -mx-4 -mt-5 mb-phi-4 overflow-hidden md:-mx-6 md:-mt-8" : "mb-phi-4"}>
       {hero && (
-        <>
-          <div className="absolute inset-0 h-full w-full">
-            <BrandScene variant={dark ? "night" : "day"} className="h-full w-full" />
-          </div>
+        <div className="pointer-events-none absolute inset-0" aria-hidden="true">
           <div className="absolute inset-0"
-               style={{ background: dark
-                 ? "linear-gradient(to right, rgba(15,20,32,0.92) 0%, rgba(15,20,32,0.7) 55%, rgba(15,20,32,0.35) 100%)"
-                 : "linear-gradient(to right, rgba(250,248,244,0.94) 0%, rgba(250,248,244,0.78) 55%, rgba(250,248,244,0.4) 100%)" }} />
-        </>
+               style={{ background:
+                 "radial-gradient(90% 120% at 100% 0%, var(--gold-soft) 0%, transparent 60%)," +
+                 "radial-gradient(70% 90% at 85% 100%, var(--accent-soft) 0%, transparent 65%)," +
+                 "linear-gradient(to bottom, var(--surface) 0%, transparent 100%)" }} />
+          <GoldenSpiral size={340} className="absolute -right-10 top-1/2 hidden -translate-y-1/2 text-text-secondary opacity-40 sm:block" />
+          <span className="rule-gold absolute inset-x-0 bottom-0 opacity-40" />
+        </div>
       )}
-      <div className={hero ? "relative px-4 py-7 md:px-6 md:py-9" : ""}>
-        {eyebrow && <p className="mb-2 text-xs uppercase tracking-[0.28em] text-text-secondary">{eyebrow}</p>}
+      <div className={hero ? "relative px-4 py-phi-4 md:px-6 md:py-phi-5" : ""}>
+        {eyebrow && <p className="eyebrow mb-phi-1">{eyebrow}</p>}
         <div className="flex flex-wrap items-end justify-between gap-3">
-          {/* Sayfa h1 = display olcegi (32/36, md 40/44) */}
-          <h1 className="font-heading text-display tracking-tight md:text-[40px] md:leading-[44px]">{title}</h1>
+          {/* Sayfa h1 = display olcegi (32/36, md 44/48) */}
+          <h1 className="font-heading text-display tracking-tight md:text-[44px] md:leading-[48px]">{title}</h1>
           {right}
         </div>
-        {subtitle && <p className="mt-2 max-w-2xl text-sm leading-relaxed text-text-secondary">{subtitle}</p>}
-        <div className="mt-4 h-px w-16 bg-accent-purple/70" />
+        {subtitle && (
+          <p className="font-heading-italic mt-phi-1 max-w-2xl text-[17px] leading-relaxed text-text-secondary">{subtitle}</p>
+        )}
+        <span className="rule-gold rule-gold-start mt-phi-3 w-40" aria-hidden="true" />
       </div>
     </header>
   );

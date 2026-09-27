@@ -1,25 +1,26 @@
 "use client";
 /**
- * Defter sekmeleri: Kaynaklar · Sor (Sohbet, Karşılaştır) · Yaz (Taslak, Kaynakça) ·
- * Araçlar (Sözlük, Harita, Zaman, Sesli özet).
+ * Defter sekmeleri: Kaynaklar · Sor (Sohbet, Karşılaştır) · Taslak ·
+ * Araçlar (Sözlük, Harita, Zaman, Sesli özet). (2.0: "Yaz" → "Taslak"; Kaynakça arayüzden kalktı,
+ * eski ?tab=kaynakca bağlantıları Taslak'a açılır.)
  * - Az kaynakta sekmeler gizlenmez: kilitli ama gorunur, aciklamali (dokununca/odaklaninca).
  * - role=tablist/tab + aria-selected, ok tuslariyla gezinme.
  * - 375 px'e sigar: sm altinda alt sekme ikonlari gizli.
  */
 import { KeyboardEvent, ReactNode, useState } from "react";
-import { FileText, MessageSquare, Scale, PenLine, Quote, BookMarked, Share2, Clock, Headphones, Lock, Plus } from "lucide-react";
+import { FileText, MessageSquare, Scale, PenLine, BookMarked, Share2, Clock, Headphones, Lock, Plus } from "lucide-react";
 
-export type TabKey = "kaynaklar" | "sohbet" | "karsilastir" | "taslak" | "kaynakca" | "sozluk" | "harita" | "zaman" | "sesli";
+export type TabKey = "kaynaklar" | "sohbet" | "karsilastir" | "taslak" | "sozluk" | "harita" | "zaman" | "sesli";
 type GroupKey = "kaynaklar" | "sor" | "yaz" | "araclar";
 
 export const GROUPS: { k: GroupKey; label: string; tabs: [TabKey, string, typeof FileText][] }[] = [
   { k: "kaynaklar", label: "Kaynaklar", tabs: [["kaynaklar", "Kaynaklar", FileText]] },
   { k: "sor", label: "Sor", tabs: [["sohbet", "Sohbet", MessageSquare], ["karsilastir", "Karşılaştır", Scale]] },
-  { k: "yaz", label: "Yaz", tabs: [["taslak", "Taslak", PenLine], ["kaynakca", "Kaynakça", Quote]] },
+  { k: "yaz", label: "Taslak", tabs: [["taslak", "Taslak", PenLine]] },
   { k: "araclar", label: "Araçlar", tabs: [["sozluk", "Sözlük", BookMarked], ["harita", "Harita", Share2], ["zaman", "Zaman", Clock], ["sesli", "Sesli özet", Headphones]] },
 ];
 const ALL = GROUPS.flatMap((g) => g.tabs.map((t) => t[0]));
-const LEGACY: Record<string, TabKey> = { raf: "kaynaklar", sor: "sohbet", ders: "sesli" };
+const LEGACY: Record<string, TabKey> = { raf: "kaynaklar", sor: "sohbet", ders: "sesli", yaz: "taslak", kaynakca: "taslak" };
 
 export function parseTab(v: string | null | undefined): TabKey {
   if (!v) return "kaynaklar";
@@ -83,6 +84,7 @@ export function TabBar({ tab, onTab, readyN, processing, compact, lastInGroup }:
                   className={cx("flex min-h-[40px] items-center gap-1 whitespace-nowrap rounded-full px-3 text-sm transition sm:px-3.5",
                     on ? "bg-surface font-semibold text-text-primary shadow-soft" : "text-text-secondary hover:text-text-primary",
                     locked && !on && "opacity-70")}>
+            {g.tabs.length === 1 && (() => { const Icon = g.tabs[0][2]; return <Icon size={15} aria-hidden className="hidden shrink-0 sm:inline" />; })()}
             {g.label}
             {locked && <Lock size={12} aria-hidden className="shrink-0" />}
             {locked && <span id={`${p}lock-${g.k}`} className="sr-only">Kilitli: {lockReason(g.tabs[0][0], readyN, processing)}</span>}

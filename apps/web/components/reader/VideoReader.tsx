@@ -263,7 +263,7 @@ export default function VideoReader({ id, doc }: { id: string; doc: any }) {
             <section key={s.page} data-sec={i}
                      className={"mb-3 rounded-xl border p-3 transition " + (i === active ? "border-accent-purple/40 bg-accent-soft" : "bg-surface")}>
               <button type="button" onClick={() => seek(s.start)} aria-label={`Bölüm ${s.page}: ${fmt(s.start)} ile ${fmt(s.end)} arası, buradan oynat`}
-                      className="mb-1 min-h-[36px] text-xs font-semibold uppercase tracking-wide text-text-secondary hover:text-accent-purple">
+                      className="mb-1 min-h-[40px] text-xs font-semibold uppercase tracking-wide text-text-secondary hover:text-accent-purple">
                 ▶ {fmt(s.start)} – {fmt(s.end)} · bölüm {s.page}
               </button>
               <p className="text-sm leading-relaxed">

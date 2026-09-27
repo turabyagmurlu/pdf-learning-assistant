@@ -15,6 +15,7 @@ import { KIND_LABEL } from "@/lib/sources";
 import { stageInfo } from "@/lib/docstage";
 import { useAddToDraft } from "@/components/reader/useAddToDraft";
 import { PaperButton, usePaper } from "@/components/reader/ReaderToolbar";
+import { DropCap } from "@/components/art";
 import "@/styles/reader.css";
 import { ExternalLink, Loader2, Search, ListTree, MessageSquare, PenLine } from "lucide-react";
 
@@ -23,8 +24,12 @@ type Page = { page_number: number; title?: string | null; text: string;
 
 const UNIT: Record<string, string> = { pptx: "Slayt", xlsx: "Tablo", csv: "Tablo" };
 
-function Para({ text, needle }: { text: string; needle: string }) {
+function Para({ text, needle, drop }: { text: string; needle: string; drop?: boolean }) {
   const lines = text.split("\n");
+  // ilk bolumun ilk duz paragrafi DropCap ile acilir (aramada vurgu gerekiyorsa acilmaz)
+  const dropAt = drop && !needle
+    ? lines.findIndex((l) => { const t = l.trim(); return t.length >= 40 && !/^[-*•]\s+/.test(t) && !t.startsWith("[Konuşmacı notu]") && !t.includes(" | "); })
+    : -1;
   const mark = (s: string) => {
     if (!needle) return s;
     const i = s.toLowerCase().indexOf(needle);
@@ -39,6 +44,7 @@ function Para({ text, needle }: { text: string; needle: string }) {
         if (/^[-*•]\s+/.test(t)) return <p key={i} className="pl-4 before:-ml-3 before:mr-1.5 before:content-['•']">{mark(t.replace(/^[-*•]\s+/, ""))}</p>;
         if (t.startsWith("[Konuşmacı notu]")) return <p key={i} className="rounded-lg bg-surface-muted px-3 py-2 text-sm italic text-text-secondary">{mark(t)}</p>;
         if (t.includes(" | ")) return <p key={i} className="font-mono text-small text-text-secondary">{mark(t)}</p>;
+        if (i === dropAt) return <DropCap key={i} text={t} />;
         return <p key={i}>{mark(t)}</p>;
       })}
     </div>
@@ -225,7 +231,7 @@ export default function TextReader({ id, doc }: { id: string; doc: any }) {
               <section key={p.page_number} data-page={p.page_number}
                        className={"mb-6 scroll-mt-4 rounded-2xl border p-5 transition " +
                          (p.page_number === active ? "border-accent-purple/40 bg-accent-purple/[0.03]" : "bg-surface")}>
-                <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-text-secondary">
+                <p className="eyebrow mb-2 text-xs font-semibold uppercase tracking-wide text-text-secondary">
                   {unit} {p.page_number}{p.title ? " · " : ""}<span className="normal-case">{p.title}</span>
                 </p>
                 {p.table ? (
@@ -248,7 +254,8 @@ export default function TextReader({ id, doc }: { id: string; doc: any }) {
                     </table>
                   </div>
                 ) : (
-                  <Para text={p.title && p.text.startsWith(p.title) ? p.text.slice(p.title.length) : p.text} needle={needle} />
+                  <Para text={p.title && p.text.startsWith(p.title) ? p.text.slice(p.title.length) : p.text} needle={needle}
+                        drop={!!pages && p.page_number === pages[0]?.page_number} />
                 )}
               </section>
             ))}

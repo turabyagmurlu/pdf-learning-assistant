@@ -82,27 +82,35 @@ def _clean(s: Any, n: int) -> str:
     return re.sub(r"[ \t]+", " ", str(s or "")).strip()[:n]
 
 
-@router.post("/collections/{cid}/draft/blocks")
-async def append_blocks(cid: str, body: BlocksIn, conn=Depends(db), user=Depends(current_user)):
-    """Bloklari taslagin sonuna ekler. Satir kilidi (FOR UPDATE) ile: ayni anda gelen iki ekleme
-    ya da taslak kaydi birbirini ezmez. Taslak sayfasi acikken eklenen bloklar DraftEditor'da
-    draft_rev karsilastirmasiyla korunur."""
-    if not body.blocks:
-        raise AppError("Eklenecek bir şey yok; önce metin seç.")
-    if len(body.blocks) > 20:
-        raise AppError("Tek seferde en fazla 20 parça eklenebilir.")
+QUOTE_STYLES = ("highlight", "underline", "sticky")
+
+
+async def clean_blocks(conn, uid, raw_blocks: list[dict]) -> list[dict]:
+    """Istemciden gelen bloklari temizler (defter ve belge taslagi ayni kurallar).
+    quote: kaynak belge kullanicinin olmali, baslik sunucudan dogrulanir; note_id (kullanicinin
+    notu olmali) / style / auto / at alanlari korunur. p/h: duz metin. answer: soru + cevap + kaynaklar."""
     # alinti bloklarinin kaynagi kullanicinin olmali; baslik sunucudan dogrulanir
-    doc_ids = list({str(b.get("document_id")) for b in body.blocks if b.get("document_id")})
+    doc_ids = list({str(b.get("document_id")) for b in raw_blocks if b.get("document_id")})
     titles: dict[str, str] = {}
     if doc_ids:
         try:
             rows = await conn.fetch("SELECT id, title FROM documents WHERE id = ANY($1::uuid[]) AND user_id=$2",
-                                    doc_ids, user["id"])
+                                    doc_ids, uid)
         except Exception:  # gecersiz uuid
             rows = []
         titles = {str(r["id"]): r["title"] for r in rows}
+    # not kimlikleri: yalniz kullanicinin (silinmemis) notlari kabul edilir
+    note_ids = list({str(b.get("note_id")) for b in raw_blocks if b.get("type") == "quote" and b.get("note_id")})
+    own_notes: set[str] = set()
+    if note_ids:
+        try:
+            rows = await conn.fetch("SELECT id FROM notes WHERE id = ANY($1::uuid[]) AND user_id=$2 AND deleted_at IS NULL",
+                                    note_ids, uid)
+        except Exception:  # gecersiz uuid
+            rows = []
+        own_notes = {str(r["id"]) for r in rows}
     clean: list[dict] = []
-    for b in body.blocks:
+    for b in raw_blocks:
         t = b.get("type")
         if t == "quote":
             text = _clean(re.sub(r"\s+", " ", str(b.get("text") or "")), 4000)
@@ -119,6 +127,17 @@ async def append_blocks(cid: str, body: BlocksIn, conn=Depends(db), user=Depends
             note = _clean(b.get("note"), 2000)
             if note:
                 q["note"] = note
+            nid = str(b.get("note_id") or "")
+            if nid and nid in own_notes:
+                q["note_id"] = nid
+            st = b.get("style")
+            if st in QUOTE_STYLES:
+                q["style"] = st
+            if b.get("auto") is True:
+                q["auto"] = True
+            at = _clean(b.get("at"), 40)
+            if at:
+                q["at"] = at
             clean.append(q)
         elif t in ("p", "h"):
             text = str(b.get("text") or "").strip()[:8000]
@@ -142,15 +161,36 @@ async def append_blocks(cid: str, body: BlocksIn, conn=Depends(db), user=Depends
                 srcs.append({"title": _clean(s.get("title") or titles.get(sdid) or "Kaynak", 300),
                              "page": pg, "document_id": sdid})
             clean.append({"id": _uid(), "type": "answer", "q": _clean(b.get("q"), 1000), "text": text, "sources": srcs})
+    return clean
+
+
+def check_blocks_in(blocks: list) -> None:
+    if not blocks:
+        raise AppError("Eklenecek bir şey yok; önce metin seç.")
+    if len(blocks) > 20:
+        raise AppError("Tek seferde en fazla 20 parça eklenebilir.")
+
+
+@router.post("/collections/{cid}/draft/blocks")
+async def append_blocks(cid: str, body: BlocksIn, conn=Depends(db), user=Depends(current_user)):
+    """Bloklari taslagin sonuna ekler. Satir kilidi (FOR UPDATE) ile: ayni anda gelen iki ekleme
+    ya da taslak kaydi birbirini ezmez. Taslak sayfasi acikken eklenen bloklar DraftEditor'da
+    draft_rev karsilastirmasiyla korunur."""
+    check_blocks_in(body.blocks)
+    clean = await clean_blocks(conn, user["id"], body.blocks)
     if not clean:
         raise AppError("Bu metin taslağa eklenemedi; kaynağı yenileyip tekrar dene.")
     async with conn.transaction():
         row = await conn.fetchrow(
-            "SELECT draft, COALESCE(draft_rev,0) AS draft_rev FROM collections WHERE id=$1 AND user_id=$2 FOR UPDATE",
+            "SELECT draft, COALESCE(draft_rev,0) AS draft_rev FROM collections WHERE id=$1 AND user_id=$2 "
+            "AND deleted_at IS NULL FOR UPDATE",
             cid, user["id"])
         if not row:
             raise NotFound(COL_MISSING)
         blocks = parse_draft(row["draft"])
+        # ayni vurgu (note_id) taslakta zaten varsa ikinci kez eklenmez
+        have = {str(b.get("note_id")) for b in blocks if b.get("note_id")}
+        clean = [b for b in clean if not b.get("note_id") or b["note_id"] not in have]
         while blocks and _is_empty_p(blocks[-1]):     # sondaki bos paragraflar yeni kartin altina
             blocks.pop()
         blocks.extend(clean)
@@ -160,6 +200,29 @@ async def append_blocks(cid: str, body: BlocksIn, conn=Depends(db), user=Depends
             "WHERE id=$2 AND user_id=$3 RETURNING draft_rev",
             serialize_draft(blocks), cid, user["id"])
     return {"ok": True, "added": len(clean), "block_ids": [b["id"] for b in clean], "draft_rev": int(rev)}
+
+
+@router.post("/collections/{cid}/draft/import-highlights")
+async def import_collection_highlights(cid: str, conn=Depends(db), user=Depends(current_user)):
+    """Defterdeki kaynaklarin, taslakta olmayan (note_id'ye gore) vurgu ve notlarini
+    belge-belge (deftere eklenme sirasi), sayfa sirasiyla taslagin sonuna ekler -> {added, draft_rev}."""
+    from app.services import accumulate
+    try:
+        own = await conn.fetchrow(
+            "SELECT COALESCE(draft_rev,0) AS draft_rev FROM collections WHERE id=$1::uuid AND user_id=$2 AND deleted_at IS NULL",
+            cid, user["id"])
+    except Exception:  # noqa - gecersiz uuid
+        own = None
+    if not own:
+        raise NotFound(COL_MISSING)
+    rows = await conn.fetch(
+        """SELECT d.id FROM document_collections l JOIN documents d ON d.id = l.document_id
+           WHERE l.collection_id=$1::uuid AND d.user_id=$2 AND d.deleted_at IS NULL
+           ORDER BY l.added_at, d.id""", cid, user["id"])
+    rev, n = await accumulate.import_highlights(conn, user["id"], "collections", cid, [str(r["id"]) for r in rows])
+    if n < 0:
+        raise NotFound(COL_MISSING)
+    return {"added": max(0, n), "draft_rev": int(rev if rev is not None else own["draft_rev"])}
 
 
 # ---------------------------------------------------------------- surum gecmisi (TO-3)

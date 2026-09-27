@@ -27,13 +27,38 @@ export interface Annotation {
   created_at?: string;
 }
 
+/* Vurgu pigmentleri (Sfumato): anahtarlar ayni, degerler Leonardo'nun paletinden.
+ * Uzerlerinde --text-primary (#2A2017) 10.1–11.1:1. */
 export const HIGHLIGHT_COLORS: { key: string; label: string; value: string }[] = [
-  { key: "yellow", label: "Sarı", value: "#FFE78A" },
-  { key: "green", label: "Yeşil", value: "#BFECCB" },
-  { key: "blue", label: "Mavi", value: "#BFDFFF" },
-  { key: "pink", label: "Pembe", value: "#FFD1E8" },
-  { key: "purple", label: "Mor", value: "#D9CBFF" },
+  { key: "yellow", label: "Aşı boyası", value: "#F1D58C" },
+  { key: "green", label: "Yeşil toprak", value: "#C5DDB6" },
+  { key: "blue", label: "Lapis", value: "#C2D2EF" },
+  { key: "pink", label: "Kırmızı tebeşir", value: "#F2C4B2" },
+  { key: "purple", label: "Mor", value: "#DCCAE7" },
 ];
+
+/** Eski (v1) vurgu renkleri → yeni pigment. #E0A233: eski koyu sari/amber isaret rengi → Asi boyasi. */
+const LEGACY_PIGMENT: Record<string, string> = {
+  "#FFE78A": "#F1D58C",
+  "#BFECCB": "#C5DDB6",
+  "#BFDFFF": "#C2D2EF",
+  "#FFD1E8": "#F2C4B2",
+  "#D9CBFF": "#DCCAE7",
+  "#E0A233": "#F1D58C",
+};
+
+/** Kayitli bir vurgu rengini (eski ya da yeni) gosterilecek pigmente esler; bilinmeyeni aynen dondurur. */
+export function pigmentOf(hex: string | null | undefined): string {
+  if (!hex) return HIGHLIGHT_COLORS[0].value;
+  const k = hex.trim().toUpperCase();
+  return LEGACY_PIGMENT[k] || HIGHLIGHT_COLORS.find((c) => c.value.toUpperCase() === k)?.value || hex;
+}
+
+/** Pigmentin Turkce adi ("Lapis" gibi); eski degerler de taninir. Bilinmeyen renk → "Vurgu". */
+export function pigmentName(hex: string | null | undefined): string {
+  const v = pigmentOf(hex).toUpperCase();
+  return HIGHLIGHT_COLORS.find((c) => c.value.toUpperCase() === v)?.label || "Vurgu";
+}
 
 /** Kalinlik / opaklik kademeleri (palet). Alt cizgide kalinlik, vurguda seffaflik olarak uygulanir. */
 export const OPACITY_STEPS: { key: string; label: string; value: number; underlinePx: number }[] = [
@@ -59,13 +84,13 @@ export function loadPenPrefs(): PenPrefs {
     const raw = localStorage.getItem(PEN_KEY);
     if (raw) {
       const p = JSON.parse(raw) as Partial<PenPrefs>;
-      if (typeof p.color === "string" && HIGHLIGHT_COLORS.some((c) => c.value === p.color)) def.color = p.color;
+      if (typeof p.color === "string" && HIGHLIGHT_COLORS.some((c) => c.value === pigmentOf(p.color as string))) def.color = pigmentOf(p.color);
       if (typeof p.opacity === "number" && OPACITY_STEPS.some((s) => s.value === p.opacity)) def.opacity = p.opacity;
       if (typeof p.collapsed === "boolean") def.collapsed = p.collapsed;
       if (p.pos && typeof p.pos.x === "number" && typeof p.pos.y === "number") def.pos = { x: p.pos.x, y: p.pos.y };
     } else {
       const v = localStorage.getItem(LAST_COLOR_KEY);
-      if (v && HIGHLIGHT_COLORS.some((c) => c.value === v)) def.color = v;
+      if (v && HIGHLIGHT_COLORS.some((c) => c.value === pigmentOf(v))) def.color = pigmentOf(v);
     }
   } catch {}
   return def;

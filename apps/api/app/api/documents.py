@@ -804,6 +804,9 @@ async def restore_item(kind: str, item_id: str, conn=Depends(db), user=Depends(c
         r = await conn.execute(
             "UPDATE notes SET deleted_at=NULL WHERE id=$1 AND user_id=$2 AND deleted_at IS NOT NULL", item_id, uid)
         ok = r.endswith(" 1")
+        if ok:   # geri gelen vurgu taslaklara yeniden biriksin (hata geri getirmeyi bozmaz)
+            from app.services import accumulate
+            await accumulate.safe(accumulate.accumulate_note, conn, uid, item_id)
     elif kind == "chat":
         r = await conn.execute(
             "UPDATE collection_chats SET deleted_at=NULL WHERE id=$1 AND user_id=$2 AND deleted_at IS NOT NULL", item_id, uid)

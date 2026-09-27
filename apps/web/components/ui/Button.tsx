@@ -1,7 +1,8 @@
 "use client";
 /**
- * Tek dugme bileseni (TS-2).
- * - variant: primary (dolgulu, tek mor) | secondary (cerceveli) | ghost (zeminsiz)
+ * Tek dugme bileseni (TS-2) — Sfumato.
+ * - variant: primary (lapis dolgu, ince ic isik, basinca hafif coker) | secondary (parsomen/vellum) | ghost (zeminsiz)
+ *   Gorunum globals.css'teki .btn-lapis / .btn-vellum siniflarindan gelir (token'lara bagli, acik/koyu).
  * - size: sm 36px | md 40px | lg 44px (hepsi >= 36px dokunma hedefi; telefonda md → 44px)
  * - tone: "danger" → silme gibi geri alinamaz eylemler
  * - cost: "⚡N" rozeti (yapay zeka cagrisi harcayan dugmeler)
@@ -26,19 +27,19 @@ export type ButtonProps = ButtonHTMLAttributes<HTMLButtonElement> & {
 
 const BASE =
   "inline-flex select-none items-center justify-center gap-1.5 whitespace-nowrap rounded-xl font-medium " +
-  "transition-colors disabled:pointer-events-none disabled:opacity-50 " +
+  "transition-[background-color,color,box-shadow,transform,filter] duration-150 ease-sfumato disabled:pointer-events-none disabled:opacity-50 " +
   "focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent-purple";
 
 const VARIANT: Record<ButtonVariant, string> = {
-  primary: "bg-accent-purple text-on-accent hover:bg-accent-purple/90",
-  secondary: "border border-border-strong/60 bg-surface text-text-primary hover:bg-surface-hover",
-  ghost: "text-text-secondary hover:bg-surface-hover hover:text-text-primary",
+  primary: "btn-lapis",
+  secondary: "btn-vellum text-text-primary",
+  ghost: "btn-ghost text-text-secondary hover:bg-surface-hover hover:text-text-primary",
 };
 
 const DANGER: Record<ButtonVariant, string> = {
-  primary: "bg-danger text-on-accent hover:bg-danger/90",
-  secondary: "border border-danger/50 bg-surface text-danger hover:bg-danger-bg",
-  ghost: "text-danger hover:bg-danger-bg",
+  primary: "btn-lapis btn-danger",
+  secondary: "btn-vellum btn-danger text-danger hover:bg-danger-bg",
+  ghost: "btn-ghost text-danger hover:bg-danger-bg",
 };
 
 const SIZE: Record<ButtonSize, string> = {
@@ -66,7 +67,7 @@ const Button = forwardRef<HTMLButtonElement, ButtonProps>(function Button(
   { variant = "secondary", size = "md", tone, cost, icon, className = "", type = "button", children, ...rest },
   ref,
 ) {
-  const costCls = variant === "primary" ? "bg-on-accent/15" : "";
+  const costCls = variant === "primary" ? "bg-white/20 dark:bg-black/10" : "";
   return (
     <button ref={ref} type={type} className={buttonClass({ variant, size, tone, icon, className })} {...rest}>
       {children}

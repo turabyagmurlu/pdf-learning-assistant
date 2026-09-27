@@ -135,12 +135,14 @@ export default function Modal({
   if (!open || !mounted) return null;
 
   const outer =
-    "fixed inset-0 z-[85] flex justify-center bg-black/50 " +
+    // Sfumato: umber tonlu, hafif bulanik perde (duz siyah yerine)
+    "fade-in fixed inset-0 z-[85] flex justify-center bg-[rgba(28,20,12,.46)] backdrop-blur-[3px] dark:bg-[rgba(0,0,0,.6)] " +
     (align === "top"
       ? "items-start px-3 pt-[10vh]"
       : sheet ? "items-end sm:items-center sm:p-4" : "items-center p-4");
   const panel =
-    "relative flex max-h-[90dvh] w-full flex-col overflow-y-auto overscroll-contain border bg-surface shadow-xl outline-none " +
+    // Sfumato yuzey: parsomen (vellum) + yumusak derin golge, sisten belirir
+    "vellum sfumato-in relative flex max-h-[90dvh] w-full flex-col overflow-y-auto overscroll-contain border shadow-medium outline-none " +
     WIDTH[size] + " " +
     (sheet && align !== "top" ? "rounded-t-2xl sm:rounded-2xl " : "rounded-2xl ") +
     (className ?? "p-5");
@@ -153,7 +155,7 @@ export default function Modal({
            style={sheet && align !== "top" ? { paddingBottom: "max(env(safe-area-inset-bottom), 1.25rem)" } : undefined}>
         {title != null && (
           <div className="mb-3 flex items-start justify-between gap-3">
-            <h2 id={titleId} className="font-heading text-lg leading-snug">{title}</h2>
+            <h2 id={titleId} className="font-heading text-xl leading-snug">{title}</h2>
             {!hideClose && (
               <button type="button" onClick={onClose} aria-label="Kapat" data-modal-close=""
                       className="-mr-1.5 -mt-1.5 flex h-10 w-10 shrink-0 items-center justify-center rounded-lg text-text-secondary hover:bg-surface-hover">

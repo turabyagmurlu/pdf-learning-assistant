@@ -2,7 +2,7 @@
 import { Suspense, useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
-import { Library, LogOut, Search, Notebook, Sun, Moon, MonitorSmartphone, MoreHorizontal, Keyboard, Trash2 } from "lucide-react";
+import { Library, LogOut, Search, Notebook, Sun, Moon, MonitorSmartphone, MoreHorizontal, Keyboard, Trash2, Palette } from "lucide-react";
 import { api, clearToken, refreshSessionIfNeeded } from "@/lib/api";
 import { BrandMarkSvg } from "@/components/BrandMark";
 import ThemeToggle, { useTheme, THEME_LABEL, ThemeMode } from "@/components/ThemeToggle";
@@ -14,12 +14,17 @@ import CommandPalette, { openPalette } from "@/components/CommandPalette";
 import ToastHost from "@/components/Toast";
 import { AudioProvider } from "@/components/audio/AudioProvider";
 import MiniPlayer from "@/components/audio/MiniPlayer";
+import { useAtelierCounts } from "@/hooks/useAtelier";
 
+// 2.0 sirasi: Bugun · Defterler · Kutuphane · Atolye (tekrar rozeti) · Arastir
 const NAV = [
+  { href: "/today", label: "Bugün", Icon: Sun, title: "Bugün" },
   { href: "/notebooks", label: "Defterler", Icon: Notebook, title: "Defterler" },
   { href: "/library", label: "Kütüphane", Icon: Library, title: "Kütüphane" },
+  { href: "/atelier", label: "Atölye", Icon: Palette, title: "Atölye" },
   { href: "/search", label: "Araştır", Icon: Search, title: "Araştır" },
 ];
+const ATELIER = "/atelier";
 const cx = (...a: any[]) => a.filter(Boolean).join(" ");
 
 /**
@@ -46,6 +51,23 @@ function TrashBadge({ n }: { n: number }) {
   );
 }
 
+/** Atolye rozeti: tekrar bekleyen kart sayisi (altin). `dot` rayda/alt menude ikon ustu kucuk rozet. */
+function DueBadge({ n, dot }: { n: number; dot?: boolean }) {
+  if (!n) return null;
+  const t = n > 99 ? "99+" : String(n);
+  if (dot) {
+    return (
+      <span aria-hidden className="absolute -right-2 -top-1 min-w-[18px] rounded-full px-1 text-center text-[12px] font-semibold leading-[18px] text-on-accent"
+            style={{ background: "var(--gold)" }}>
+        {t}
+      </span>
+    );
+  }
+  return (
+    <span aria-hidden className="ml-auto rounded-full bg-gold-soft px-1.5 text-2xs font-semibold text-gold-ink">{t}</span>
+  );
+}
+
 /**
  * Ortak yerlesim olculeri (yuzen ogeler bunlara gore konumlanir; D1/D2 kullanir):
  *  --bottom-nav : mobil alt menu yuksekligi + alt guvenli alan. md ve ustunde, okuyucuda 0.
@@ -63,6 +85,7 @@ const LAYOUT_VARS = `
 @media (min-width:768px){:root{--bottom-nav:0px;--topbar-h:0px;--sidebar-w:72px}}
 @media (min-width:1024px){:root{--sidebar-w:224px}}
 html[data-reader]{--bottom-nav:0px;--topbar-h:0px;--sidebar-w:0px;--reader-bar:64px}
+html[data-focus]{--bottom-nav:0px;--topbar-h:0px;--sidebar-w:0px}
 @media (min-width:1024px){html[data-reader]{--reader-bar:0px}}
 `;
 
@@ -151,10 +174,16 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
   const { dark, mode, set } = useTheme();
   // Okuyucu rotasi: uygulama menuleri gizli, okuyucunun kendi basligi (Geri + Defter › Kaynak) var
   const isReader = pathname.startsWith("/documents/");
+  // Atolye: tam ekran calisma odasi — menuler ve mini oynatici gizli (kendi kapat dugmesi var)
+  const isFocus = pathname === ATELIER || pathname.startsWith(ATELIER + "/");
+  const bare = isReader || isFocus;
   const active = (href: string) => pathname === href || pathname.startsWith(href + "/");
   const sub = isSubPage(pathname);
   const parent = parentOf(pathname);
   const trashCount = useTrashCount(pathname);
+  const atelierCounts = useAtelierCounts(pathname);
+  const dueTotal = atelierCounts?.due_total || 0;
+  const navLabel = (href: string, label: string) => (href === ATELIER && dueTotal ? `${label}, ${dueTotal} tekrar bekliyor` : label);
 
   // Ilk sayfadan sonra yapilan her gecis "uygulama ici gezinti"dir -> geri tusu gercek geri gider.
   const firstPath = useRef<string | null>(null);
@@ -169,19 +198,24 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
     if (isReader) el.setAttribute("data-reader", ""); else el.removeAttribute("data-reader");
     return () => el.removeAttribute("data-reader");
   }, [isReader]);
+  useEffect(() => {
+    const el = document.documentElement;
+    if (isFocus) el.setAttribute("data-focus", ""); else el.removeAttribute("data-focus");
+    return () => el.removeAttribute("data-focus");
+  }, [isFocus]);
 
   // oturumu sessizce uzat (duzenli kullananin oturumu hic dusmez)
   useEffect(() => { refreshSessionIfNeeded(); }, []);
 
   // sekme basligi rotaya gore (okuyucu kendi basligini kaynak adiyla yazar)
   useEffect(() => {
-    if (isReader) return;
+    if (isReader || isFocus) return;
     const n = NAV.find((x) => active(x.href));
     const base = "TY PDF";
     document.title = n ? `${n.title} · ${base}` : pathname.startsWith("/collections/") ? `Defter · ${base}`
       : pathname.startsWith("/trash") ? `Çöp kutusu · ${base}` : base;
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [pathname, isReader]);
+  }, [pathname, isReader, isFocus]);
 
   const logout = () => { clearToken(); router.replace("/login"); };
   const iconBtn = "flex h-11 w-11 items-center justify-center rounded-lg text-text-secondary hover:bg-surface-muted";
@@ -207,9 +241,9 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
       <aside className={cx("hidden shrink-0 flex-col gap-1 border-r bg-surface",
                "md:sticky md:top-0 md:h-dvh md:w-[var(--sidebar-w)] md:items-center md:overflow-y-auto md:px-2 md:py-3",
                "lg:items-stretch lg:p-4",
-               !isReader && "md:flex")}
+               !bare && "md:flex")}
              aria-label="Kenar menüsü">
-        <Link href="/notebooks" className="flex items-center gap-2.5 px-2 py-3 md:justify-center md:px-0 lg:justify-start lg:px-2" aria-label="TY PDF ana sayfa">
+        <Link href="/today" className="flex items-center gap-2.5 px-2 py-3 md:justify-center md:px-0 lg:justify-start lg:px-2" aria-label="TY PDF ana sayfa">
           <span className="hidden md:inline lg:hidden"><BrandMarkSvg variant={dark ? "night" : "day"} size={28} title="TY PDF" /></span>
           <span className="hidden lg:inline"><BrandMarkSvg variant={dark ? "night" : "day"} size={34} title="TY PDF" /></span>
           <span className="hidden font-heading text-lg leading-tight lg:inline">TY PDF</span>
@@ -229,10 +263,14 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
         </button>
         <nav aria-label="Ana menü" className="flex w-full flex-col gap-1">
           {NAV.map(({ href, label, Icon }) => (
-            <Link key={href} href={href} aria-current={active(href) ? "page" : undefined} aria-label={label} title={label}
+            <Link key={href} href={href} aria-current={active(href) ? "page" : undefined} aria-label={navLabel(href, label)} title={label}
                   className={cx(navItem, active(href) && "bg-accent-purple/10 font-medium text-text-primary")}>
-              <Icon size={18} aria-hidden className={cx("md:h-[22px] md:w-[22px] lg:h-[18px] lg:w-[18px]", active(href) ? "text-accent-purple" : "")} />
+              <span className="relative inline-flex">
+                <Icon size={18} aria-hidden className={cx("md:h-[22px] md:w-[22px] lg:h-[18px] lg:w-[18px]", active(href) ? "text-accent-purple" : "")} />
+                {href === ATELIER && <span className="lg:hidden"><DueBadge n={dueTotal} dot /></span>}
+              </span>
               <span className="truncate">{label}</span>
+              {href === ATELIER && <span className="hidden lg:contents"><DueBadge n={dueTotal} /></span>}
             </Link>
           ))}
         </nav>
@@ -274,14 +312,14 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
 
       <div className="flex min-w-0 flex-1 flex-col">
         {/* Mobil: ust cubuk (okuyucuda gizli, kendi basligi var). Cikis ve tema "⋯" menusunde (TK-5). */}
-        {!isReader && (
+        {!bare && (
           <header className="sticky top-0 z-30 flex items-center justify-between border-b bg-surface/95 px-4 backdrop-blur md:hidden"
                   style={{ paddingTop: "max(env(safe-area-inset-top), 8px)", paddingBottom: 8 }}>
             {sub ? (
               <BackButton fallback={parent.href}
                           className="-ml-2 flex min-h-[44px] items-center gap-1.5 rounded-md px-2 text-sm font-medium text-text-primary active:bg-surface-muted" />
             ) : (
-              <Link href="/notebooks" className="flex min-h-[44px] items-center gap-2">
+              <Link href="/today" className="flex min-h-[44px] items-center gap-2">
                 <BrandMarkSvg variant={dark ? "night" : "day"} size={28} title="TY PDF" />
                 <span className="font-heading text-base">TY PDF</span>
               </Link>
@@ -297,24 +335,28 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
         )}
 
         <main id="main" tabIndex={-1}
-              className={cx("flex-1 overflow-auto outline-none", !isReader && "pb-[calc(var(--bottom-nav)+16px+var(--mini-player-h,0px))] md:pb-[var(--mini-player-h,0px)]")}>
+              className={cx("flex-1 overflow-auto outline-none", !bare && "pb-[calc(var(--bottom-nav)+16px+var(--mini-player-h,0px))] md:pb-[var(--mini-player-h,0px)]")}>
           {children}
         </main>
         <Shortcuts />
         <CommandPalette />
         <ToastHost />
         {/* Kalici ses: sesli ozet calarken baska sayfada "simdi caliyor" cubugu (okuyucuda kucuk kapsul) */}
-        <Suspense fallback={null}><MiniPlayer compact={isReader} /></Suspense>
+        {!isFocus && <Suspense fallback={null}><MiniPlayer compact={isReader} /></Suspense>}
 
-        {/* Mobil: alt sekme cubugu (3 oge). `bottom-nav`: klavye acikken globals.css gizler. */}
-        {!isReader && (
-          <nav aria-label="Ana menü" className="bottom-nav fixed inset-x-0 bottom-0 z-30 grid grid-cols-3 border-t bg-surface/95 backdrop-blur md:hidden"
+        {/* Mobil: alt sekme cubugu (5 oge). `bottom-nav`: klavye acikken globals.css gizler. */}
+        {!bare && (
+          <nav aria-label="Ana menü" className="bottom-nav fixed inset-x-0 bottom-0 z-30 grid grid-cols-5 border-t bg-surface/95 backdrop-blur md:hidden"
                style={{ paddingBottom: "env(safe-area-inset-bottom)" }}>
             {NAV.map(({ href, label, Icon }) => (
-              <Link key={href} href={href} aria-current={active(href) ? "page" : undefined}
-                    className={cx("flex min-h-[56px] flex-col items-center justify-center gap-0.5 text-xs",
+              <Link key={href} href={href} aria-current={active(href) ? "page" : undefined} aria-label={navLabel(href, label)}
+                    className={cx("flex min-h-[56px] min-w-0 flex-col items-center justify-center gap-0.5 px-0.5 text-xs",
                       active(href) ? "font-semibold text-text-primary" : "text-text-secondary")}>
-                <Icon size={22} strokeWidth={active(href) ? 2.2 : 1.8} aria-hidden className={active(href) ? "text-accent-purple" : ""} /> {label}
+                <span className="relative inline-flex">
+                  <Icon size={22} strokeWidth={active(href) ? 2.2 : 1.8} aria-hidden className={active(href) ? "text-accent-purple" : ""} />
+                  {href === ATELIER && <DueBadge n={dueTotal} dot />}
+                </span>
+                <span className="max-w-full truncate">{label}</span>
               </Link>
             ))}
           </nav>

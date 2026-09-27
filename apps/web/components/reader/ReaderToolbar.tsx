@@ -42,6 +42,9 @@ export interface ToolbarProps {
 
 /* ===== Okuma kagidi (Ajan V2) ===== */
 
+/** Kagit adlari (2.0 parsomen dili): "cream" anahtari ayni kaldi, adi "Parşömen". */
+export const PAPER_NAME: Record<PaperChoice, string> = { ...PAPER_LABEL, cream: "Parşömen" };
+
 /** Uygulama temasi koyu mu (<html class="dark">); tema degisince guncellenir. */
 export function useAppDark(): boolean {
   const [dark, setDark] = useState(false);
@@ -66,21 +69,21 @@ export function usePaper(readerTheme?: Theme) {
   return { paper, setPaper, paperTone: resolvePaper(paper, appDark, readerTheme) };
 }
 
-/** Kagit secici: Otomatik / Beyaz / Krem / Gece — yuvarlak ornekli dugmeler (aria-pressed). */
+/** Kagit secici: Otomatik / Beyaz / Parşömen / Gece — yuvarlak ornekli dugmeler (aria-pressed). */
 export function PaperPicker({ value, tone, onChange }: { value: PaperChoice; tone: PaperTone; onChange: (p: PaperChoice) => void }) {
   return (
     <div role="group" aria-label="Kağıt rengi" className="px-1 py-1">
       <div className="flex items-center justify-between px-2 pb-1 text-xs text-text-secondary">
         <span className="font-medium text-text-primary">Kağıt</span>
-        <span aria-live="polite">{value === "auto" ? `Otomatik · şu an ${PAPER_LABEL[tone]}` : PAPER_LABEL[value]}</span>
+        <span aria-live="polite">{value === "auto" ? `Otomatik · şu an ${PAPER_NAME[tone]}` : PAPER_NAME[value]}</span>
       </div>
       <div className="flex items-stretch gap-1">
         {PAPER_CHOICES.map((c) => (
           <button key={c} type="button" aria-pressed={value === c} onClick={() => onChange(c)}
-                  title={c === "auto" ? "Otomatik: uygulama koyu temadaysa Gece, açıksa Beyaz" : `Kağıt: ${PAPER_LABEL[c]}`}
+                  title={c === "auto" ? "Otomatik: uygulama koyu temadaysa Gece, açıksa Beyaz" : `Kağıt: ${PAPER_NAME[c]}`}
                   className={`flex min-h-[56px] min-w-[44px] flex-1 flex-col items-center justify-center gap-1 rounded-lg text-xs hover:bg-surface-muted ${value === c ? "bg-accent-purple/10 font-medium text-text-primary ring-2 ring-inset ring-accent-purple" : "text-text-secondary"}`}>
             <span className="paper-swatch" data-tone={c} aria-hidden />
-            {PAPER_LABEL[c]}
+            {PAPER_NAME[c]}
           </button>
         ))}
       </div>
@@ -104,7 +107,7 @@ export function PaperButton({ value, tone, onChange }: { value: PaperChoice; ton
   return (
     <div ref={wrap} className="relative shrink-0">
       <button ref={btnRef} type="button" aria-expanded={open} aria-haspopup="true"
-              aria-label={`Kağıt rengi: ${value === "auto" ? `Otomatik (${PAPER_LABEL[tone]})` : PAPER_LABEL[value]}`}
+              aria-label={`Kağıt rengi: ${value === "auto" ? `Otomatik (${PAPER_NAME[tone]})` : PAPER_NAME[value]}`}
               title="Kağıt rengi" onClick={() => setOpen((v) => !v)}
               className="flex h-11 w-11 items-center justify-center rounded-lg hover:bg-surface-hover">
         <span className="paper-swatch" data-tone={value === "auto" ? "auto" : tone} aria-hidden />
@@ -175,8 +178,8 @@ export default function ReaderToolbar(p: ToolbarProps) {
       {!p.focus && (
         <>
           <Sep />
-          <button className={`${btn} ${p.rightOpen ? active : ""}`} aria-label="Sohbet, anlatım ve notlar paneli" aria-pressed={p.rightOpen}
-                  title="Sohbet, anlatım ve notlar" onClick={() => p.setRightOpen(!p.rightOpen)}><PanelRight size={17} /></button>
+          <button className={`${btn} ${p.rightOpen ? active : ""}`} aria-label="Taslak, vurgular ve sohbet paneli" aria-pressed={p.rightOpen}
+                  title="Taslak · Vurgular · Anlat · Sor" onClick={() => p.setRightOpen(!p.rightOpen)}><PanelRight size={17} /></button>
         </>
       )}
     </div>
@@ -225,7 +228,7 @@ export function ReaderMoreMenu(p: ToolbarProps & { variant: "wide" | "narrow" })
   items.push(
     { key: "undo", label: "Geri al (Ctrl+Z)", icon: <Undo2 size={17} />, disabled: !p.canUndo, onSelect: () => p.onUndo?.() },
     { key: "redo", label: "Yinele (Ctrl+Shift+Z)", icon: <Redo2 size={17} />, disabled: !p.canRedo, onSelect: () => p.onRedo?.() },
-    { key: "export", label: "Notları dışa aktar (Markdown)", icon: <Download size={17} />, onSelect: p.onExport },
+    { key: "export", label: "Vurguları dışa aktar (Markdown)", icon: <Download size={17} />, onSelect: p.onExport },
   );
 
   function onListKey(e: React.KeyboardEvent) {
@@ -274,10 +277,12 @@ export function ReaderMoreMenu(p: ToolbarProps & { variant: "wide" | "narrow" })
   );
 }
 
-/** Dar ekran alt cubugu: panelleri acan etiketli dugmeler + sayfa gezinme. */
-export function ReaderBottomBar({ page, numPages, setPage, onLeft, onRight, leftOpen, rightOpen }: {
+/** Dar ekran alt cubugu: panelleri acan etiketli dugmeler + sayfa gezinme.
+ *  rightLabel: sag panelin o anki sekmesi (varsayilan "Sohbet"); rightFresh: Taslak'a yeni biriken sayi (altin nokta). */
+export function ReaderBottomBar({ page, numPages, setPage, onLeft, onRight, leftOpen, rightOpen, rightLabel = "Sohbet", rightIcon, rightFresh = 0 }: {
   page: number; numPages: number; setPage: (n: number) => void;
   onLeft: () => void; onRight: () => void; leftOpen: boolean; rightOpen: boolean;
+  rightLabel?: string; rightIcon?: JSX.Element; rightFresh?: number;
 }) {
   const nav = "flex h-11 w-11 items-center justify-center rounded-lg hover:bg-surface-hover disabled:opacity-40";
   // ikon ustte, metin altta: 375 px'e iki etiket + sayfa gezinme sigsin
@@ -295,8 +300,10 @@ export function ReaderBottomBar({ page, numPages, setPage, onLeft, onRight, left
         <button type="button" className={nav} aria-label="Sonraki sayfa" disabled={page >= numPages}
                 onClick={() => setPage(Math.min(numPages, page + 1))}><ChevronRight size={18} /></button>
       </div>
-      <button type="button" className={`${lab} ${rightOpen ? "text-accent-purple" : ""}`} onClick={onRight} aria-expanded={rightOpen} aria-haspopup="dialog">
-        <MessageSquare size={18} aria-hidden /><span>Sohbet</span>
+      <button type="button" className={`${lab} relative ${rightOpen ? "text-accent-purple" : ""}`} onClick={onRight} aria-expanded={rightOpen} aria-haspopup="dialog"
+              aria-label={`${rightLabel} paneli${rightFresh > 0 ? `, taslağa ${rightFresh} yeni vurgu eklendi` : ""}`}>
+        {rightIcon || <MessageSquare size={18} aria-hidden />}<span>{rightLabel}</span>
+        {rightFresh > 0 && <span aria-hidden className="absolute right-1.5 top-1.5 h-2 w-2 rounded-full" style={{ background: "var(--gold, #A57A2C)" }} />}
       </button>
     </div>
   );

@@ -21,9 +21,9 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { pdfjs } from "react-pdf";
 import { MessageSquare, PenLine, Copy, Minus, Plus, FileText } from "lucide-react";
 import { api } from "@/lib/api";
-import { PAPER } from "@/lib/reader";
 import type { MapMark, PaperTone } from "@/lib/reader";
 import HighlightMap from "@/components/reader/HighlightMap";
+import { DropCap, Folio } from "@/components/art";
 
 // Worker: PdfReader ile ayni adres (biri once yuklenmisse dokunma).
 if (!pdfjs.GlobalWorkerOptions.workerSrc) {
@@ -45,7 +45,7 @@ export interface TextViewProps {
   /** Toplam sayfa sayisi ogrenilince */
   onNumPages?: (n: number) => void;
   /** Okuma kagidi tonu (Ajan V2): verilirse renkler temadan degil kagittan gelir
-   *  (Beyaz #FFFFFF/#2C2C2A, Krem #F6EEDC/#4A3A20, Gece #1E1E1C/#D3D1C7). */
+   *  (Beyaz #FFFDF8/#2A2017, Parşömen #F3EAD7/#3A2C18, Gece #17130E/#E6DCC8 — reader.css [data-paper]). */
   paper?: PaperTone;
   /** Vurgu haritasi isaretleri (PDF vurgulari; metin gorunumunde sayfa bazli gosterilir) */
   marks?: MapMark[];
@@ -59,11 +59,19 @@ const SIZE_MIN = 15, SIZE_MAX = 22, SIZE_DEF = 17;
 const NEAR = 3;                       // gorunen sayfanin +-3 komsusu yuklenir
 const CACHE_MAX = 3;
 
-const THEME = {
-  light: { bg: "#FFFDF8", ink: "#1F1D1A", ink2: "#6F6A61", rule: "rgba(31,29,26,0.12)", bar: "rgba(255,253,248,0.92)" },
-  sepia: { bg: "#FBF3E3", ink: "#3B3320", ink2: "#6B5F45", rule: "rgba(59,51,32,0.14)", bar: "rgba(251,243,227,0.92)" },
-  dark: { bg: "#14161C", ink: "#E9E7E2", ink2: "#A6A29A", rule: "rgba(255,255,255,0.12)", bar: "rgba(20,22,28,0.92)" },
-} as const;
+type Tone = { bg: string; ink: string; ink2: string; rule: string; bar: string; desk: string };
+/** Okuyucu temasi (kagit verilmezse). Sfumato: sicak parsomen / gece muzesi. */
+const THEME: Record<TextViewTheme, Tone> = {
+  light: { bg: "#FFFDF8", ink: "#2A2017", ink2: "#66563F", rule: "rgba(42,32,23,0.12)", bar: "rgba(255,253,248,0.92)", desk: "#E9E0CF" },
+  sepia: { bg: "#F3EAD7", ink: "#3A2C18", ink2: "#66563F", rule: "rgba(58,44,24,0.14)", bar: "rgba(243,234,215,0.92)", desk: "#E9E0CF" },
+  dark: { bg: "#17130E", ink: "#E6DCC8", ink2: "#B3A68E", rule: "rgba(239,230,212,0.12)", bar: "rgba(23,19,14,0.92)", desk: "#0E0B08" },
+};
+/** Okuma kagidi tonlari: reader.css [data-paper] ile ayni degerler (Beyaz / Parsomen / Gece). */
+const PAPER_TONE: Record<PaperTone, Tone> = {
+  white: THEME.light,
+  cream: THEME.sepia,
+  night: THEME.dark,
+};
 
 /* ---------------- metin cikarma ---------------- */
 
@@ -202,7 +210,7 @@ export default function TextView({ fileUrl, page, onPageChange, onAsk, onAddToDr
   const bubbleDownAt = useRef(0);
   const coarse = useRef(false);
   const entry = useMemo(() => (fileUrl ? entryFor(fileUrl) : null), [fileUrl]);
-  const c = paper ? PAPER[paper] : (THEME[theme] || THEME.light);
+  const c = paper ? PAPER_TONE[paper] : (THEME[theme] || THEME.light);
 
   useEffect(() => { coarse.current = typeof window !== "undefined" && !!window.matchMedia?.("(pointer: coarse)").matches; }, []);
   useEffect(() => {
@@ -355,12 +363,18 @@ export default function TextView({ fileUrl, page, onPageChange, onAsk, onAddToDr
   const clearSel = () => { window.getSelection()?.removeAllRanges(); setSel(null); };
 
   const pages = useMemo(() => Array.from({ length: numPages }, (_, i) => i + 1), [numPages]);
+  // ilk yuklenen metin sayfasinin ilk paragrafi (yalniz 1. sayfa) DropCap ile acilir
+  const firstPara = useMemo(() => {
+    const st = states[1];
+    if (!Array.isArray(st)) return -1;
+    return st.findIndex((p) => p.kind === "p" && p.text.length >= 40);
+  }, [states]);
   const lineH = 1.62;
 
   return (
     <div className="relative h-full w-full" data-paper={paper}>
     <div ref={rootRef} className="relative h-full w-full overflow-auto overscroll-contain"
-         style={{ background: c.bg, color: c.ink }}
+         style={{ background: c.desk, color: c.ink }}
          onPointerUp={readSelection} onKeyUp={(e) => { if (e.shiftKey) readSelection(); }}
          aria-label="Metin görünümü">
       {/* ust cubuk: yazi boyutu */}
@@ -400,15 +414,15 @@ export default function TextView({ fileUrl, page, onPageChange, onAsk, onAddToDr
           )}
         </div>
       ) : (
-        <div className="mx-auto w-full max-w-[70ch] px-4 pb-16 pt-2 sm:px-6"
-             style={{ fontSize: size, lineHeight: lineH, paddingBottom: "calc(4rem + env(safe-area-inset-bottom))" }}>
+        <div className="text-sheet font-reading mx-auto w-full max-w-[70ch] px-4 pb-16 pt-2 sm:my-6 sm:rounded-sm sm:px-8"
+             style={{ fontSize: size, lineHeight: lineH, background: c.bg, paddingBottom: "calc(4rem + env(safe-area-inset-bottom))" }}>
           {pages.map((n) => {
             const st = states[n];
             return (
               <section key={n} data-page={n} aria-label={`Sayfa ${n}`} style={{ minHeight: Array.isArray(st) || st === "empty" ? undefined : "30vh" }}>
-                <div className="my-5 flex items-center gap-3 text-xs" style={{ color: c.ink2 }}>
+                <div className="my-5 flex items-center gap-3 font-sans text-xs" style={{ color: c.ink2, lineHeight: 1.4 }}>
                   <span className="h-px flex-1" style={{ background: c.rule }} aria-hidden />
-                  <span>— s. {n} —</span>
+                  <Folio page={n} />
                   {onShowOriginal && (
                     <button type="button" onClick={() => onShowOriginal(n)} className="flex min-h-[40px] items-center gap-1 rounded-md px-1.5 hover:underline"
                             aria-label={`Sayfa ${n}: aslını sayfa görünümünde gör`}>
@@ -427,6 +441,8 @@ export default function TextView({ fileUrl, page, onPageChange, onAsk, onAddToDr
                       <h3 key={i} className="mb-2 mt-5 font-heading font-semibold leading-snug" style={{ fontSize: Math.round(size * 1.2) }}>{p.text}</h3>
                     ) : p.kind === "li" ? (
                       <p key={i} className="mb-1.5 flex gap-2 pl-2"><span aria-hidden>•</span><span>{p.text}</span></p>
+                    ) : n === 1 && i === firstPara ? (
+                      <DropCap key={i} text={p.text} className="mb-3.5" />
                     ) : (
                       <p key={i} className="mb-3.5">{p.text}</p>
                     ),
@@ -440,8 +456,8 @@ export default function TextView({ fileUrl, page, onPageChange, onAsk, onAddToDr
 
       {sel && (
         <div role="toolbar" aria-label="Seçili metin"
-             className="absolute z-30 flex max-w-[calc(100%-16px)] flex-wrap items-center gap-0.5 rounded-xl border bg-white/95 px-1 py-0.5 shadow-lg"
-             style={{ top: sel.top, left: sel.left, color: "#1F1D1A" }}
+             className="absolute z-30 flex max-w-[calc(100%-16px)] flex-wrap items-center gap-0.5 rounded-xl border px-1 py-0.5 font-sans shadow-lg"
+             style={{ top: sel.top, left: sel.left, color: "#2A2017", background: "rgba(251,248,242,0.97)", borderColor: "#E2D6C1" }}
              onPointerDown={() => { bubbleDownAt.current = Date.now(); }}
              onMouseDown={(e) => e.preventDefault()}>
           <button type="button" onClick={() => { navigator.clipboard?.writeText(sel.text).catch(() => {}); clearSel(); }}
@@ -450,7 +466,7 @@ export default function TextView({ fileUrl, page, onPageChange, onAsk, onAddToDr
           </button>
           {onAsk && (
             <button type="button" onClick={() => { onAsk(sel.text, sel.page); clearSel(); }}
-                    className="flex h-10 items-center gap-1 rounded-lg bg-[#6D5DF6]/12 px-2.5 text-sm font-medium text-[#4A3BC4] hover:bg-[#6D5DF6]/20"
+                    className="flex h-10 items-center gap-1 rounded-lg bg-[#2E4C8E]/10 px-2.5 text-sm font-medium text-[#2E4C8E] hover:bg-[#2E4C8E]/20"
                     aria-label="Seçili metni sohbette sor">
               <MessageSquare size={15} aria-hidden /> Sor
             </button>

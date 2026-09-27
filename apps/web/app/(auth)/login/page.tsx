@@ -2,8 +2,7 @@
 import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { API, api, errorMessage, setToken } from "@/lib/api";
-import { BrandMarkSvg, BrandScene } from "@/components/BrandMark";
-import { useTheme } from "@/components/ThemeToggle";
+import { AuthArtPanel, AuthMobileHeader } from "../_components/AuthArt";
 import { ArrowRight, Loader2 } from "lucide-react";
 
 const MIN_PW = 8;
@@ -18,7 +17,6 @@ const WAKE_MSG = "Sunucu uyanıyor, ilk açılış ~30 sn sürebilir…";
  */
 export default function LoginPage() {
   const router = useRouter();
-  const { dark } = useTheme();
   const [mode, setMode] = useState<"login" | "register">("login");
   const [name, setName] = useState("");
   const [email, setEmail] = useState("");
@@ -82,7 +80,7 @@ export default function LoginPage() {
       setToken(r.token);
       // oturum dolup buraya yönlendirildiysek kalınan sayfaya geri dön
       const next = new URLSearchParams(window.location.search).get("next") || "";
-      router.replace(next.startsWith("/") && !next.startsWith("//") ? next : "/notebooks");
+      router.replace(next.startsWith("/") && !next.startsWith("//") ? next : "/today");
     } catch (e: unknown) {
       setErr(errorMessage(e));
     } finally {
@@ -92,44 +90,30 @@ export default function LoginPage() {
     }
   }
 
-  const field = "w-full border-0 border-b bg-transparent px-0 py-3 text-[15px] outline-none placeholder:text-text-secondary/70 focus:border-text-primary transition-colors";
+  const field = "w-full border-0 border-b bg-transparent px-0 py-3 text-[15px] outline-none placeholder:text-text-secondary focus:border-accent-purple transition-colors";
   const label = "text-xs font-medium text-text-secondary";
   const showWake = waking || slowSubmit;
   const registering = mode === "register" && regOpen;
 
   return (
     <div className="min-h-screen flex flex-col md:flex-row">
-      {/* SOL: sahne */}
-      <section className="relative h-[42vh] md:h-auto md:w-[52%] overflow-hidden" aria-hidden="true">
-        <BrandScene variant={dark ? "night" : "day"} className="absolute inset-0 h-full w-full" />
-        {/* okunurluk için alt karartma */}
-        <div className="absolute inset-x-0 bottom-0 h-3/5"
-             style={{ background: "linear-gradient(to top, rgba(20,10,5,0.78) 0%, rgba(20,10,5,0.45) 45%, rgba(20,10,5,0) 100%)" }} />
-        <div className="absolute left-8 top-8 flex items-center gap-2.5 md:left-12 md:top-10">
-          <BrandMarkSvg variant={dark ? "night" : "day"} size={30} />
-          <span className="font-heading text-sm tracking-[0.35em] text-[#fff3dc]">TY PDF</span>
-        </div>
-        <div className="absolute bottom-8 left-8 right-8 md:bottom-14 md:left-12">
-          <p className="font-heading text-[44px] leading-[1.02] text-[#fff3dc] md:text-[64px]"
-             style={{ textShadow: "0 2px 18px rgba(0,0,0,0.45)" }}>
-            Oku.<br />Sor.<br />Öğren.
-          </p>
-          <p className="mt-4 max-w-sm text-[15px] leading-relaxed text-[#fff3dc]/90 md:text-base"
-             style={{ textShadow: "0 1px 10px rgba(0,0,0,0.5)" }}>
-            Her belge bir kapıdır. Kaynaklarını yükle; soru sor, atıflı not al, taslağını yaz.
-          </p>
-        </div>
-      </section>
+      {/* SOL (masaüstü): sanat eseri karşılama — çizilerek beliren altın spiral, Fraunces "TY PDF", epigraf */}
+      <AuthArtPanel />
 
       {/* SAĞ: form */}
-      <main className="flex flex-1 items-center justify-center bg-surface px-6 py-10 md:px-12">
+      <main className="flex flex-1 items-center justify-center px-6 py-10 md:px-12">
         <div className="w-full max-w-sm">
-          <h1 className="font-heading text-3xl tracking-[0.18em]">TY PDF</h1>
-          <p className="mt-2 text-sm text-text-secondary">
+          <AuthMobileHeader />
+          <h1 className="font-heading text-[34px] leading-tight tracking-[0.06em]">
+            <span className="md:hidden">TY PDF</span>
+            <span className="hidden md:inline">Hoş geldin</span>
+          </h1>
+          <span className="rule-gold rule-gold-start mt-phi-2 w-24" aria-hidden="true" />
+          <p className="font-heading-italic mt-phi-2 text-[16px] text-text-secondary">
             {registering ? "Hesabını oluştur." : "Hoş geldin. Devam etmek için giriş yap."}
           </p>
 
-          {info && <p role="status" className="mt-6 rounded-md bg-surface-muted px-3 py-2 text-sm text-text-primary">{info}</p>}
+          {info && <p role="status" className="mt-6 rounded-lg border border-border bg-gold-soft px-3 py-2 text-sm text-text-primary">{info}</p>}
 
           <form onSubmit={submit} className="mt-8 space-y-6">
             {registering && (
@@ -162,7 +146,7 @@ export default function LoginPage() {
             {err && <p role="alert" className="text-sm text-danger">{err}</p>}
 
             <button type="submit" disabled={busy} aria-busy={busy}
-                    className="group flex min-h-[48px] w-full items-center justify-between rounded-md bg-text-primary px-5 py-3.5 text-sm font-medium text-background disabled:opacity-60">
+                    className="btn-lapis group flex min-h-[48px] w-full items-center justify-between rounded-xl px-5 py-3.5 text-sm font-medium disabled:opacity-60">
               <span>{registering ? "Kayıt ol" : "Giriş yap"}</span>
               {busy ? <Loader2 size={16} className="animate-spin" aria-hidden="true" /> : <ArrowRight size={16} className="transition-transform group-hover:translate-x-1" aria-hidden="true" />}
             </button>

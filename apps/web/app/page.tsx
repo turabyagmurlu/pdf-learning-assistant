@@ -11,13 +11,13 @@ function expired(t: string): boolean {
   } catch { return false; }
 }
 
-/** Giris: oturum varsa Defterler'e, yoksa (ya da suresi dolmussa) giris sayfasina. */
+/** Giris: oturum varsa Bugun'e (2.0), yoksa (ya da suresi dolmussa) giris sayfasina. */
 export default function Home() {
   const router = useRouter();
   useEffect(() => {
     const t = getToken();
     if (t && expired(t)) { clearToken(); router.replace("/login?expired=1"); return; }
-    router.replace(t ? "/notebooks" : "/login");
+    router.replace(t ? "/today" : "/login");
   }, [router]);
   return (
     <div className="flex min-h-dvh items-center justify-center p-10 text-sm text-text-secondary" role="status">

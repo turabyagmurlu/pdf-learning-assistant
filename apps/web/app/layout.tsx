@@ -5,12 +5,15 @@ import PwaRegister from "@/components/PwaRegister";
 import VisualViewportVars from "@/components/VisualViewportVars";
 import { THEME_BOOT_SCRIPT } from "@/lib/theme-boot";
 
-// Baslik: modern, yuksek kontrastli serif. Govde: temiz sans.
+// Baslik (Sfumato): Fraunces degisken yazi — opsz + SOFT (yumusak) + WONK (el yazisi egilimi),
+// duz ve italik (alt baslik / epigraf). Agirlik verilmez: degisken (wght ekseni dahil).
+// Govde: temiz sans (Inter).
 const fraunces = Fraunces({
   subsets: ["latin", "latin-ext"],
   variable: "--font-heading",
   display: "swap",
-  axes: ["opsz", "SOFT"],
+  style: ["normal", "italic"],
+  axes: ["SOFT", "WONK", "opsz"],
 });
 const inter = Inter({
   subsets: ["latin", "latin-ext"],
@@ -38,8 +41,8 @@ export const metadata: Metadata = {
 // hooks/useVisualViewport --vvh / --kb degiskenlerini verir.
 export const viewport: Viewport = {
   themeColor: [
-    { media: "(prefers-color-scheme: light)", color: "#f6b45c" },
-    { media: "(prefers-color-scheme: dark)", color: "#1c1747" },
+    { media: "(prefers-color-scheme: light)", color: "#F4EEE3" },
+    { media: "(prefers-color-scheme: dark)", color: "#13100C" },
   ],
   colorScheme: "light dark",
   width: "device-width",

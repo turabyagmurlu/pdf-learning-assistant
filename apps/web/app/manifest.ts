@@ -9,9 +9,9 @@ export default function manifest(): MetadataRoute.Manifest {
     scope: "/",
     display: "standalone",
     orientation: "any",
-    // Acilis ekrani ve durum cubugu uygulamanin krem zeminiyle ayni (marka turuncusu yalniz ikon/illustrasyonda)
-    background_color: "#FAF8F4",
-    theme_color: "#FAF8F4",
+    // Sfumato: acilis ekrani parsomen zemin; durum cubugu/pencere rengi lapis (marka)
+    background_color: "#F4EEE3",
+    theme_color: "#2E4C8E",
     lang: "tr",
     icons: [
       { src: "/icon", sizes: "512x512", type: "image/png", purpose: "any" },

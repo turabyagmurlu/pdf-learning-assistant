@@ -83,7 +83,7 @@ export default function ToastHost() {
   const item = (t: T) => {
     const Icon = t.kind === "error" ? AlertTriangle : t.kind === "info" ? Info : CheckCircle2;
     return (
-      <div key={t.id} className="fade-in pointer-events-auto flex w-full max-w-sm items-center gap-2.5 rounded-xl border bg-surface py-1.5 pl-3.5 pr-1.5 text-sm shadow-medium">
+      <div key={t.id} className="vellum sfumato-in pointer-events-auto flex w-full max-w-sm items-center gap-2.5 rounded-xl border py-1.5 pl-3.5 pr-1.5 text-sm shadow-medium">
         <Icon size={17} aria-hidden="true" className={"shrink-0 " + (t.kind === "error" ? "text-danger" : t.kind === "info" ? "text-accent-purple" : "text-success")} />
         <span className="min-w-0 flex-1 py-1">{t.msg}</span>
         {t.action && (

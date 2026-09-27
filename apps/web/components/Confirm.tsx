@@ -70,7 +70,7 @@ export function useConfirm() {
               <AlertTriangle size={18} aria-hidden="true" />
             </div>
             <div className="min-w-0 flex-1">
-              <h2 id={titleId} className="font-heading text-lg leading-snug">{opts.title}</h2>
+              <h2 id={titleId} className="font-heading text-xl leading-snug">{opts.title}</h2>
               {opts.description && (
                 <p className="mt-1.5 text-sm text-text-secondary">{opts.description}</p>
               )}
@@ -82,7 +82,7 @@ export function useConfirm() {
           </div>
 
           {(opts.losses?.length || opts.keeps?.length) ? (
-            <div className="mt-3.5 space-y-1.5 rounded-xl bg-surface-muted/60 p-3 text-sm">
+            <div className="mt-3.5 space-y-1.5 rounded-xl border border-border bg-surface-muted p-3 text-sm">
               {opts.losses?.map((l, i) => (
                 <p key={"l" + i} className="flex items-start gap-2 text-danger">
                   <span className="mt-[7px] h-1.5 w-1.5 shrink-0 rounded-full bg-danger" aria-hidden="true" /> {l}
@@ -97,8 +97,8 @@ export function useConfirm() {
           ) : null}
 
           {opts.checkbox && (
-            <label className="mt-3.5 flex min-h-[44px] cursor-pointer items-start gap-2 rounded-xl border border-danger/30 p-3 text-sm">
-              <input type="checkbox" checked={checked} className="mt-0.5 h-5 w-5 shrink-0 accent-red-600"
+            <label className="mt-3.5 flex min-h-[44px] cursor-pointer items-start gap-2 rounded-xl border border-[color-mix(in_srgb,var(--danger)_35%,transparent)] p-3 text-sm">
+              <input type="checkbox" checked={checked} className="mt-0.5 h-5 w-5 shrink-0 accent-[var(--danger)]"
                      onChange={(e) => { setChecked(e.target.checked); checkedRef.current = e.target.checked; }} />
               <span>{opts.checkbox}</span>
             </label>

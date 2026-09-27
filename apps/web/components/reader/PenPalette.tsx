@@ -8,7 +8,7 @@
  */
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { Highlighter, Underline, StickyNote, Eraser, X, GripVertical, Check, Undo2 } from "lucide-react";
-import { HIGHLIGHT_COLORS, OPACITY_STEPS, PenTool, PEN_TOOL_LABEL, darken } from "@/lib/reader";
+import { HIGHLIGHT_COLORS, OPACITY_STEPS, PenTool, PEN_TOOL_LABEL, darken, pigmentOf, pigmentName } from "@/lib/reader";
 
 export interface PenPaletteProps {
   tool: PenTool; setTool: (t: PenTool) => void;
@@ -34,6 +34,8 @@ export default function PenPalette(p: PenPaletteProps) {
   const drag = useRef<{ id: number; sx: number; sy: number; ox: number; oy: number; moved: boolean } | null>(null);
   const [, force] = useState(0);
   const CurIcon = (TOOLS.find((t) => t.key === p.tool) || TOOLS[0]).Icon;
+  // secili renk pigment olarak (eski kayitli hex'ler de yeni pigmentle gorunur)
+  const cur = pigmentOf(p.color);
 
   // Konumu kaba sınırla (kap küçülünce palet dışarıda kalmasın)
   const clamp = (x: number, y: number) => {
@@ -101,7 +103,7 @@ export default function PenPalette(p: PenPaletteProps) {
       ? { left: "50%", top: 12, transform: "translateX(-50%)" }
       : { left: "50%", bottom: "calc(12px + env(safe-area-inset-bottom, 0px))", transform: "translateX(-50%)" };
   const capsule = "absolute z-40 select-none rounded-full border border-white/10 text-white shadow-2xl backdrop-blur";
-  const bg = { background: "rgba(31,29,26,0.92)" };
+  const bg = { background: "rgba(34,26,18,0.93)" };   // umber murekkep kapsul
   const btn = "flex h-11 w-11 shrink-0 items-center justify-center rounded-full transition hover:bg-white/10 focus-visible:outline-white";
   const on = "bg-white/20";
 
@@ -110,15 +112,15 @@ export default function PenPalette(p: PenPaletteProps) {
     return (
       <div ref={ref} className={`${capsule} touch-none`} style={{ ...style, ...bg }}>
         <button type="button" className="flex h-12 w-12 items-center justify-center rounded-full"
-                aria-label={`Kalem paleti (küçük): ${PEN_TOOL_LABEL[p.tool]}. Açmak için dokun`}
+                aria-label={`Kalem paleti (küçük): ${PEN_TOOL_LABEL[p.tool]}${p.tool === "eraser" ? "" : `, ${pigmentName(cur)}`}. Açmak için dokun`}
                 title="Kalem paletini aç"
                 onPointerDown={onDragStart} onPointerMove={onDragMove}
                 onPointerUp={(e) => { const moved = onDragEnd(e); if (!moved) p.setCollapsed(false); }}
                 onPointerCancel={onDragEnd}
                 onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); p.setCollapsed(false); } }}>
           <span className="relative flex h-8 w-8 items-center justify-center rounded-full border-2 border-white/80"
-                style={{ background: p.tool === "eraser" ? "transparent" : p.color }}>
-            <CurIcon size={15} aria-hidden style={{ color: p.tool === "eraser" ? "#fff" : darken(p.color) }} />
+                style={{ background: p.tool === "eraser" ? "transparent" : cur }}>
+            <CurIcon size={15} aria-hidden style={{ color: p.tool === "eraser" ? "#fff" : darken(cur) }} />
           </span>
         </button>
       </div>
@@ -161,14 +163,16 @@ export default function PenPalette(p: PenPaletteProps) {
       {/* Renkler (1-5) */}
       <div className="flex items-center gap-0.5" role="group" aria-label="Renk">
         {HIGHLIGHT_COLORS.map((c, i) => {
-          const sel = c.value === p.color;
+          const hex = pigmentOf(c.value);
+          const name = pigmentName(c.value);
+          const sel = hex === cur;
           return (
-            <button key={c.key} type="button" aria-pressed={sel} aria-label={`${c.label} (${i + 1})`}
-                    title={`${c.label} (${i + 1})`} onClick={() => { p.setColor(c.value); if (p.tool === "eraser" || p.tool === "note") p.setTool("highlight"); }}
+            <button key={c.key} type="button" aria-pressed={sel} aria-label={`${name} (${i + 1})`}
+                    title={`${name} (${i + 1})`} onClick={() => { p.setColor(c.value); if (p.tool === "eraser" || p.tool === "note") p.setTool("highlight"); }}
                     className={btn} disabled={p.tool === "eraser"}>
               <span className={`flex items-center justify-center rounded-full border-2 transition ${sel ? "h-8 w-8 border-white" : "h-6 w-6 border-white/30"} ${p.tool === "eraser" ? "opacity-40" : ""}`}
-                    style={{ background: c.value }}>
-                {sel && <Check size={15} aria-hidden style={{ color: darken(c.value) }} strokeWidth={3} />}
+                    style={{ background: hex }}>
+                {sel && <Check size={15} aria-hidden style={{ color: darken(hex) }} strokeWidth={3} />}
               </span>
             </button>
           );
@@ -186,8 +190,8 @@ export default function PenPalette(p: PenPaletteProps) {
                     className={`${btn} ${sel ? on : ""} disabled:opacity-40`}>
               <span className="flex h-6 w-6 items-end justify-center rounded bg-white/90 pb-[3px]">
                 {p.tool === "underline"
-                  ? <span className="w-4 rounded-sm" style={{ height: s.underlinePx, background: darken(p.color) }} />
-                  : <span className="h-3 w-4 rounded-sm" style={{ background: p.color, opacity: s.value }} />}
+                  ? <span className="w-4 rounded-sm" style={{ height: s.underlinePx, background: darken(cur) }} />
+                  : <span className="h-3 w-4 rounded-sm" style={{ background: cur, opacity: s.value }} />}
               </span>
             </button>
           );

@@ -1,10 +1,11 @@
 "use client";
 /**
  * Suzgec cipi (TS-4). Etkilesimli; tek "secili" stili (tur / kategori / etiket ayni gorunur).
- * - active: secili (notr: hafif gri zemin + koyu yazi + belirgin cerceve)
+ * - active: secili (Sfumato: altin yumusak zemin + altin cerceve + altta murekkep cizgisi + koyu yazi)
  * - count: sagda kucuk sayi
  * Gorsel yukseklik 32px; dokunmatikte gorunmez ::after ile dokunma alani 44px'e genisler.
- * Secili durumda mor YOK (mor yalniz ana eylem ve bilgi/vurgu rozetleri icin); renkli dolgu yok.
+ * Secili durumda lapis YOK (lapis yalniz ana eylem ve bilgi/vurgu rozetleri icin); dolgu yalniz --gold-soft.
+ * Murekkep cizgisi ::before ile (::after dokunmatikte dokunma alanini genisletmek icin kullaniliyor).
  */
 import { forwardRef, type ButtonHTMLAttributes, type ReactNode } from "react";
 
@@ -19,8 +20,11 @@ const BASE =
   "transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent-purple " +
   "disabled:pointer-events-none disabled:opacity-50 " +
   "touch:after:absolute touch:after:-inset-y-1.5 touch:after:inset-x-0 touch:after:content-['']";
-const OFF = "border-border bg-surface text-text-secondary hover:border-border-strong hover:text-text-primary";
-const ON = "border-text-primary/60 bg-surface-muted font-medium text-text-primary";
+const OFF = "border-border bg-surface text-text-secondary hover:border-border-strong hover:bg-surface-hover hover:text-text-primary";
+const ON =
+  "border-gold bg-gold-soft font-medium text-text-primary " +
+  "before:pointer-events-none before:absolute before:inset-x-3 before:bottom-[5px] before:h-[1.5px] before:rounded-full " +
+  "before:bg-text-primary before:opacity-70 before:content-['']";
 
 /** Sinif dizisini disari da verir: <Link> ya da <label> ayni gorunumu alsin. */
 export function filterChipClass(active?: boolean, className = "") {
