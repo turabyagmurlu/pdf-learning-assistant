@@ -314,3 +314,14 @@
 .reader-surround[data-paper="night"] .ink-layer { filter: invert(0.88) hue-rotate(180deg); }
 /* Ilk kalem dokunusu ipucu balonu */
 .pen-hint { max-width: min(340px, calc(100vw - 32px)); }
+
+/* Kalem araci acikken (vurgu / alt cizgi / kalem / silgi) metin katmani dokunusa kapali: iPad'de Pencil'in
+   metin secimi baslatmasi tamamen engellenir. Parmak kaydirmaya devam eder; secim balonu icin araci kapat. */
+.reader-surround:is([data-tool="highlight"],[data-tool="underline"],[data-tool="ink"],[data-tool="eraser"]) .textLayer,
+.reader-surround:is([data-tool="highlight"],[data-tool="underline"],[data-tool="ink"],[data-tool="eraser"]) .textLayer * {
+  pointer-events: none !important; user-select: none !important; -webkit-user-select: none !important;
+  -webkit-touch-callout: none !important;
+}
+.reader-surround:is([data-tool="highlight"],[data-tool="underline"],[data-tool="ink"],[data-tool="eraser"]) {
+  -webkit-user-select: none; user-select: none; -webkit-touch-callout: none;
+}

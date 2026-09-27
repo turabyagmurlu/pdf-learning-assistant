@@ -26,6 +26,7 @@ export type PenState = { color: string; opacity: number };
 export type InkDraft = { key: string; page: number; strokes: InkStroke[] };
 
 const SVGNS = "http://www.w3.org/2000/svg";
+const PEN_DOUBLE_TAP = false as boolean;  // hizli iki kalem dokunusuyla arac degistirme (kapali)
 const MIN_MARK_PX = 8;      // bundan kisa fosforlu darbe yok sayilir (dokunus = mevcut vurguyu ac)
 
 /** Sayfanin metin katmanindaki yaprak span'ler; koordinatlar sayfa GENISLIGINE gore oran. */
@@ -359,7 +360,9 @@ export default function PdfReader(props: Props) {
       const now = Date.now();
       const lt = lastPenTap.current;
       lastPenTap.current = { t: now, x: e.clientX, y: e.clientY, dot: false };
-      if (lt && now - lt.t < 350 && Math.hypot(e.clientX - lt.x, e.clientY - lt.y) < 14 && props.onPenDoubleTap) {
+      // Hizli iki dokunusla arac degistirme KAPALI: el yazisinda (i noktasi, kisa harf cizgileri) yanlislikla
+      // tetiklenip araci vurguya ceviriyordu. Pencil 2'nin donanim cift dokunusu tarayiciya zaten gelmez.
+      if (PEN_DOUBLE_TAP && lt && now - lt.t < 350 && Math.hypot(e.clientX - lt.x, e.clientY - lt.y) < 14 && props.onPenDoubleTap) {
         lastPenTap.current = null;
         if (lt.dot) props.onInkUndo?.();          // ilk dokunusun biraktigi noktayi geri al
         props.onPenDoubleTap();
@@ -498,7 +501,10 @@ export default function PdfReader(props: Props) {
       return;
     }
     if (stroke.current && e.pointerId === stroke.current.id) {
-      finishStroke(e, e.type === "pointercancel");
+      // iOS bazen hareketi kaydirma sanip pointercancel gonderir: cizgi anlamliysa kaybetme, bitmis say.
+      const st = stroke.current;
+      const cancelled = e.type === "pointercancel" && (st.pts.length < 3 || pathLength(st.px) < MIN_MARK_PX);
+      finishStroke(e, cancelled);
       return;
     }
     // parmakla secim (vurgu araci acikken birakinca dogrudan vurgulanir)
