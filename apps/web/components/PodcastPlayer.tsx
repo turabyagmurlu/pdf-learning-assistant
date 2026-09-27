@@ -4,6 +4,8 @@
  * ±15 sn, hız, ilerleme, kaldığın yerden devam, kilit ekranı kontrolleri, iOS ses kilidi.
  * `text` verilirse çalan cümle vurgulanır (karakter-orantılı zamanlama) ve cümleye tıklayınca oraya atlanır.
  * Parça parça çalma için doğrudan `AudioQueuePlayer` kullan.
+ * Yerel kiptedir: ses bu bileşenle yaşar (sayfadan çıkınca durur). Çalmaya başlayınca kalıcı sesli özet
+ * (AudioProvider) duraklatılır; iki ses üst üste binmez. Sayfalar arası süren ses için AudioProvider `play()`.
  */
 import { useMemo } from "react";
 import AudioQueuePlayer from "@/components/AudioQueuePlayer";

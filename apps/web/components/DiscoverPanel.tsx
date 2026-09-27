@@ -82,7 +82,7 @@ export default function DiscoverPanel({ collectionId, onAdded, autoFocus }: {
 
       {res && res.results.length > 0 && (
         <div className="mt-3 max-h-[45vh] space-y-2 overflow-y-auto pr-1">
-          {res.note && <p className="rounded-lg bg-warning-bg p-2 text-2xs text-warning">{res.note}</p>}
+          {res.note && <p className="rounded-lg bg-warning-bg p-2 text-xs text-warning">{res.note}</p>}
           {res.overview && (
             <p className="rounded-lg bg-surface-muted/60 p-2.5 text-xs leading-relaxed text-text-secondary">{res.overview}</p>
           )}
@@ -90,7 +90,7 @@ export default function DiscoverPanel({ collectionId, onAdded, autoFocus }: {
             const st = added[r.url];
             return (
               <label key={r.url} className={"flex cursor-pointer gap-2.5 rounded-xl border p-2.5 transition " +
-                (sel.has(r.url) ? "border-accent-purple/50 bg-accent-soft" : "hover:bg-surface-hover")}>
+                (sel.has(r.url) ? "border-text-primary/60 bg-surface-muted" : "hover:bg-surface-hover")}>
                 <input type="checkbox" checked={sel.has(r.url)} onChange={() => toggle(r.url)} disabled={!!st}
                        className="mt-1 h-4 w-4 shrink-0 accent-accent-purple" />
                 <span className="min-w-0 flex-1">
@@ -98,7 +98,7 @@ export default function DiscoverPanel({ collectionId, onAdded, autoFocus }: {
                     {r.kind === "pdf" ? <FileText size={13} className={"shrink-0 " + typeIconColor("pdf")} /> : <Globe size={13} className={"shrink-0 " + typeIconColor("web")} />}
                     <span className="truncate text-sm font-medium">{r.title}</span>
                   </span>
-                  <span className="mt-0.5 flex flex-wrap items-center gap-1.5 text-2xs text-text-secondary">
+                  <span className="mt-0.5 flex flex-wrap items-center gap-1.5 text-xs text-text-secondary">
                     <span className="truncate">{r.site}</span>
                     {r.origin === "openalex" && <Badge tone="info">açık erişim yayın</Badge>}
                     {r.academic && r.origin !== "openalex" && <Badge tone="info"><GraduationCap size={11} aria-hidden="true" /> akademik</Badge>}
@@ -108,7 +108,7 @@ export default function DiscoverPanel({ collectionId, onAdded, autoFocus }: {
                   </span>
                   {r.description && <span className="mt-1 line-clamp-2 block text-xs text-text-secondary">{r.description}</span>}
                   {st && (
-                    <span className={"mt-1 flex items-center gap-1 text-2xs " + (st === "ok" ? "text-success" : "text-danger")}>
+                    <span className={"mt-1 flex items-center gap-1 text-xs " + (st === "ok" ? "text-success" : "text-danger")}>
                       {st === "ok" ? <><Check size={12} /> Deftere eklendi</> : st}
                     </span>
                   )}

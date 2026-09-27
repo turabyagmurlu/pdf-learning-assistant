@@ -14,6 +14,8 @@ import SourceIcon from "@/components/SourceIcon";
 import { KIND_LABEL } from "@/lib/sources";
 import { stageInfo } from "@/lib/docstage";
 import { useAddToDraft } from "@/components/reader/useAddToDraft";
+import { PaperButton, usePaper } from "@/components/reader/ReaderToolbar";
+import "@/styles/reader.css";
 import { ExternalLink, Loader2, Search, ListTree, MessageSquare, PenLine } from "lucide-react";
 
 type Page = { page_number: number; title?: string | null; text: string;
@@ -58,6 +60,8 @@ export default function TextReader({ id, doc }: { id: string; doc: any }) {
   const [tocOpen, setTocOpen] = useState(false);
   const [chatOpen, setChatOpen] = useState(false);
   const { addToDraft, picker: draftPicker } = useAddToDraft(doc, ctx);
+  // Okuma kagidi (Ajan V2): metin kartlari Beyaz / Krem / Gece; Otomatik = uygulama temasina uyar
+  const { paper, setPaper, paperTone } = usePaper();
 
   // metin secimi -> "Taslağa ekle" balonu (fare, dokunmatik ve klavye)
   const [sel, setSel] = useState<{ text: string; page: number; top: number; left: number } | null>(null);
@@ -144,6 +148,7 @@ export default function TextReader({ id, doc }: { id: string; doc: any }) {
   return (
     <div className="flex h-dvh flex-col">
     <ReaderHeader doc={doc} ctx={ctx}>
+      <PaperButton value={paper} tone={paperTone} onChange={setPaper} />
       {!isXl && (
         <button type="button" onClick={() => setTocOpen(true)} aria-haspopup="dialog"
                 className="flex h-11 shrink-0 items-center gap-1.5 rounded-lg px-2.5 text-sm text-text-secondary hover:bg-surface-hover">
@@ -193,7 +198,7 @@ export default function TextReader({ id, doc }: { id: string; doc: any }) {
           </label>
         </div>
         <div ref={box} onScroll={onScroll} onPointerUp={readSelection} onKeyUp={(e) => { if (e.shiftKey) readSelection(); }}
-             className="relative min-h-0 flex-1 overflow-y-auto">
+             className="paper-scope relative min-h-0 flex-1 overflow-y-auto" data-paper={paperTone}>
           {sel && (
             <div role="toolbar" aria-label="Seçili metin"
                  className="absolute z-30 flex items-center rounded-xl border bg-surface px-1 py-0.5 shadow-lg"

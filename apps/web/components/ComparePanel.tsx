@@ -85,7 +85,7 @@ export default function ComparePanel({ notebookId, hints, initialTopic }: { note
           <div className="overflow-x-auto rounded-2xl border bg-surface">
             <table className="w-full text-sm">
               <thead>
-                <tr className="border-b text-left text-2xs uppercase tracking-wide text-text-secondary">
+                <tr className="border-b text-left text-xs uppercase tracking-wide text-text-secondary">
                   <th className="px-3 py-2">Kaynak</th><th className="px-3 py-2">Tutum</th><th className="px-3 py-2">Ne diyor</th>
                 </tr>
               </thead>
@@ -94,7 +94,7 @@ export default function ComparePanel({ notebookId, hints, initialTopic }: { note
                   <tr key={i} className="border-b align-top last:border-0">
                     <td className="w-56 px-3 py-2.5">
                       <button onClick={() => open(p.document_id, p.page)} className="text-left font-medium hover:text-accent-purple">{p.title}</button>
-                      {p.page != null && <span className="mt-0.5 block text-2xs text-text-secondary">{citeLoc(p as any)}</span>}
+                      {p.page != null && <span className="mt-0.5 block text-xs text-text-secondary">{citeLoc(p as any)}</span>}
                     </td>
                     <td className="w-32 px-3 py-2.5"><Badge tone={STANCE[p.stance]?.tone || "neutral"}>{STANCE[p.stance]?.t || p.stance}</Badge></td>
                     <td className="px-3 py-2.5">

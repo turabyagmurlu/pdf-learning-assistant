@@ -184,8 +184,8 @@ export function GlossaryTab({ id, readyN, confirm }: { id: string; readyN: numbe
           return (
             <button key={k} onClick={() => setKind(k)} aria-pressed={kind === k}
                     className={cx("min-h-[36px] rounded-full px-2.5 py-1 text-xs",
-                      kind === k ? "bg-accent-purple/15 font-semibold text-text-primary" : "border bg-surface text-text-secondary hover:border-accent-purple/50")}>
-              {label} <span className="opacity-70">{n}</span>
+                      kind === k ? "border border-text-primary/60 bg-surface-muted font-semibold text-text-primary" : "border bg-surface text-text-secondary hover:border-border-strong hover:text-text-primary")}>
+              {label} <span className="opacity-80">{n}</span>
             </button>
           );
         })}
@@ -204,7 +204,7 @@ export function GlossaryTab({ id, readyN, confirm }: { id: string; readyN: numbe
                   <div key={i} className="rounded-xl border bg-surface p-3">
                     <div className="flex items-start justify-between gap-2">
                       <h4 className="font-medium">{g.term}</h4>
-                      <span className={cx("shrink-0 rounded-full px-2 py-0.5 text-[11px] tracking-wide", KIND_STYLE[g.kind] || KIND_STYLE.kavram)}>
+                      <span className={cx("shrink-0 rounded-full px-2 py-0.5 text-xs tracking-wide", KIND_STYLE[g.kind] || KIND_STYLE.kavram)}>
                         {KIND_LABEL[g.kind] || g.kind}
                       </span>
                     </div>
@@ -329,8 +329,8 @@ export function TimelineTab({ id, readyN, confirm }: { id: string; readyN: numbe
             return (
               <button key={k} onClick={() => setKind(k)} aria-pressed={kind === k}
                       className={cx("flex min-h-[36px] items-center gap-1.5 rounded-full px-2.5 py-1 text-xs",
-                        kind === k ? "bg-accent-purple/15 font-semibold text-text-primary" : "border bg-surface text-text-secondary hover:border-accent-purple/50")}>
-                {k && <span className={cx("h-2 w-2 rounded-full", TKIND_DOT[k])} />}{label} <span className="opacity-70">{n}</span>
+                        kind === k ? "border border-text-primary/60 bg-surface-muted font-semibold text-text-primary" : "border bg-surface text-text-secondary hover:border-border-strong hover:text-text-primary")}>
+                {k && <span className={cx("h-2 w-2 rounded-full", TKIND_DOT[k])} />}{label} <span className="opacity-80">{n}</span>
               </button>
             );
           })}

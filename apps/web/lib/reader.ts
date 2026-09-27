@@ -74,17 +74,54 @@ export function savePenPrefs(p: PenPrefs) {
   try { localStorage.setItem(PEN_KEY, JSON.stringify(p)); localStorage.setItem(LAST_COLOR_KEY, p.color); } catch {}
 }
 
-/** Vurgu dikdortgeninin gorunumu (PdfReader katmani + Notlar paneli ayni kurali kullanir). */
-export function highlightStyle(a: Pick<Annotation, "highlight_color" | "anchor">): {
+/* ===== Okuma kagidi tonu (Ajan V2) =====
+ * Yalniz sayfa yuzeyine uygulanir (PDF tuvali, metin gorunumu, metin kaynaklari); okuyucu
+ * cubuklari uygulama / okuyucu temasinda kalir. Secim cihazda saklanir ("typdf-paper").
+ * "auto": uygulama koyu temadaysa Gece; degilse okuyucu temasi sepyaysa Krem, koyuysa Gece, yoksa Beyaz. */
+export type PaperChoice = "auto" | "white" | "cream" | "night";
+export type PaperTone = Exclude<PaperChoice, "auto">;
+export const PAPER_KEY = "typdf-paper";
+export const PAPER_CHOICES: PaperChoice[] = ["auto", "white", "cream", "night"];
+export const PAPER_LABEL: Record<PaperChoice, string> = { auto: "Otomatik", white: "Beyaz", cream: "Krem", night: "Gece" };
+/** Kagit renkleri: bg / ink metin gorunumu icin (istenen degerler), ink2 ikincil metin (>= 4.5:1),
+ *  surround sayfanin cevresindeki hafif koyu zemin, surroundInk o zemindeki sayfa numarasi. */
+export const PAPER: Record<PaperTone, { bg: string; ink: string; ink2: string; rule: string; bar: string; surround: string; surroundInk: string }> = {
+  white: { bg: "#FFFFFF", ink: "#2C2C2A", ink2: "#5F5E5A", rule: "rgba(44,44,42,0.12)", bar: "rgba(255,255,255,0.92)", surround: "#ECEBE8", surroundInk: "#5F5E5A" },
+  cream: { bg: "#F6EEDC", ink: "#4A3A20", ink2: "#6E5C3C", rule: "rgba(74,58,32,0.14)", bar: "rgba(246,238,220,0.92)", surround: "#E6DCC6", surroundInk: "#62512F" },
+  night: { bg: "#1E1E1C", ink: "#D3D1C7", ink2: "#A3A198", rule: "rgba(255,255,255,0.12)", bar: "rgba(30,30,28,0.92)", surround: "#121211", surroundInk: "#A3A198" },
+};
+export function loadPaper(): PaperChoice {
+  try {
+    const v = localStorage.getItem(PAPER_KEY);
+    if (v && (PAPER_CHOICES as string[]).includes(v)) return v as PaperChoice;
+  } catch {}
+  return "auto";
+}
+export function savePaper(p: PaperChoice) {
+  try { localStorage.setItem(PAPER_KEY, p); } catch {}
+}
+export function resolvePaper(choice: PaperChoice, appDark: boolean, readerTheme?: "light" | "sepia" | "dark"): PaperTone {
+  if (choice !== "auto") return choice;
+  if (appDark || readerTheme === "dark") return "night";
+  return readerTheme === "sepia" ? "cream" : "white";
+}
+
+/** Vurgu dikdortgeninin gorunumu (PdfReader katmani + Notlar paneli ayni kurali kullanir).
+ *  tone === "night": sayfa ters cevrildigi icin (koyu zemin, acik yazi) vurgu carpma yerine
+ *  yari saydam normal katman olur (acik yazi okunur kalir), alt cizgi acik renkte cizilir. */
+export function highlightStyle(a: Pick<Annotation, "highlight_color" | "anchor">, tone?: PaperTone): {
   background: string; opacity: number; borderBottom: string; underline: boolean;
 } {
   const color = a.highlight_color || HIGHLIGHT_COLORS[0].value;
   const op = typeof a.anchor?.opacity === "number" ? a.anchor.opacity : DEFAULT_OPACITY;
   const underline = a.anchor?.style === "underline";
   const step = OPACITY_STEPS.find((s) => s.value === op) || OPACITY_STEPS[2];
-  return underline
-    ? { background: "transparent", opacity: 1, borderBottom: `${step.underlinePx}px solid ${darken(color)}`, underline: true }
-    : { background: color, opacity: op, borderBottom: "none", underline: false };
+  const night = tone === "night";
+  if (underline) {
+    return { background: "transparent", opacity: 1, borderBottom: `${step.underlinePx}px solid ${night ? color : darken(color)}`, underline: true };
+  }
+  // Gece: koyu zemin %68, vurgu rengi %32 (Koyu kademe) -> acik yazi ile >= 4.5:1 kalir
+  return { background: color, opacity: night ? Math.max(0.18, +(op * 0.32).toFixed(2)) : op, borderBottom: "none", underline: false };
 }
 /** Pastel vurgu rengini alt cizgi icin koyulastirir (beyaz kagitta gorunsun). */
 export function darken(hex: string): string {
@@ -92,6 +129,29 @@ export function darken(hex: string): string {
   if (!m) return hex;
   const f = (h: string) => Math.max(0, Math.round(parseInt(h, 16) * 0.62));
   return `rgb(${f(m[1])}, ${f(m[2])}, ${f(m[3])})`;
+}
+/** Vurgu haritasi icin isaret listesi (her vurgu / alt cizgi / kenar notu: sayfa + sayfa ici y orani). */
+export type MapMark = { id: string; page: number; y: number; color: string; label: string };
+export function annotationMarks(anns: Annotation[]): MapMark[] {
+  const out: MapMark[] = [];
+  for (const a of anns) {
+    const sticky = a.anchor?.type === "sticky";
+    const rects = a.anchor?.rects || [];
+    const y = sticky ? (a.anchor.y ?? 0.04) : rects.length ? Math.min(...rects.map((r) => r.y)) : 0;
+    const raw = (sticky ? a.note_content : a.selected_text || a.note_content) || "";
+    const t = raw.replace(/\s+/g, " ").trim();
+    const snip = t.length > 40 ? t.slice(0, 40) + "…" : t;
+    const kind = annotationKindLabel(a);
+    out.push({
+      id: a.id,
+      page: Math.max(1, a.page_number || 1),
+      y: Math.min(1, Math.max(0, Number.isFinite(y) ? y : 0)),
+      // kendi rengi (pastel); kenar notu okuyucu moru — cizgiye ince kenar CSS'te (.hl-map-mark) verilir
+      color: sticky ? "#7B6CF0" : (a.highlight_color || HIGHLIGHT_COLORS[0].value),
+      label: snip ? `${kind}: ${snip}` : kind,
+    });
+  }
+  return out;
 }
 export function annotationKindLabel(a: Pick<Annotation, "anchor">): string {
   if (a.anchor.type === "sticky") return "Kenar notu";

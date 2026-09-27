@@ -7,9 +7,9 @@ import { CardSkeleton } from "@/components/Skeleton";
 import { useRefreshOn } from "@/components/Wake";
 import { toast } from "@/components/Toast";
 import Button from "@/components/ui/Button";
-import { topicColor } from "@/lib/palette";
+import { coverOf } from "@/lib/covers";
 import {
-  Notebook, Plus, FileText, Highlighter, PenLine, Check, BookMarked, Share2, Clock, X, Loader2, Sparkles, MessageSquare, Upload, HelpCircle,
+  Notebook, Plus, Highlighter, PenLine, Check, BookMarked, Share2, Clock, X, Loader2, Sparkles, MessageSquare, Upload, HelpCircle,
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 
@@ -19,6 +19,7 @@ type NB = {
   has_glossary: boolean; has_timeline: boolean; has_concept_map: boolean; last_activity: string;
   topics?: { label: string; n: number }[]; types?: [string, number][];
   last_chat?: string | null; last_chat_at?: string | null; chat_count?: number;
+  cover_color?: string | null; cover_icon?: string | null;
 };
 const cx = (...a: (string | false | null | undefined)[]) => a.filter(Boolean).join(" ");
 
@@ -203,7 +204,7 @@ export default function NotebooksPage() {
                 <Plus size={16} aria-hidden="true" /> Yeni defter aç
               </Button>
             )}
-            <Button variant={empty ? "primary" : "secondary"} size="lg" onClick={trySample} disabled={sampleBusy}>
+            <Button variant="secondary" size="lg" onClick={trySample} disabled={sampleBusy}>
               {sampleBusy ? <Loader2 size={16} className="animate-spin" aria-hidden="true" /> : <Sparkles size={16} aria-hidden="true" />}
               Örnek defterle dene
             </Button>
@@ -227,52 +228,58 @@ export default function NotebooksPage() {
         </div>
       ) : (
         <div className="grid grid-cols-1 gap-5 sm:grid-cols-2 lg:grid-cols-3">
-          {list.map((nb) => (
+          {list.map((nb) => {
+            const cv = coverOf(nb);
+            return (
             <button type="button" key={nb.id} onClick={() => router.push("/collections/" + nb.id)}
                     aria-label={`${nb.title} defterini aç: ${nb.doc_count} kaynak`}
-                    className="lift group flex flex-col rounded-2xl border bg-surface p-5 text-left hover:border-accent-purple/40">
-              <h3 className="line-clamp-2 font-heading text-title leading-tight">{nb.title}</h3>
-              {(() => {
-                // TS-6: renk yalniz konuyu gosterir; konu yoksa cubuk notr (tur rengi kullanilmaz).
-                const segs = nb.topics?.length
-                  ? nb.topics.map((t, i) => ({ k: t.label, n: t.n, c: topicColor(i).bar }))
-                  : [];
-                return segs.length ? (
-                  <div className="mt-3 flex h-1.5 w-full gap-0.5" aria-hidden="true" title={nb.topics?.length ? nb.topics.map((t) => `${t.label} (${t.n})`).join(" · ") : ""}>
-                    {segs.map((g) => <div key={g.k} className={cx("h-full rounded-full", g.c)} style={{ flexGrow: g.n }} />)}
-                  </div>
-                ) : <div className="mt-3 h-1.5 w-full rounded-full bg-surface-muted" aria-hidden="true" />;
-              })()}
-              {nb.topics?.length ? (
-                <p className="mt-1.5 line-clamp-1 text-xs text-text-secondary">{nb.topics.map((t) => t.label).join(" · ")}</p>
-              ) : nb.description ? (
-                <p className="mt-1.5 line-clamp-1 text-xs text-text-secondary">{nb.description}</p>
-              ) : null}
-              <div className="mt-3 flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-text-secondary">
-                <span className="flex items-center gap-1"><FileText size={13} aria-hidden="true" /> {nb.doc_count} kaynak{nb.page_count ? ` · ${nb.page_count} s.` : ""}</span>
-                {nb.note_count > 0 && <span className="flex items-center gap-1"><Highlighter size={13} aria-hidden="true" /> {nb.note_count} not</span>}
-                {nb.has_draft && <span className="flex items-center gap-1 text-accent-purple"><PenLine size={13} aria-hidden="true" /> taslak</span>}
+                    className="lift group flex flex-col overflow-hidden rounded-2xl border bg-surface text-left hover:border-border-strong">
+              {/* Kapak: renkli yuzey, sol ustte simge, altta baslik + kaynak sayisi */}
+              <div className={cx("flex min-h-[132px] flex-col justify-between gap-3 p-4", cv.tone.bg)}>
+                <cv.Icon size={26} strokeWidth={1.9} className={cv.tone.fg} aria-hidden="true" />
+                <div className="min-w-0">
+                  <h3 className={cx("line-clamp-2 font-heading text-title leading-tight", cv.tone.fg)}>{nb.title}</h3>
+                  <p className={cx("mt-1 text-sm", cv.tone.fgSoft)}>
+                    {nb.doc_count} kaynak{nb.page_count ? ` · ${nb.page_count} sayfa` : ""}
+                  </p>
+                </div>
               </div>
-              <div className="mt-auto flex items-center gap-1.5 border-t pt-2.5 text-xs text-text-secondary" style={{ marginTop: "0.9rem" }}>
-                <Clock size={12} className="shrink-0" aria-hidden="true" />
-                <span className="min-w-0 truncate">
-                  {ago(nb.last_activity)}
-                  {nb.last_chat ? <> · <span className="text-text-primary">“{nb.last_chat.length > 48 ? nb.last_chat.slice(0, 46) + "…" : nb.last_chat}”</span></> : null}
-                </span>
-                <span className="ml-auto flex shrink-0 gap-1">
-                  {([["Sözlük", nb.has_glossary, BookMarked], ["Kavram haritası", nb.has_concept_map, Share2], ["Zaman çizelgesi", nb.has_timeline, Clock]] as [string, boolean, LucideIcon][]).map(([label, ok, Icon]) => (
-                    <span key={label} title={label + (ok ? " hazır" : " henüz oluşturulmadı")}
-                          className={cx("rounded-full p-1", ok ? "bg-success-bg text-success" : "text-text-secondary")}>
-                      <Icon size={11} aria-hidden="true" />
-                      <span className="sr-only">{label + (ok ? " hazır" : " henüz oluşturulmadı")}</span>
-                    </span>
-                  ))}
-                </span>
+              <div className="flex flex-1 flex-col px-4 pb-3 pt-3">
+                {nb.topics?.length ? (
+                  <p className="line-clamp-1 text-sm text-text-secondary" title={nb.topics.map((t) => `${t.label} (${t.n})`).join(" · ")}>
+                    {nb.topics.map((t) => t.label).join(" · ")}
+                  </p>
+                ) : nb.description ? (
+                  <p className="line-clamp-1 text-sm text-text-secondary">{nb.description}</p>
+                ) : null}
+                {(nb.note_count > 0 || nb.has_draft) && (
+                  <div className="mt-1.5 flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-text-secondary">
+                    {nb.note_count > 0 && <span className="flex items-center gap-1"><Highlighter size={13} aria-hidden="true" /> {nb.note_count} not</span>}
+                    {nb.has_draft && <span className="flex items-center gap-1"><PenLine size={13} aria-hidden="true" /> taslak var</span>}
+                  </div>
+                )}
+                <div className="mt-auto flex items-center gap-1.5 pt-3 text-xs text-text-secondary">
+                  <Clock size={12} className="shrink-0" aria-hidden="true" />
+                  <span className="min-w-0 truncate">
+                    {ago(nb.last_activity)}
+                    {nb.last_chat ? <> · <span className="text-text-primary">“{nb.last_chat.length > 48 ? nb.last_chat.slice(0, 46) + "…" : nb.last_chat}”</span></> : null}
+                  </span>
+                  <span className="ml-auto flex shrink-0 gap-1">
+                    {([["Sözlük", nb.has_glossary, BookMarked], ["Kavram haritası", nb.has_concept_map, Share2], ["Zaman çizelgesi", nb.has_timeline, Clock]] as [string, boolean, LucideIcon][]).map(([label, ok, Icon]) =>
+                      ok ? (
+                        <span key={label} title={label + " hazır"} className="rounded-full bg-success-bg p-1 text-success">
+                          <Icon size={12} aria-hidden="true" />
+                          <span className="sr-only">{label} hazır</span>
+                        </span>
+                      ) : null)}
+                  </span>
+                </div>
               </div>
             </button>
-          ))}
+            );
+          })}
           <button type="button" onClick={() => { startCreate(); window.scrollTo({ top: 0, behavior: window.matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth" }); }}
-                  className="flex min-h-[150px] items-center justify-center gap-2 rounded-2xl border-2 border-dashed text-sm text-text-secondary hover:border-accent-purple/50 hover:text-accent-purple">
+                  className="flex min-h-[200px] items-center justify-center gap-2 rounded-2xl border-2 border-dashed text-sm text-text-secondary hover:border-border-strong hover:text-text-primary">
             <Plus size={17} aria-hidden="true" /> Yeni defter
           </button>
         </div>

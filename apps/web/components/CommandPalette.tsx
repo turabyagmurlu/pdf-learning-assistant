@@ -9,11 +9,12 @@ import { useRouter } from "next/navigation";
 import { Search, Notebook, Library, Moon, Keyboard, CornerDownLeft, TextSearch, Plus } from "lucide-react";
 import { api } from "@/lib/api";
 import SourceIcon from "@/components/SourceIcon";
+import { CoverBadge } from "@/components/CoverPicker";
 import { useTheme } from "@/components/ThemeToggle";
 import Modal from "@/components/Modal";
 
 type Item = { id: string; group: string; label: string; hint?: string; icon: React.ReactNode; run: () => void };
-type Col = { id: string; title?: string; name?: string; doc_count?: number };
+type Col = { id: string; title?: string; name?: string; doc_count?: number; cover_color?: string | null; cover_icon?: string | null };
 type Doc = { id: string; title: string; status: string; source_type?: string | null };
 
 const TR_ASCII: Record<string, string> = { ç: "c", ğ: "g", ı: "i", ö: "o", ş: "s", ü: "u" };
@@ -70,7 +71,7 @@ export default function CommandPalette() {
     }
     (cols || []).filter((c) => hit(c.title || c.name || "")).slice(0, nq ? 6 : 4).forEach((c) =>
       out.push({ id: "c" + c.id, group: "Defterler", label: c.title || c.name || "Adsız defter", hint: c.doc_count != null ? `${c.doc_count} kaynak` : undefined,
-                 icon: <Notebook size={16} className="text-accent-purple" />, run: () => go("/collections/" + c.id) }));
+                 icon: <CoverBadge id={c.id} color={c.cover_color} icon={c.cover_icon} size={24} />, run: () => go("/collections/" + c.id) }));
     (docs || []).filter((d) => hit(d.title || "")).slice(0, nq ? 8 : 4).forEach((d) =>
       out.push({ id: "d" + d.id, group: "Kaynaklar", label: d.title, hint: d.status !== "ready" ? "hazırlanıyor" : undefined,
                  icon: <SourceIcon kind={d.source_type} size={16} />, run: () => go("/documents/" + d.id) }));
@@ -111,7 +112,7 @@ export default function CommandPalette() {
                }}
                placeholder="Defter, kaynak ya da sayfa adı yaz"
                className="h-12 w-full border-0 bg-transparent text-base outline-none md:text-sm" />
-        <kbd className="hidden rounded border px-1.5 py-0.5 font-mono text-2xs text-text-secondary sm:block">Esc</kbd>
+        <kbd className="hidden rounded border px-1.5 py-0.5 font-mono text-xs text-text-secondary sm:block">Esc</kbd>
       </div>
       <div ref={listRef} id={listId} role="listbox" aria-label="Sonuçlar" className="max-h-[55vh] overflow-y-auto p-1.5">
         {loading ? (
@@ -126,7 +127,7 @@ export default function CommandPalette() {
               {head && <p className="px-3 pb-1 pt-2.5 text-xs font-medium text-text-secondary" role="presentation">{head}</p>}
               <div id={optId(i)} data-i={i} role="option" aria-selected={i === sel} tabIndex={-1}
                    onMouseEnter={() => setSel(i)} onClick={it.run}
-                   className={"flex min-h-[44px] w-full cursor-pointer items-center gap-2.5 rounded-lg px-3 py-2 text-left text-sm " + (i === sel ? "bg-accent-soft text-accent-purple" : "")}>
+                   className={"flex min-h-[44px] w-full cursor-pointer items-center gap-2.5 rounded-lg px-3 py-2 text-left text-sm " + (i === sel ? "bg-surface-muted text-text-primary" : "")}>
                 <span className="shrink-0" aria-hidden="true">{it.icon}</span>
                 <span className="min-w-0 flex-1 truncate">{it.label}</span>
                 {it.hint && <span className="shrink-0 text-xs text-text-secondary">{it.hint}</span>}

@@ -44,11 +44,12 @@ const config: Config = {
         /** Dolgulu vurgu dugmesinin yazi rengi (acikta beyaz, koyuda koyu lacivert) */
         "on-accent": "var(--on-accent)",
       },
-      // 11px en kucuk yazi boyutu (text-2xs); daha kucugu kullanilmaz.
-      // 7 adimli olcek: display / title / heading / reading / body / small / micro (micro = 2xs).
+      // 12px en kucuk yazi boyutu (text-xs); daha kucugu kullanilmaz.
+      // `2xs` ve `micro` geriye uyum icin tutulur ama artik 12px'tir (yeni kodda text-xs kullan).
+      // 7 adimli olcek: display / title / heading / reading / body / small / micro.
       fontSize: {
-        "2xs": ["11px", "16px"],
-        micro: ["11px", { lineHeight: "16px", fontWeight: "500" }],
+        "2xs": ["12px", "16px"],
+        micro: ["12px", { lineHeight: "16px", fontWeight: "500" }],
         small: ["12px", "16px"],
         body: ["14px", "20px"],
         reading: ["16px", "26px"],

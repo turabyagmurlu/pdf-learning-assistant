@@ -94,7 +94,7 @@ export default function AddSourceDialog({ open, onClose, collectionId, segment, 
             <button key={k} id={"addseg-" + k} role="tab" aria-selected={segment === k} aria-controls={"addpanel-" + k}
                     tabIndex={segment === k ? 0 : -1} onClick={() => onSegment(k)}
                     className={cx("flex min-h-[40px] shrink-0 items-center gap-1.5 whitespace-nowrap rounded-full border px-3 text-sm",
-                      segment === k ? "border-accent-purple/40 bg-accent-soft font-medium text-accent-purple" : "border-transparent text-text-secondary hover:bg-surface-hover")}>
+                      segment === k ? "border-text-primary/60 bg-surface-muted font-medium text-text-primary" : "border-transparent text-text-secondary hover:bg-surface-hover")}>
               <Icon size={15} aria-hidden /> {label}
             </button>
           ))}
@@ -229,7 +229,7 @@ function LibraryPicker({ collectionId, existingIds, onDone, onCancel }: {
             <button key={d.id} type="button" role="checkbox" aria-checked={on}
                     onClick={() => setPicked((p) => ({ ...p, [d.id]: !on }))}
                     className={cx("flex min-h-[44px] w-full items-start gap-2.5 rounded-xl px-3 py-2.5 text-left transition",
-                      on ? "bg-accent-soft" : "hover:bg-surface-hover")}>
+                      on ? "bg-surface-muted" : "hover:bg-surface-hover")}>
               {on ? <CheckSquare size={18} className="mt-0.5 shrink-0 text-accent-purple" aria-hidden />
                   : <Square size={18} className="mt-0.5 shrink-0 text-text-secondary" aria-hidden />}
               <SourceIcon kind={d.source_type || "pdf"} size={15} className="mt-0.5 shrink-0" />
@@ -241,7 +241,7 @@ function LibraryPicker({ collectionId, existingIds, onDone, onCancel }: {
                     {others.slice(0, 3).map((c) => (
                       <Badge key={c} tone="neutral">{titles[c] ? `${titles[c]} defterinde` : "başka bir defterde"}</Badge>
                     ))}
-                    {others.length > 3 && <span className="text-2xs text-text-secondary">+{others.length - 3} defter</span>}
+                    {others.length > 3 && <span className="text-xs text-text-secondary">+{others.length - 3} defter</span>}
                   </span>
                 )}
               </span>

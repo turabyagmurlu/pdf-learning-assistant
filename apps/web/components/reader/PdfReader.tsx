@@ -4,7 +4,8 @@ import { Document, Page, pdfjs } from "react-pdf";
 import "react-pdf/dist/Page/TextLayer.css";
 import "react-pdf/dist/Page/AnnotationLayer.css";
 import "@/styles/reader.css";
-import { Annotation, Rect, HIGHLIGHT_COLORS, PenTool, HighlightStyle, highlightStyle, darken } from "@/lib/reader";
+import { Annotation, Rect, HIGHLIGHT_COLORS, PenTool, HighlightStyle, PaperTone, highlightStyle, darken, annotationMarks } from "@/lib/reader";
+import HighlightMap from "@/components/reader/HighlightMap";
 import { StickyNote, MessageSquare, PenLine, Underline } from "lucide-react";
 
 // Worker paketten sunulur (TK-6): scripts/copy-worker.mjs pdfjs-dist worker'ini public/'e kopyalar
@@ -54,6 +55,8 @@ interface Props {
   onAsk?: (text: string, page: number) => void;
   /** Secili metni kaynak + sayfa atifli alinti karti olarak defterin taslagina ekle (ucretsiz) */
   onAddToDraft?: (text: string, page: number) => void;
+  /** Okuma kagidi tonu (yalniz sayfa yuzeyi): white | cream | night. Verilmezse okuyucu temasi. */
+  paper?: PaperTone;
 }
 
 const PAGE_MAX = 820;   // genis ekranda sayfa genisligi (px, olcek 1)
@@ -63,7 +66,9 @@ const WINDOW = 2;       // gorunen sayfanin +-2 komsusu cizilir; digerleri yer t
 type Sel = { page: number; rects: Rect[]; text: string; top: number; left: number };
 
 export default function PdfReader(props: Props) {
-  const { fileUrl, page, scale, spread, tool, annotations, pen: penState } = props;
+  const { fileUrl, page, scale, spread, tool, annotations, pen: penState, paper } = props;
+  // vurgu haritasi isaretleri (sayfa + sayfa ici y + renk + ipucu)
+  const marks = useMemo(() => annotationMarks(annotations), [annotations]);
   // secimle dogrudan vurgulayan araclar (H-5 otomatik vurgu bunlarda calisir)
   const selTool = tool === "highlight" || tool === "underline";
   const [numPages, setNumPages] = useState(0);
@@ -332,17 +337,18 @@ export default function PdfReader(props: Props) {
 
   const block = (n: number) => (
     <PageBlock key={n} n={n} width={width} live={isLive(n)} ratio={ratios[n] || ratio} onRatio={onRatio}
-               annotations={annotations} onClick={onPageClick} eraser={tool === "eraser"}
+               annotations={annotations} onClick={onPageClick} eraser={tool === "eraser"} paper={paper}
                onSelectAnnotation={props.onSelectAnnotation} onErase={props.onErase} />
   );
 
   const offline = typeof navigator !== "undefined" && navigator.onLine === false;
 
   return (
+    <div className="relative h-full w-full" data-paper={paper}>
     <div ref={scrollRef} className="reader-surround h-full w-full overflow-auto overscroll-contain"
          onPointerDown={onPenDown} onPointerMove={onPenMove} onPointerUp={onPenUp} onPointerCancel={onPenUp}
          onKeyUp={(e) => { if (e.shiftKey) readSelection(selTool); }}
-         data-tool={tool}
+         data-tool={tool} data-paper={paper}
          style={{ cursor: tool === "note" ? "crosshair" : selTool ? "text" : tool === "eraser" ? "cell" : "auto" }}>
       {/* H-4: Document "w-max min-w-full" — sayfa kaptan genisleyince kap da genisler, sol kenar kaydirilabilir */}
       <Document
@@ -356,7 +362,7 @@ export default function PdfReader(props: Props) {
                        : "PDF açılamadı. Birkaç saniye sonra tekrar dene."}
             </span>
             <button type="button" onClick={() => window.location.reload()}
-                    className="mt-3 min-h-[44px] rounded-lg border px-4 text-sm" style={{ color: "var(--r-ink)" }}>
+                    className="mt-3 min-h-[44px] rounded-lg border px-4 text-sm" style={{ color: "var(--paper-surround-ink, var(--r-ink))" }}>
               Tekrar dene
             </button>
           </Centered>
@@ -408,10 +414,13 @@ export default function PdfReader(props: Props) {
         </div>
       )}
     </div>
+    {/* Vurgu haritasi: kaydirma cubugunun yaninda (kaydirilan kabin disinda, sabit durur) */}
+    <HighlightMap scrollRef={scrollRef} numPages={numPages} marks={marks} layoutKey={`${width}-${spread ? 2 : 1}`} />
+    </div>
   );
 }
 
-function PageBlock({ n, width, live, ratio, onRatio, annotations, onClick, onSelectAnnotation, onErase, eraser }: {
+function PageBlock({ n, width, live, ratio, onRatio, annotations, onClick, onSelectAnnotation, onErase, eraser, paper }: {
   n: number; width: number; live: boolean; ratio: number; onRatio: (n: number, r: number) => void;
   annotations: Annotation[];
   onClick: (n: number, e: React.MouseEvent) => void;
@@ -419,19 +428,21 @@ function PageBlock({ n, width, live, ratio, onRatio, annotations, onClick, onSel
   onErase: (a: Annotation) => void;
   /** Silgi araci acik: vurguya dokununca silinir (secilmez) */
   eraser: boolean;
+  /** Kagit tonu: Gece'de vurgular ters cevrilmis sayfada okunur kalacak sekilde cizilir */
+  paper?: PaperTone;
 }) {
   const h = Math.round(width * ratio);
   if (!live) {
     // cizilmeyen sayfa: ayni boyutta yer tutucu (kaydirma cubugu ve konum korunur)
     return (
       <div className="paper-page reader-page" data-page={n} style={{ width, height: h }} aria-hidden>
-        <div className="absolute -bottom-6 left-0 right-0 text-center text-xs" style={{ color: "var(--r-ink-2)" }}>{n}</div>
+        <div className="page-num absolute -bottom-6 left-0 right-0 text-center text-xs" style={{ color: "var(--r-ink-2)" }}>{n}</div>
       </div>
     );
   }
   const anns = annotations.filter((a) => a.page_number === n);
   return (
-    <div className="paper-page reader-page" data-page={n} style={{ width, minHeight: h }} onClick={(e) => onClick(n, e)}>
+    <div className="paper-page reader-page is-live" data-page={n} style={{ width, minHeight: h }} onClick={(e) => onClick(n, e)}>
       <Page pageNumber={n} width={width} renderAnnotationLayer={false} renderTextLayer
             onLoadSuccess={(pg: any) => { if (pg?.originalWidth) onRatio(n, pg.originalHeight / pg.originalWidth); }}
             loading={<div style={{ height: h }} />} />
@@ -446,7 +457,7 @@ function PageBlock({ n, width, live, ratio, onRatio, annotations, onClick, onSel
             </button>
           ) : (
             (a.anchor.rects ?? []).map((r, i) => {
-              const hs = highlightStyle(a);
+              const hs = highlightStyle(a, paper);
               return (
                 <div key={a.id + i} className={`hl-rect ${hs.underline ? "hl-underline" : ""} ${eraser ? "hl-erasable" : ""}`}
                      data-ann={a.id}
@@ -463,7 +474,7 @@ function PageBlock({ n, width, live, ratio, onRatio, annotations, onClick, onSel
           )
         )}
       </div>
-      <div className="absolute -bottom-6 left-0 right-0 text-center text-xs" style={{ color: "var(--r-ink-2)" }}>
+      <div className="page-num absolute -bottom-6 left-0 right-0 text-center text-xs" style={{ color: "var(--r-ink-2)" }}>
         {n}
       </div>
     </div>
@@ -471,7 +482,7 @@ function PageBlock({ n, width, live, ratio, onRatio, annotations, onClick, onSel
 }
 
 function Centered({ children }: { children: React.ReactNode }) {
-  return <div className="flex h-full flex-col items-center justify-center p-10 text-sm" style={{ color: "var(--r-ink-2)" }}>{children}</div>;
+  return <div className="flex h-full flex-col items-center justify-center p-10 text-sm" style={{ color: "var(--paper-surround-ink, var(--r-ink-2))" }}>{children}</div>;
 }
 function chunk<T>(arr: T[], size: number): T[][] {
   const out: T[][] = [];

@@ -21,6 +21,31 @@ COL_MISSING = "Defter bulunamadı; silinmiş olabilir. Defterler sayfasına dön
 NO_READY = "Bu defterde henüz hazır kaynak yok. Kaynak ekle ya da işlenmelerini bekle."
 
 
+# Defter kapagi: izinli renk anahtarlari ve simge (lucide) adlari. apps/web/lib/covers.ts ile ayni sira.
+COVER_COLORS = ("teal", "coral", "purple", "blue", "amber", "pink", "green", "gray")
+COVER_ICONS = ("BookOpen", "Flag", "FlaskConical", "Trophy", "Landmark", "Scale", "Brain", "HeartPulse",
+               "Globe", "Calculator", "Music", "Palette", "Code", "Leaf", "Atom", "Dna", "Microscope",
+               "Gavel", "History", "Languages", "Briefcase", "GraduationCap", "Lightbulb", "PenTool")
+COVER_ICON_DEFAULT = "BookOpen"
+
+
+def default_cover_color(cid) -> str:
+    """Kapak rengi secilmemisse: id'den deterministik (web'deki defaultCoverColor ile ayni sonuc)."""
+    try:
+        return COVER_COLORS[uuid.UUID(str(cid)).int % len(COVER_COLORS)]
+    except Exception:  # noqa
+        return COVER_COLORS[0]
+
+
+def with_cover(d: dict) -> dict:
+    """cover_color / cover_icon bos ya da gecersizse varsayilanla doldur."""
+    if d.get("cover_color") not in COVER_COLORS:
+        d["cover_color"] = default_cover_color(d.get("id"))
+    if d.get("cover_icon") not in COVER_ICONS:
+        d["cover_icon"] = COVER_ICON_DEFAULT
+    return d
+
+
 class CollectionIn(BaseModel):
     title: str
     description: str | None = None
@@ -47,7 +72,7 @@ async def create_collection(body: CollectionIn, conn=Depends(db), user=Depends(c
 async def list_collections(conn=Depends(db), user=Depends(current_user)):
     """Defter listesi: kaynak/not sayilari ve son etkinlik (buyuk JSON alanlari haric)."""
     rows = await conn.fetch(
-        """SELECT c.id, c.title, c.description, c.created_at, c.draft_at,
+        """SELECT c.id, c.title, c.description, c.created_at, c.draft_at, c.cover_color, c.cover_icon,
                   (c.draft IS NOT NULL AND length(c.draft) > 60) AS has_draft,
                   (SELECT COUNT(*) FROM document_collections l JOIN documents d ON d.id=l.document_id
                      WHERE l.collection_id=c.id AND d.user_id=c.user_id) AS doc_count,
@@ -96,7 +121,7 @@ async def list_collections(conn=Depends(db), user=Depends(current_user)):
             d["topics"] = []
         ty = d.get("types")
         d["types"] = json.loads(ty) if isinstance(ty, str) else (ty or [])
-        out.append(d)
+        out.append(with_cover(d))
     return out
 
 
@@ -129,7 +154,7 @@ async def get_collection(cid: str, conn=Depends(db), user=Depends(current_user))
         notes = await conn.fetchval(
             "SELECT COUNT(*) FROM notes WHERE user_id=$1 AND document_id = ANY($2::uuid[]) AND deleted_at IS NULL",
             user["id"], ids) or 0
-    c = dict(col)
+    c = with_cover(dict(col))
     # buyuk JSON alanlari listeden cikar; varligini bayrak olarak ver
     def _has(v):
         if isinstance(v, str):
@@ -177,6 +202,9 @@ class CollectionPatch(BaseModel):
     # Taslak kaydinda istemcinin bildigi surum. Verilirse yalniz sunucudaki surum hala buysa yazilir;
     # degilse (okuyucudan blok eklendi, baska sekme kaydetti) yazmaz, guncel taslagi dondurur.
     draft_rev: int | None = None
+    # Kapak: izinli listeden renk anahtari / simge adi ("" → varsayilana don)
+    cover_color: str | None = None
+    cover_icon: str | None = None
 
 
 @router.patch("/collections/{cid}")
@@ -190,6 +218,18 @@ async def update_collection(cid: str, body: CollectionPatch, conn=Depends(db), u
     if body.description is not None:
         await conn.execute("UPDATE collections SET description=$1 WHERE id=$2 AND user_id=$3",
                            body.description, cid, user["id"])
+    if body.cover_color is not None:
+        cc = body.cover_color.strip()
+        if cc and cc not in COVER_COLORS:
+            raise AppError("Bu renk seçilemiyor. Listeden bir renk seç.")
+        await conn.execute("UPDATE collections SET cover_color=$1 WHERE id=$2 AND user_id=$3",
+                           cc or None, cid, user["id"])
+    if body.cover_icon is not None:
+        ci = body.cover_icon.strip()
+        if ci and ci not in COVER_ICONS:
+            raise AppError("Bu simge seçilemiyor. Listeden bir simge seç.")
+        await conn.execute("UPDATE collections SET cover_icon=$1 WHERE id=$2 AND user_id=$3",
+                           ci or None, cid, user["id"])
     if body.draft is not None:
         # TO-3: yazmadan once onceki surumu sakla (>=60 sn gecmisse ya da blok sayisi degistiyse; son 20)
         try:

@@ -82,7 +82,7 @@ export default function CitedText({ text, sources, onCite, className }: {
                 aria-expanded={on}
                 aria-controls={on ? popId : undefined}
                 className={"inline-flex min-h-[24px] items-center gap-1 rounded-full px-2 py-0.5 align-baseline font-body text-xs font-medium leading-tight text-text-primary transition hover:ring-1 hover:ring-current focus-visible:ring-2 focus-visible:ring-accent-purple " + sourceTint(src?.kind)}>
-          <span aria-hidden className={"text-[9px] leading-none " + sourceColor(src?.kind)}>●</span>
+          <span aria-hidden className={"text-xs leading-none " + sourceColor(src?.kind)}>●</span>
           K{n}{loc ? <span className="text-text-secondary"> {loc}</span> : null}
         </button>
         {on && src && (

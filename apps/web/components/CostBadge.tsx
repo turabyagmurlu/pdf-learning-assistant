@@ -13,7 +13,7 @@ export function Cost({ n = 1, className = "" }: { n?: number; className?: string
   const bg = /\bbg-/.test(className) ? "" : "bg-surface-muted ";
   return (
     <>
-      <span aria-hidden className={"ml-1 inline-flex items-center rounded-full px-1.5 text-2xs font-medium leading-5 " + bg + className}>
+      <span aria-hidden className={"ml-1 inline-flex items-center rounded-full px-1.5 text-xs font-medium leading-5 " + bg + className}>
         ⚡{k}
       </span>
       <span className="sr-only"> ({k} Gemini çağrısı)</span>

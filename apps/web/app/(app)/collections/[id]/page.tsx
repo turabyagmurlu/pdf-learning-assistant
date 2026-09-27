@@ -22,6 +22,7 @@ import { useRefreshOn } from "@/components/Wake";
 import { useConfirm } from "@/components/Confirm";
 import { toast } from "@/components/Toast";
 import NotebookSearch from "@/components/NotebookSearch";
+import CoverPicker, { CoverBadge } from "@/components/CoverPicker";
 import { Skeleton, CardSkeleton } from "@/components/Skeleton";
 import AddSourceDialog, { AddSegment, PRIVACY_NOTE } from "@/components/AddSourceDialog";
 import { Cost, costTitle, ErrNote, Err, toErr } from "@/components/CostBadge";
@@ -265,6 +266,7 @@ function CollectionPage({ id }: { id: string }) {
       setRenaming(false); load().catch(() => {});
     } catch (e: any) { toast.error(e?.message || "Defter adı değiştirilemedi; tekrar dene."); }
   }
+  const [coverOpen, setCoverOpen] = useState(false);
 
   /* ---------- yapiskan sekme seridi ---------- */
   const tabBarRef = useRef<HTMLDivElement>(null);
@@ -374,15 +376,15 @@ function CollectionPage({ id }: { id: string }) {
                 className="absolute inset-0 z-0 rounded-xl focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-purple" />
         <div className={cx("pointer-events-none relative flex h-16 items-end justify-between px-3 pb-2", tp ? topicColor(tp.i).tint : sourceTint(kind))}>
           <SourceIcon kind={kind} size={30} className="absolute right-3 top-2.5 opacity-25" />
-          <span className="flex items-center gap-1 rounded-full bg-surface/90 px-2 py-0.5 text-[11px] font-medium text-text-primary">
+          <span className="flex items-center gap-1 rounded-full bg-surface/90 px-2 py-0.5 text-xs font-medium text-text-primary">
             <SourceIcon kind={kind} size={12} /> {sourceLabel(kind, d.page_count)}
           </span>
           {d.status === "failed" ? (
-            <span className="rounded-full bg-red-100 px-2 py-0.5 text-[11px] text-red-800 dark:bg-red-500/15 dark:text-red-300">hazırlanamadı</span>
+            <span className="rounded-full bg-red-100 px-2 py-0.5 text-xs text-red-800 dark:bg-red-500/15 dark:text-red-300">hazırlanamadı</span>
           ) : w ? (
-            <span className="rounded-full bg-surface/90 px-2 py-0.5 text-[11px] text-text-primary">{w.pct !== null ? `%${w.pct}` : "hazırlanıyor"}</span>
+            <span className="rounded-full bg-surface/90 px-2 py-0.5 text-xs text-text-primary">{w.pct !== null ? `%${w.pct}` : "hazırlanıyor"}</span>
           ) : p && p.pct >= 95 ? (
-            <span className="rounded-full bg-green-500/15 px-2 py-0.5 text-[11px] text-green-800 dark:text-green-300">okundu</span>
+            <span className="rounded-full bg-green-500/15 px-2 py-0.5 text-xs text-green-800 dark:text-green-300">okundu</span>
           ) : null}
         </div>
         <button onClick={() => removeFromCollection(d.id)}
@@ -437,14 +439,18 @@ function CollectionPage({ id }: { id: string }) {
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0">
           <div className="flex items-center gap-2">
-            <BookOpen size={22} className="shrink-0 text-accent-purple" aria-hidden />
+            <button type="button" onClick={() => setCoverOpen(true)} aria-label="Kapağı düzenle" title="Kapağı düzenle"
+                    className="shrink-0 rounded-xl focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent-purple">
+              <CoverBadge id={col.id} color={col.cover_color} icon={col.cover_icon} size={40}
+                          className="transition-transform hover:scale-105 md:h-12 md:w-12" />
+            </button>
             {renaming ? (
               <div className="flex items-center gap-1.5">
                 <input value={newTitle} onChange={(e) => setNewTitle(e.target.value)} aria-label="Defter adı"
                        onKeyDown={(e) => { if (e.key === "Enter") saveTitle(); if (e.key === "Escape") setRenaming(false); }}
                        autoFocus className="min-w-0 rounded-lg border bg-surface px-2 py-1 font-heading text-2xl outline-none focus:border-accent-purple" />
                 <button onClick={saveTitle} aria-label="Adı kaydet"
-                        className="flex h-10 w-10 items-center justify-center rounded-lg bg-accent-purple text-white"><Check size={16} /></button>
+                        className="flex h-10 w-10 items-center justify-center rounded-lg border border-border-strong/60 bg-surface text-text-primary hover:bg-surface-hover"><Check size={16} /></button>
               </div>
             ) : (
               <h1 className="line-clamp-2 font-heading text-[30px] leading-[1.08] tracking-tight md:text-[40px] md:leading-[1.05]">{col.title}</h1>
@@ -458,6 +464,9 @@ function CollectionPage({ id }: { id: string }) {
             {st.documents ?? docs.length} kaynak{topics?.groups?.length ? ` · ${topics.groups.length} konu` : ""} · {st.pages || 0} sayfa
           </p>
         </div>
+        <CoverPicker open={coverOpen} onClose={() => setCoverOpen(false)} id={String(col.id)} title={col.title || ""}
+                     color={col.cover_color} icon={col.cover_icon}
+                     onSaved={(c, i) => setData((d: any) => d ? { ...d, collection: { ...d.collection, cover_color: c, cover_icon: i } } : d)} />
         <button onClick={deleteNotebook} title="Defteri sil" aria-label="Defteri sil"
                 className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg border text-text-secondary hover:border-danger/50 hover:text-danger">
           <Trash2 size={15} />
@@ -492,7 +501,7 @@ function CollectionPage({ id }: { id: string }) {
               </p>
               {next.go && (
                 <button onClick={next.go} title={next.cost ? costTitle(next.cost) : undefined}
-                        className="flex min-h-[40px] shrink-0 items-center rounded-lg border border-accent-purple/40 bg-surface px-3 text-sm font-medium text-text-primary hover:bg-accent-purple hover:text-white">
+                        className="flex min-h-[40px] shrink-0 items-center rounded-lg border border-accent-purple/40 bg-surface px-3 text-sm font-medium text-text-primary hover:bg-surface-hover">
                   {next.label}{next.cost ? <Cost n={next.cost} /> : null}
                 </button>
               )}
@@ -607,7 +616,7 @@ function CollectionPage({ id }: { id: string }) {
                     <button onClick={() => { const v = !grouped; setGrouped(v); try { localStorage.setItem("typdf-group", v ? "1" : "0"); } catch {} if (v && !topics) loadTopics(); }}
                             aria-pressed={grouped} title={topics ? "Kayıtlı gruplar · ücretsiz" : costTitle(1)}
                             className={cx("inline-flex min-h-[36px] items-center gap-1.5 rounded-lg border px-2.5 text-xs",
-                              grouped ? "border-accent-purple/50 bg-accent-purple/10 font-medium text-text-primary" : "bg-surface text-text-secondary hover:border-accent-purple/40")}>
+                              grouped ? "border-text-primary/60 bg-surface-muted font-medium text-text-primary" : "bg-surface text-text-secondary hover:border-border-strong")}>
                       <Tags size={13} /> Konuya göre grupla {!topics && <Cost n={1} />}
                     </button>
                     {grouped && (
@@ -697,7 +706,7 @@ function CollectionPage({ id }: { id: string }) {
       {tab !== "sohbet" && readyN > 0 && (
         <button onClick={() => { setTab("sohbet"); scrollTop(); }} aria-label="Kaynaklarına sor"
                 className="fixed right-4 z-30 flex h-14 w-14 items-center justify-center rounded-full bg-accent-purple text-white shadow-medium active:scale-95 md:hidden"
-                style={{ bottom: "calc(var(--bottom-nav, 64px) + 12px)" }}>
+                style={{ bottom: "calc(var(--bottom-nav, 64px) + var(--mini-player-h, 0px) + 12px)" }}>
           <MessageSquare size={22} />
         </button>
       )}

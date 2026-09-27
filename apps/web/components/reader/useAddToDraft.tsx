@@ -133,7 +133,7 @@ export function useAddToDraft(doc: any, ctx: NotebookCtx) {
       ) : cols.length === 0 ? (
         <div className="text-sm">
           <p>Henüz defterin yok. Önce bir defter oluştur ve bu kaynağı ona ekle.</p>
-          <Link href="/notebooks" className="mt-3 inline-flex min-h-[44px] items-center rounded-lg bg-accent-purple px-4 text-white">Defterlere git</Link>
+          <Link href="/notebooks" className="mt-3 inline-flex min-h-[44px] items-center rounded-lg bg-accent-purple px-4 font-medium text-on-accent">Defterlere git</Link>
         </div>
       ) : (
         <>

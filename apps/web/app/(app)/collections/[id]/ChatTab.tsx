@@ -219,7 +219,7 @@ export default function ChatTab({ id, colTitle, readyN, active, chatId, setChatU
               <p className="p-3 text-sm text-text-secondary">Henüz kayıtlı sohbet yok. Sorduğun her şey burada saklanacak.</p>
             ) : chats.filter((c) => !hidden.has(c.id)).map((c) => (
               <div key={c.id} className={cx("group flex items-center gap-2 rounded-lg px-2.5 py-1 text-sm hover:bg-surface-muted",
-                                              c.id === current.current && "bg-accent-purple/10")}>
+                                              c.id === current.current && "bg-surface-muted font-medium")}>
                 <button onClick={() => openChat(c.id)} className="min-h-[40px] min-w-0 flex-1 text-left">
                   <span className="block truncate">{c.title || "Sohbet"}</span>
                   <span className="block text-xs text-text-secondary">
@@ -399,7 +399,7 @@ export default function ChatTab({ id, colTitle, readyN, active, chatId, setChatU
       </div>
 
       {/* Giris kutusu: mobilde alt menunun ustunde (--bottom-nav, B) */}
-      <div className="sticky bottom-[calc(var(--bottom-nav,64px)+8px)] z-10 mt-5 flex gap-2 md:bottom-4">
+      <div className="sticky bottom-[calc(var(--bottom-nav,64px)+var(--mini-player-h,0px)+8px)] z-10 mt-5 flex gap-2 md:bottom-[calc(var(--mini-player-h,0px)+16px)]">
         {thread.length > 0 && !suggOpen && (
           <button onClick={() => { setSuggOpen(true); if (!sugg) loadSuggestions(); scrollTop(); }}
                   title="Soru önerilerini göster" aria-label="Soru önerilerini göster"

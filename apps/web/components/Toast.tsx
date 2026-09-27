@@ -105,7 +105,7 @@ export default function ToastHost() {
 
   return (
     <div className="pointer-events-none fixed inset-x-0 z-[95] flex flex-col items-center gap-2 px-3 md:inset-x-auto md:right-5 md:items-end"
-         style={{ bottom: "calc(max(var(--bottom-nav, 0px), env(safe-area-inset-bottom, 0px)) + 12px + var(--toast-lift, 0px))" }}
+         style={{ bottom: "calc(max(var(--bottom-nav, 0px), env(safe-area-inset-bottom, 0px)) + 12px + var(--toast-lift, 0px) + var(--mini-player-h, 0px))" }}
          onMouseEnter={() => setPaused(true)} onMouseLeave={() => setPaused(false)}
          onFocus={() => setPaused(true)} onBlur={() => setPaused(false)}>
       <div role="alert" aria-live="assertive" className="flex w-full flex-col items-center gap-2 md:items-end">

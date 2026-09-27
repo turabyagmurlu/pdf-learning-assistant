@@ -94,7 +94,7 @@
   background: var(--r-accent);
   color: var(--on-accent);
   display: flex; align-items: center; justify-content: center;
-  font-size: 11px;
+  font-size: 12px;
   box-shadow: 0 2px 6px rgba(0,0,0,0.25);
   pointer-events: auto; cursor: pointer;
 }
@@ -121,3 +121,71 @@
 @media (prefers-reduced-motion: reduce) {
   .reader-root * { scroll-behavior: auto !important; }
 }
+
+/* ===== Okuma kagidi tonu (Ajan V2) =====
+   Yalniz sayfa yuzeyi degisir; cubuklar okuyucu temasinda kalir. data-paper: white | cream | night.
+   --paper-* degiskenleri lib/reader.ts PAPER ile ayni degerler. */
+[data-paper="white"] { --paper-bg:#FFFFFF; --paper-ink:#2C2C2A; --paper-ink-2:#5F5E5A; --paper-rule:rgba(44,44,42,.12); --paper-surround:#ECEBE8; --paper-surround-ink:#5F5E5A; }
+[data-paper="cream"] { --paper-bg:#F6EEDC; --paper-ink:#4A3A20; --paper-ink-2:#6E5C3C; --paper-rule:rgba(74,58,32,.14); --paper-surround:#E6DCC6; --paper-surround-ink:#62512F; }
+[data-paper="night"] { --paper-bg:#1E1E1C; --paper-ink:#D3D1C7; --paper-ink-2:#A3A198; --paper-rule:rgba(255,255,255,.12); --paper-surround:#121211; --paper-surround-ink:#A3A198; }
+
+/* PDF: sayfa cevresi tona uyumlu hafif koyu; sayfa numarasi o zeminde okunur */
+.reader-surround[data-paper] { background: var(--paper-surround); }
+.reader-surround[data-paper] .page-num { color: var(--paper-surround-ink) !important; }
+.reader-surround[data-paper] .paper-page { background: var(--paper-bg); isolation: isolate; }
+
+/* Krem: tuvalin ustune #F6EEDC "carpma" katmani. Beyaz -> tam krem, siyah yazi siyah kalir
+   (filtre yok: yazi yumusamaz, tek bilesik katman). Cizilmis sayfanin zemini beyaz kalir ki
+   katmanla carpinca dogru tona ulassin; yer tutucu sayfa dogrudan krem. */
+.reader-surround[data-paper="cream"] .paper-page.is-live { background: #FFFFFF; }
+.reader-surround[data-paper="cream"] .paper-page.is-live::after {
+  content: ""; position: absolute; inset: 0; border-radius: inherit;
+  background: #F6EEDC; mix-blend-mode: multiply; pointer-events: none; z-index: 3;
+}
+
+/* Gece: YALNIZ tuval ters cevrilir (beyaz -> ~#1F1F1F, siyah -> ~#E0E0E0; hue-rotate renkli gorselleri
+   makul tutar). Vurgu katmani (.hl-layer) tuvalin kardesi, filtrenin DISINDA: renkleri bozulmaz.
+   Koyu zeminde "carpma" vurguyu yok edeceginden vurgu normal karisimla, dusuk opaklikla cizilir
+   (lib/reader highlightStyle tone="night"). */
+.reader-surround[data-paper="night"] .react-pdf__Page__canvas { filter: invert(0.88) hue-rotate(180deg); }
+.reader-surround[data-paper="night"] .react-pdf__Page { background-color: transparent !important; }
+.reader-surround[data-paper="night"] .hl-rect { mix-blend-mode: normal; }
+.reader-surround[data-paper="night"] .hl-rect:hover { filter: brightness(1.15); }
+.reader-surround[data-paper="night"] .textLayer ::selection { background: rgba(169,155,255,.4); }
+
+/* Metin kaynaklari (TextReader): bolum kartlari kagit tonunda, cevresi hafif koyu.
+   Uygulama degiskenleri bu kapsamda yeniden tanimlanir: bg-surface / text-text-* siniflari uyar. */
+.paper-scope[data-paper] {
+  background: var(--paper-surround); color: var(--paper-ink);
+  --surface: var(--paper-bg); --surface-muted: var(--paper-surround); --surface-hover: var(--paper-surround);
+  --text-primary: var(--paper-ink); --text-secondary: var(--paper-ink-2); --border: var(--paper-rule);
+}
+.paper-scope[data-paper="night"] { --warning-bg: rgba(231,172,76,.28); --accent-soft: rgba(169,155,255,.18); color-scheme: dark; }
+
+/* Kagit secici: yuvarlak ornekler (Beyaz / Krem / Gece; Otomatik yarim-yarim) */
+.paper-swatch { display: block; width: 24px; height: 24px; border-radius: 9999px; border: 1px solid rgba(0,0,0,.22); }
+.paper-swatch[data-tone="white"] { background: #FFFFFF; }
+.paper-swatch[data-tone="cream"] { background: #F6EEDC; }
+.paper-swatch[data-tone="night"] { background: #1E1E1C; border-color: rgba(255,255,255,.28); }
+.paper-swatch[data-tone="auto"] { background: linear-gradient(135deg, #FFFFFF 0 50%, #1E1E1C 50% 100%); }
+
+/* ===== Vurgu haritasi (Ajan V2) =====
+   Sag kenarda ince serit (gorsel 12 px). Fareli cihazda kap 14 px; dokunmatikte 24 px
+   gorunmez tiklama alani (gorsel ayni incelikte kalir). */
+.hl-map { position: absolute; top: 0; bottom: 0; width: 14px; z-index: 25; cursor: pointer; touch-action: pan-y; }
+@media (pointer: coarse) { .hl-map { width: 24px; } }
+.hl-map-rail { position: absolute; top: 0; bottom: 0; right: 1px; width: 12px; border-radius: 6px;
+  background: color-mix(in srgb, var(--paper-ink, var(--r-ink, #1B2233)) 7%, transparent); }
+.hl-map-view { position: absolute; right: 1px; width: 12px; border-radius: 4px; pointer-events: none;
+  border: 1.5px solid color-mix(in srgb, var(--paper-ink, var(--r-ink, #1B2233)) 45%, transparent);
+  background: color-mix(in srgb, var(--paper-ink, var(--r-ink, #1B2233)) 6%, transparent); }
+.hl-map-hit { position: absolute; right: 0; width: 100%; height: 10px; transform: translateY(-50%);
+  display: flex; align-items: center; justify-content: flex-end; padding: 0 2px 0 0; background: transparent; border: 0; cursor: pointer; }
+.hl-map-mark { display: block; width: 10px; border-radius: 1px; box-shadow: 0 0 0 0.5px rgba(0,0,0,.35); pointer-events: none; }
+.hl-map-hit:hover .hl-map-mark, .hl-map-hit:focus-visible .hl-map-mark { width: 12px; box-shadow: 0 0 0 1px rgba(0,0,0,.55); }
+.reader-root .hl-map-hit:focus-visible { outline: 2px solid var(--r-accent); outline-offset: 0; border-radius: 2px; }
+.hl-map-tip { position: absolute; right: calc(100% + 6px); transform: translateY(-50%); z-index: 1;
+  max-width: 260px; width: max-content; padding: 4px 8px; border-radius: 8px; pointer-events: none;
+  font-size: 12px; line-height: 16px; white-space: normal;
+  background: var(--surface, #FFFFFF); color: var(--text-primary, #1B2233);
+  border: 1px solid var(--border, #E7E3DA); box-shadow: 0 4px 14px rgba(0,0,0,.14); }

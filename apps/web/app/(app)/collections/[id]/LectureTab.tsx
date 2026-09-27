@@ -5,11 +5,14 @@
  * - Ses parça parça gelir: ilk parça hazır olunca çalma başlar, kalanlar arkada üretilir.
  * - Tamamlanınca parçalar cihaz önbelleğine (typdf-audio) yazılır; ikinci dinleme ücretsiz ve anında.
  * - Sunucu yenilenip iş kaybolursa "Yeniden başlat" önerilir (parçalar sunucu önbelleğinde kalır, hızlı biter).
+ * - Ses kalıcıdır (V1): ses durumu ve parça yoklaması AudioProvider oturumunda yaşar; başka sayfaya geçince
+ *   ses kesilmez, alttaki mini çubuk devralır. Bu sekme yalnız bu defterin oturumunu gösterir/denetler.
  */
 import { useEffect, useRef, useState } from "react";
 import { Loader2, Headphones, Volume2, RefreshCw, X } from "lucide-react";
 import { api, API, getToken } from "@/lib/api";
 import AudioQueuePlayer from "@/components/AudioQueuePlayer";
+import { useAudioSession } from "@/components/audio/AudioProvider";
 import { primeAudio, type QueueChunk } from "@/hooks/useAudioQueue";
 import BrowserVoice, { browserVoiceSupported } from "@/components/BrowserVoice";
 import { Cost, costTitle, isUsageLimit } from "@/components/CostBadge";
@@ -65,17 +68,16 @@ export default function LectureTab({ id, title, readyN, confirm }: {
   const [useBrowserVoice, setUseBrowserVoice] = useState(false);
   const [canSpeak, setCanSpeak] = useState(false);
 
-  // Ses işi
-  const [audioBusy, setAudioBusy] = useState(false);
-  const [chunks, setChunks] = useState<QueueChunk[] | null>(null);
-  const [jobTotal, setJobTotal] = useState(0);
-  const [audioNote, setAudioNote] = useState("");
+  // Ses işi: kalıcı oturumda (AudioProvider). Bu defterin oturumu değilse burada oynatıcı görünmez.
+  const audio = useAudioSession();
+  const mine = audio.session && audio.session.collectionId === id ? audio.session : null;
+  const chunks = mine ? mine.chunks : null;
+  const audioBusy = !!mine?.busy;
+  const jobLost = !!mine?.lost;
+  const showPlayer = !!mine;
   const [audioReady, setAudioReady] = useState(false);
-  const [jobLost, setJobLost] = useState(false);
-  const [showPlayer, setShowPlayer] = useState(false);
-  const runId = useRef(0);
-  const abortRef = useRef<AbortController | null>(null);
-  const urlsRef = useRef<string[]>([]);
+  const runId = useRef(0);                                   // metin akışı
+  const textAbort = useRef<AbortController | null>(null);
   const headRef = useRef<string>("");
   const [headOn, setHeadOn] = useState(false);     // M5: metin yazılırken ilk ses parçası hazırlanıyor
 
@@ -84,6 +86,11 @@ export default function LectureTab({ id, title, readyN, confirm }: {
   const dialogAudio = lecture ? lectureIsDialog : fmt === "dialog";
   const voiceKey = voice + (dialogAudio ? "+" + voice2 : "");
   const AUDIO_KEY = "/typdf-audio/lecture/" + id + (voiceKey ? "/" + voiceKey : "");
+  /** Belirli bir metnin ses önbelleği anahtarı (metin henüz duruma yazılmamış olabilir). */
+  const keyFor = (text: string) => {
+    const vk = voice + (isDialogText(text) ? "+" + voice2 : "");
+    return "/typdf-audio/lecture/" + id + (vk ? "/" + vk : "");
+  };
   const ttsParts = Math.max(1, Math.ceil(Math.min(lecture.length, 12000) / 2600));
   const fmtMismatch = !!lecture && (lectureIsDialog !== (fmt === "dialog"));
 
@@ -115,14 +122,17 @@ export default function LectureTab({ id, title, readyN, confirm }: {
     })();
   }, [AUDIO_KEY]);
 
+  /** Yalnız bu defterin sesi çalıyorsa durdurur (başka defterin sesine dokunmaz). */
   function stopAudio() {
-    runId.current++;
-    try { abortRef.current?.abort(); } catch {}
-    urlsRef.current.forEach((u) => { try { URL.revokeObjectURL(u); } catch {} });
-    urlsRef.current = [];
-    setChunks(null); setShowPlayer(false); setAudioBusy(false); setAudioNote(""); setJobLost(false); setJobTotal(0); setHeadOn(false);
+    audio.stopIf(id);
+    setHeadOn(false);
   }
-  useEffect(() => () => { stopAudio(); }, []);   // eslint-disable-line react-hooks/exhaustive-deps
+  function stopText() {
+    runId.current++;
+    try { textAbort.current?.abort(); } catch {}
+  }
+  // Sayfadan çıkınca yalnız metin akışı durur; ses kalıcı oturumda sürer (mini çubuk)
+  useEffect(() => () => { stopText(); }, []);   // eslint-disable-line react-hooks/exhaustive-deps
 
   // ---- Metin: akışla hazırla ------------------------------------------------------------------
   async function makeLecture(refresh = false) {
@@ -140,8 +150,9 @@ export default function LectureTab({ id, title, readyN, confirm }: {
     setLecBusy(true); setLecErr(""); setLecNote(""); stopAudio();
     setUseBrowserVoice(false); setQuotaOut(false);
     headRef.current = "";
+    stopText();
     const myRun = ++runId.current;
-    const ac = new AbortController(); abortRef.current = ac;
+    const ac = new AbortController(); textAbort.current = ac;
     let full = "", finalText = "";
     try {
       const res = await fetch(`${API}/collections/${id}/lecture/stream?format=${fmt}${refresh ? "&refresh=1" : ""}`, {
@@ -192,7 +203,13 @@ export default function LectureTab({ id, title, readyN, confirm }: {
       if (refresh) {
         setAudioReady(false);
         try { localStorage.removeItem("lecture.pos." + id); } catch {}
-        try { if ("caches" in window) { const c = await caches.open("typdf-audio"); await clearCached(c); } } catch {}
+        try {
+          if ("caches" in window) {
+            const c = await caches.open("typdf-audio");
+            await clearCached(c, AUDIO_KEY);
+            if (keyFor(s) !== AUDIO_KEY) await clearCached(c, keyFor(s));
+          }
+        } catch {}
       }
       setLecBusy(false);
       if (autoAudio) void playLecture(s, headRef.current);
@@ -213,110 +230,117 @@ export default function LectureTab({ id, title, readyN, confirm }: {
     } catch { /* ön parça başarısızsa tam iş zaten üretecek */ }
   }
 
-  async function clearCached(c: Cache) {
-    const m = await c.match(AUDIO_KEY);
+  async function clearCached(c: Cache, key: string) {
+    const m = await c.match(key);
     if (m) {
-      try { if ((m.headers.get("Content-Type") || "").includes("json")) { const man = (await m.json()) as Manifest; for (let i = 0; i < man.n; i++) await c.delete(AUDIO_KEY + "/" + i); } } catch {}
-      await c.delete(AUDIO_KEY);
+      try { if ((m.headers.get("Content-Type") || "").includes("json")) { const man = (await m.json()) as Manifest; for (let i = 0; i < man.n; i++) await c.delete(key + "/" + i); } } catch {}
+      await c.delete(key);
     }
   }
 
   // ---- Ses: cihaz önbelleği ya da parçalı iş -----------------------------------------------------
-  async function fromCache(): Promise<QueueChunk[] | null> {
+  /** Cihaz önbelleğinden parçalar. Oturum bu arada değiştiyse oluşturulan adresler hemen bırakılır. */
+  async function fromCache(cacheKey: string, text: string, key: number): Promise<QueueChunk[] | null> {
+    const made: string[] = [];
+    const mk = (b: Blob) => { const u = URL.createObjectURL(b); made.push(u); return u; };
     try {
       if (!("caches" in window)) return null;
       const c = await caches.open("typdf-audio");
-      const hit = await c.match(AUDIO_KEY);
+      const hit = await c.match(cacheKey);
       if (!hit) return null;
+      let out: QueueChunk[];
       if ((hit.headers.get("Content-Type") || "").includes("json")) {
         const man = (await hit.json()) as Manifest;
-        const out: QueueChunk[] = [];
+        out = [];
         for (let i = 0; i < man.n; i++) {
-          const r = await c.match(AUDIO_KEY + "/" + i); if (!r) return null;
-          const u = URL.createObjectURL(await r.blob()); urlsRef.current.push(u);
-          out.push({ text: man.texts[i] || "", url: u, duration: man.durations[i] });
+          const r = await c.match(cacheKey + "/" + i);
+          if (!r) { made.forEach((u) => URL.revokeObjectURL(u)); return null; }
+          out.push({ text: man.texts[i] || "", url: mk(await r.blob()), duration: man.durations[i] });
         }
-        return out;
+      } else {
+        out = [{ text, url: mk(await hit.blob()) }];   // eski tek dosya
       }
-      const u = URL.createObjectURL(await hit.blob()); urlsRef.current.push(u);   // eski tek dosya
-      return [{ text: lecture, url: u }];
-    } catch { return null; }
+      if (!audio.isCurrent(key)) { made.forEach((u) => URL.revokeObjectURL(u)); return null; }
+      return out;
+    } catch { made.forEach((u) => { try { URL.revokeObjectURL(u); } catch {} }); return null; }
   }
 
   async function playLecture(text = lecture, head = "") {
     if (!text) return;
-    stopAudio();
-    const myRun = ++runId.current;
-    setAudioBusy(true); setLecErr(""); setAudioNote(""); setQuotaOut(false); setShowPlayer(true);
+    const dialog = isDialogText(text);
+    const cacheKey = keyFor(text);
+    const { key, signal } = audio.play({
+      collectionId: id, title, artwork: "/icon", storageKey: "lecture.pos." + id, autoPlay: true,
+      subtitle: `Sesli özet · ${readyN} kaynak${dialog ? " · Ayşe & Kerem" : ""}`,
+    });
+    setLecErr(""); setQuotaOut(false);
     try {
-      const cached = await fromCache();
-      if (runId.current !== myRun) return;
-      if (cached) { setChunks(cached); setJobTotal(cached.length); setAudioBusy(false); return; }
+      const cached = await fromCache(cacheKey, text, key);
+      if (!audio.isCurrent(key)) return;
+      if (cached) { audio.update(key, { chunks: cached, total: cached.length, busy: false }); return; }
       const job: JobState = await api(`/collections/${id}/lecture/tts`, {
         method: "POST",
         body: JSON.stringify({ text: text.slice(0, 12000), voice: voice || undefined, voice2: voice2 || undefined,
-                               format: isDialogText(text) ? "dialog" : "solo", head: head || undefined }),
+                               format: dialog ? "dialog" : "solo", head: head || undefined }),
       }, 1);
-      await followJob(job, myRun);
+      await followJob(job, key, signal, cacheKey);
     } catch (e: any) {
-      if (runId.current !== myRun) return;
+      if (!audio.isCurrent(key)) return;
       if (e?.quota || isUsageLimit(e) || e?.code === "AI_BUSY") setQuotaOut(true);
       setLecErr(String(e?.message || "") || "Seslendirme yapılamadı; biraz sonra tekrar dene.");
-      setShowPlayer(false); setAudioBusy(false);
+      audio.stop();
     }
   }
 
-  async function followJob(first: JobState, myRun: number) {
+  /** Parçalı işi izler. Sekme kapansa da sürer (oturum anahtarıyla); oturum değişince/durunca biter. */
+  async function followJob(first: JobState, key: number, signal: AbortSignal, cacheKey: string) {
     const jid = first.job_id;
     const total = first.total || first.texts.length;
-    setJobTotal(total);
     const list: QueueChunk[] = first.texts.map((t) => ({ text: t }));
-    setChunks([...list]);
+    if (!audio.update(key, { chunks: [...list], total })) return;
     const fetched = new Set<number>();
     const blobs: (Blob | null)[] = new Array(total).fill(null);
     let st: JobState = first;
-    const ac = new AbortController(); abortRef.current = ac;
 
     async function pull(n: number) {
       if (fetched.has(n)) return; fetched.add(n);
-      const res = await fetch(`${API}/tts/jobs/${jid}/chunks/${n}`, { headers: { Authorization: "Bearer " + getToken() }, signal: ac.signal });
+      const res = await fetch(`${API}/tts/jobs/${jid}/chunks/${n}`, { headers: { Authorization: "Bearer " + getToken() }, signal });
       if (!res.ok) { fetched.delete(n); return; }
       const b = await res.blob();
       if (b.size < 500) { fetched.delete(n); return; }
-      if (runId.current !== myRun) return;
+      if (!audio.isCurrent(key)) return;
       blobs[n] = b;
-      const u = URL.createObjectURL(b); urlsRef.current.push(u);
+      const u = URL.createObjectURL(b);
       list[n] = { text: list[n].text, url: u, duration: st.durations?.[String(n)] };
-      setChunks([...list]);
-      if (n === 0) setAudioBusy(false);
+      if (!audio.update(key, n === 0 ? { chunks: [...list], busy: false } : { chunks: [...list] })) URL.revokeObjectURL(u);
     }
 
-    for (let i = 0; i < 600 && runId.current === myRun; i++) {
+    for (let i = 0; i < 600 && audio.isCurrent(key); i++) {
       for (const n of st.ready_chunks || []) await pull(n);
-      setAudioNote(st.note || "");
+      audio.update(key, { note: st.note || "" });
       if (st.status === "error") {
         const err: any = new Error(st.error || "Seslendirme şu an yapılamadı; biraz sonra tekrar dene ya da cihaz sesiyle dinle.");
         err.quota = !!st.quota; throw err;
       }
       if (st.status === "ready" && fetched.size >= total) break;
       await new Promise((r) => setTimeout(r, 2000));
-      if (runId.current !== myRun) return;
+      if (!audio.isCurrent(key)) return;
       try { st = await api(`/tts/jobs/${jid}/chunks`); }
       catch (e: any) {
-        if (e?.status === 404) { setJobLost(true); setAudioBusy(false); setAudioNote(""); return; }
+        if (e?.status === 404) { audio.update(key, { lost: true, busy: false, note: "" }); return; }
         // geçici ağ hatası: yoklamaya devam
       }
     }
-    if (runId.current !== myRun) return;
-    setAudioBusy(false);
+    if (!audio.isCurrent(key)) return;
+    audio.update(key, { busy: false });
     // Tamamı hazır: cihaz önbelleğine yaz (ikinci dinleme ücretsiz, çevrimdışı)
     if (blobs.every((b) => !!b)) {
       try {
         if ("caches" in window) {
           const c = await caches.open("typdf-audio");
-          for (let n = 0; n < total; n++) await c.put(AUDIO_KEY + "/" + n, new Response(blobs[n] as Blob, { headers: { "Content-Type": (blobs[n] as Blob).type || st.mime || "audio/mpeg" } }));
+          for (let n = 0; n < total; n++) await c.put(cacheKey + "/" + n, new Response(blobs[n] as Blob, { headers: { "Content-Type": (blobs[n] as Blob).type || st.mime || "audio/mpeg" } }));
           const man: Manifest = { v: 2, n: total, texts: list.map((c) => c.text), durations: list.map((c) => c.duration || 0), mime: st.mime };
-          await c.put(AUDIO_KEY, new Response(JSON.stringify(man), { headers: { "Content-Type": "application/json" } }));
+          await c.put(cacheKey, new Response(JSON.stringify(man), { headers: { "Content-Type": "application/json" } }));
           setAudioReady(true);
         }
       } catch {}
@@ -324,7 +348,7 @@ export default function LectureTab({ id, title, readyN, confirm }: {
   }
 
   function cancelAll() {
-    stopAudio(); setLecBusy(false);
+    stopText(); stopAudio(); setLecBusy(false);
   }
 
   // ---- Ses örneği (H6: sunucuda sabit örnek, ilk dinleme 1 kullanım) --------------------------------
@@ -354,9 +378,6 @@ export default function LectureTab({ id, title, readyN, confirm }: {
     } finally { clearTimeout(netTimer); setSampling(""); }
   }
   useEffect(() => () => { try { sampleRef.current?.pause(); } catch {} }, []);
-
-  const readyCount = chunks ? chunks.filter((c) => !!c.url).length : 0;
-  const nextEta = chunks && jobTotal > readyCount ? Math.round(((chunks[readyCount]?.text.length || 2600) / 100) + 2) : undefined;
 
   return (
     <div className="max-w-3xl">
@@ -490,11 +511,9 @@ export default function LectureTab({ id, title, readyN, confirm }: {
 
       {showPlayer && chunks && (
         <div className="mt-4">
-          <AudioQueuePlayer chunks={chunks} total={jobTotal || chunks.length} title={title}
-                            subtitle={`Sesli özet · ${readyN} kaynak${dialogAudio ? " · Ayşe & Kerem" : ""}`}
-                            artwork="/icon" storageKey={"lecture.pos." + id} autoPlay
-                            note={audioNote || undefined} preparingEta={nextEta} />
+          <AudioQueuePlayer />
           <p className="mt-2 text-xs text-text-secondary">
+            Başka sayfaya geçsen de ses çalmaya devam eder; alttaki çubuktan durdurabilirsin.
             Ekran kilitliyken kulaklık/bildirim tuşlarıyla kontrol edebilirsin. Kaldığın yer hatırlanır; tamamlanan ses cihazda saklanır, tekrar hazırlanmaz.
             Çalan cümle metinde vurgulanır; bir cümleye dokununca oraya atlar.
           </p>

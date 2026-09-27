@@ -108,7 +108,7 @@ export function TabBar({ tab, onTab, readyN, processing, compact, lastInGroup }:
                   onFocus={() => why && setHint(why)} onBlur={() => setHint(null)}
                   className={cx("flex min-h-[40px] shrink-0 items-center gap-1.5 whitespace-nowrap px-2.5 text-sm sm:px-3",
                     compact ? "rounded-lg" : "border-b-2",
-                    on ? (compact ? "bg-accent-purple/10 font-semibold text-text-primary" : "border-accent-purple font-semibold text-text-primary")
+                    on ? (compact ? "bg-surface-muted font-semibold text-text-primary" : "border-text-primary font-semibold text-text-primary")
                        : cx(!compact && "border-transparent", "text-text-secondary hover:text-text-primary"),
                     why && !on && "opacity-70")}>
             <Icon size={15} aria-hidden className="hidden sm:inline" /> {label}

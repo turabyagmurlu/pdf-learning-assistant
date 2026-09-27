@@ -18,6 +18,7 @@ import PageHeader from "@/components/PageHeader";
 import { etaText, stageInfo } from "@/lib/docstage";
 import SourceIcon, { sourceLabel } from "@/components/SourceIcon";
 import Modal from "@/components/Modal";
+import { coverOf } from "@/lib/covers";
 import AddSourceDialog, { AddSegment } from "@/components/AddSourceDialog";
 import { rejectReason } from "@/lib/sources";
 import { usePrivacyGate } from "@/lib/privacy";
@@ -40,7 +41,7 @@ type Doc = {
   progress_pct?: number | null;
   reading?: { page?: number | null; pct?: number | null; updated_at?: string | null } | null;
 };
-type Col = { id: string; title: string };
+type Col = { id: string; title: string; cover_color?: string | null; cover_icon?: string | null };
 type Prog = { page: number | null; numPages: number | null; pct: number };
 
 const cx = (...a: (string | false | null | undefined)[]) => a.filter(Boolean).join(" ");
@@ -130,7 +131,7 @@ export default function LibraryPage() {
   const reloadCols = useCallback(async () => {
     try {
       const cs = await api("/collections");
-      setCollections(((Array.isArray(cs) ? cs : []) as Col[]).map((c) => ({ id: c.id, title: c.title })));
+      setCollections(((Array.isArray(cs) ? cs : []) as Col[]).map((c) => ({ id: c.id, title: c.title, cover_color: c.cover_color, cover_icon: c.cover_icon })));
     } catch { /* defter listesi gelmezse kenar cubugu bos kalir; kaynaklar yine gorunur */ }
   }, []);
   const reload = useCallback(async () => {
@@ -381,7 +382,7 @@ export default function LibraryPage() {
 
   const gap = density === "compact" ? "gap-2" : "gap-5";
   const pad = density === "compact" ? "p-3" : "p-5";
-  const chip = (on: boolean) => cx("shrink-0 min-h-[36px] rounded-full px-3 text-xs", on ? "bg-accent-purple text-on-accent" : "border bg-surface text-text-secondary hover:border-accent-purple/50");
+  const chip = (on: boolean) => cx("shrink-0 min-h-[36px] rounded-full px-3 text-xs", on ? "border border-text-primary/60 bg-surface-muted font-medium text-text-primary" : "border bg-surface text-text-secondary hover:border-border-strong hover:text-text-primary");
   const ctl = "flex min-h-[40px] items-center gap-1.5 rounded-xl border px-3 text-sm";
   const addBtn = (
     <button type="button" onClick={() => { setAddSeg("dosya"); setAddOpen(true); }}
@@ -396,7 +397,7 @@ export default function LibraryPage() {
              placeholder="Defter adı" aria-label="Yeni defter adı" disabled={nbBusy}
              className="min-w-0 flex-1 rounded-lg border bg-surface px-2.5 py-1.5 text-[16px] outline-none focus:border-accent-purple md:text-sm" />
       <button type="submit" aria-label="Defteri oluştur" disabled={nbBusy || !newNb.trim()}
-              className="flex h-10 w-10 items-center justify-center rounded-lg bg-accent-purple text-on-accent disabled:opacity-50">
+              className="flex h-10 w-10 items-center justify-center rounded-lg border border-border-strong/60 bg-surface text-text-primary hover:bg-surface-hover disabled:opacity-50">
         {nbBusy ? <Loader2 size={14} className="animate-spin" /> : <Check size={14} />}
       </button>
     </form>
@@ -418,7 +419,7 @@ export default function LibraryPage() {
       {loadErr && (
         <div role="alert" className="mt-3 flex flex-wrap items-center justify-between gap-2 rounded-xl border border-warning/40 bg-warning/10 px-4 py-3 text-sm md:mt-0 md:mb-4">
           <span>Kaynakların yüklenemedi; silinmedi. {loadErr}</span>
-          <button type="button" onClick={() => reload()} className="min-h-[40px] rounded-lg bg-accent-purple px-3 text-on-accent">Tekrar dene</button>
+          <button type="button" onClick={() => reload()} className="min-h-[40px] rounded-lg border border-border-strong/60 bg-surface px-3 text-text-primary hover:bg-surface-hover">Tekrar dene</button>
         </div>
       )}
 
@@ -434,24 +435,24 @@ export default function LibraryPage() {
                  className="w-full min-w-0 border-0 bg-transparent py-2 text-[16px] outline-none md:text-sm [&::-webkit-search-cancel-button]:appearance-none" />
         </div>
         <button type="button" onClick={() => setFilterOpen(true)} aria-haspopup="dialog" aria-expanded={filterOpen}
-                className={cx(ctl, "sm:hidden", activeFilters ? "border-accent-purple text-accent-purple" : "bg-surface text-text-secondary")}>
+                className={cx(ctl, "sm:hidden", activeFilters ? "border-text-primary/60 bg-surface-muted font-medium text-text-primary" : "bg-surface text-text-secondary")}>
           <SlidersHorizontal size={15} aria-hidden="true" /> Süz{activeFilters ? ` (${activeFilters})` : ""}
         </button>
         {docs.length > 0 && (
           <button type="button" onClick={() => (selecting ? endSelect() : setSelecting(true))} aria-pressed={selecting}
-                  className={cx(ctl, "sm:order-last", selecting ? "border-accent-purple text-accent-purple" : "bg-surface text-text-secondary")}>
+                  className={cx(ctl, "sm:order-last", selecting ? "border-text-primary/60 bg-surface-muted font-medium text-text-primary" : "bg-surface text-text-secondary")}>
             <CheckSquare size={15} aria-hidden="true" /> <span className="hidden sm:inline">{selecting ? "Seçimi bitir" : "Seç"}</span><span className="sm:hidden">{selecting ? "Bitir" : "Seç"}</span>
           </button>
         )}
         <select value={sort} onChange={(e) => setSort(e.target.value as Sort)} aria-label="Sırala" className="hidden min-h-[40px] rounded-xl border bg-surface px-3 text-sm sm:block">
           {(Object.keys(SORT_LABEL) as Sort[]).map((s) => <option key={s} value={s}>{SORT_LABEL[s]}</option>)}
         </select>
-        <button type="button" onClick={() => setFavOnly((v) => !v)} aria-pressed={favOnly} className={cx(ctl, "hidden sm:flex", favOnly ? "border-accent-purple text-accent-purple" : "bg-surface text-text-secondary")}>
+        <button type="button" onClick={() => setFavOnly((v) => !v)} aria-pressed={favOnly} className={cx(ctl, "hidden sm:flex", favOnly ? "border-text-primary/60 bg-surface-muted font-medium text-text-primary" : "bg-surface text-text-secondary")}>
           <Star size={15} className={favOnly ? "fill-current" : ""} aria-hidden="true" /> Favoriler
         </button>
         <div className="hidden items-center rounded-xl border bg-surface sm:flex" role="group" aria-label="Görünüm">
-          <button type="button" onClick={() => setView("grid")} aria-label="Izgara görünümü" aria-pressed={view === "grid"} className={cx("flex h-10 w-10 items-center justify-center rounded-l-xl", view === "grid" ? "text-accent-purple" : "text-text-secondary")}><LayoutGrid size={16} /></button>
-          <button type="button" onClick={() => setView("list")} aria-label="Liste görünümü" aria-pressed={view === "list"} className={cx("flex h-10 w-10 items-center justify-center rounded-r-xl", view === "list" ? "text-accent-purple" : "text-text-secondary")}><List size={16} /></button>
+          <button type="button" onClick={() => setView("grid")} aria-label="Izgara görünümü" aria-pressed={view === "grid"} className={cx("flex h-10 w-10 items-center justify-center rounded-l-xl", view === "grid" ? "bg-surface-muted text-text-primary" : "text-text-secondary")}><LayoutGrid size={16} /></button>
+          <button type="button" onClick={() => setView("list")} aria-label="Liste görünümü" aria-pressed={view === "list"} className={cx("flex h-10 w-10 items-center justify-center rounded-r-xl", view === "list" ? "bg-surface-muted text-text-primary" : "text-text-secondary")}><List size={16} /></button>
         </div>
         <button type="button" onClick={() => setDensity((d) => (d === "comfortable" ? "compact" : "comfortable"))}
                 aria-label={density === "comfortable" ? "Sık görünüme geç" : "Ferah görünüme geç"}
@@ -488,11 +489,11 @@ export default function LibraryPage() {
       {/* sm+: kategori ve etiket cipleri */}
       {(categories.length > 0 || allTags.length > 0) && (
         <div className="mt-3 hidden flex-wrap items-center gap-1.5 sm:flex">
-          {cat && <button type="button" onClick={() => setCat("")} aria-label={`Kategori süzgecini kaldır: ${cat}`} className="min-h-[32px] rounded-full bg-accent-purple/15 px-2.5 text-xs text-accent-purple">kategori: {cat} ✕</button>}
+          {cat && <button type="button" onClick={() => setCat("")} aria-label={`Kategori süzgecini kaldır: ${cat}`} className="min-h-[32px] rounded-full border border-text-primary/60 bg-surface-muted px-2.5 text-xs font-medium text-text-primary">kategori: {cat} ✕</button>}
           {!cat && categories.map((c) => (
             <button type="button" key={c} onClick={() => setCat(c)} className="min-h-[32px] rounded-full border bg-surface px-2.5 text-xs text-text-secondary hover:border-accent-purple/50">{c}</button>
           ))}
-          {tag && <button type="button" onClick={() => setTag("")} aria-label={`Etiket süzgecini kaldır: ${tag}`} className="min-h-[32px] rounded-full bg-accent-purple/15 px-2.5 text-xs text-accent-purple">#{tag} ✕</button>}
+          {tag && <button type="button" onClick={() => setTag("")} aria-label={`Etiket süzgecini kaldır: ${tag}`} className="min-h-[32px] rounded-full border border-text-primary/60 bg-surface-muted px-2.5 text-xs font-medium text-text-primary">#{tag} ✕</button>}
           {!tag && allTags.slice(0, 12).map((t) => (
             <button type="button" key={t} onClick={() => setTag(t)} className="min-h-[32px] rounded-full border bg-surface px-2.5 text-xs text-text-secondary hover:border-accent-purple/50">#{t}</button>
           ))}
@@ -509,7 +510,8 @@ export default function LibraryPage() {
             const n = docs.filter((d) => colIds(d).includes(c.id)).length;
             return (
               <button type="button" key={c.id} onClick={() => setNb(nb === c.id ? "" : c.id)} aria-pressed={nb === c.id}
-                      aria-label={`${c.title} defterindeki kaynakları göster (${n})`} className={cx(chip(nb === c.id), "max-w-[180px]")}>
+                      aria-label={`${c.title} defterindeki kaynakları göster (${n})`} className={cx(chip(nb === c.id), "flex max-w-[180px] items-center gap-1.5")}>
+                <span aria-hidden="true" className={cx("h-2 w-2 shrink-0 rounded-full", coverOf(c).tone.dot)} />
                 <span className="truncate">{c.title}</span> <span className="opacity-80">{n}</span>
               </button>
             );
@@ -601,7 +603,7 @@ export default function LibraryPage() {
               {/* rozetler: en fazla 1 renkli (durum); "Hazır" gosterilmez, gerisi notr */}
               <div className="mt-2 flex flex-wrap items-center gap-1.5 text-xs">
                 {d.status !== "ready" && (
-                  <span className={cx("rounded-full px-2 py-0.5", d.status === "failed" ? "bg-danger-bg text-danger" : "bg-accent-purple/10 text-accent-purple")}>{st.label}</span>
+                  <span className={cx("rounded-full px-2 py-0.5", d.status === "failed" ? "bg-danger-bg text-danger" : "bg-info-bg text-info")}>{st.label}</span>
                 )}
                 {d.category && <span className="rounded-full bg-surface-muted px-2 py-0.5 text-text-secondary">{d.category}</span>}
                 {d.page_count ? <span className="rounded-full bg-surface-muted px-2 py-0.5 text-text-secondary">{d.page_count} sayfa</span> : null}
@@ -683,7 +685,7 @@ export default function LibraryPage() {
 
           <button type="button" onClick={() => setNb("")} aria-pressed={nb === ""}
                   className={cx("flex min-h-[40px] w-full items-center justify-between rounded-lg px-2.5 text-sm",
-                    nb === "" ? "bg-accent-purple/10 text-accent-purple" : "text-text-secondary hover:bg-surface-muted")}>
+                    nb === "" ? "bg-surface-muted font-medium text-text-primary" : "text-text-secondary hover:bg-surface-muted")}>
             <span>Tüm kaynaklar</span>
             <span className="text-xs">{docs.length}</span>
           </button>
@@ -701,18 +703,18 @@ export default function LibraryPage() {
                            aria-label="Defter adı"
                            className="min-w-0 flex-1 rounded-lg border bg-surface px-2.5 py-1.5 text-sm outline-none focus:border-accent-purple" />
                     <button type="button" onMouseDown={(e) => e.preventDefault()} onClick={() => renameNb(c.id)}
-                            aria-label="Adı kaydet" className="flex h-10 w-10 items-center justify-center rounded-lg bg-accent-purple text-on-accent"><Check size={14} /></button>
+                            aria-label="Adı kaydet" className="flex h-10 w-10 items-center justify-center rounded-lg border border-border-strong/60 bg-surface text-text-primary hover:bg-surface-hover"><Check size={14} /></button>
                   </div>
                 );
               }
               return (
                 <div key={c.id}
-                     className={cx("group relative flex items-center rounded-lg", on ? "bg-accent-purple/10" : "hover:bg-surface-muted")}>
+                     className={cx("group relative flex items-center rounded-lg", on ? "bg-surface-muted" : "hover:bg-surface-muted")}>
                   <button type="button" onClick={() => setNb(on ? "" : c.id)} aria-pressed={on}
                           aria-label={`${c.title} defterindeki kaynakları göster (${n})`}
                           className={cx("flex min-h-[40px] min-w-0 flex-1 items-center gap-2 px-2.5 text-left text-sm",
-                            on ? "text-accent-purple" : "text-text-secondary")}>
-                    <Notebook size={14} className="shrink-0 opacity-70" aria-hidden="true" />
+                            on ? "font-medium text-text-primary" : "text-text-secondary")}>
+                    <span aria-hidden="true" className={cx("h-2.5 w-2.5 shrink-0 rounded-full", coverOf(c).tone.dot)} />
                     <span className="truncate">{c.title}</span>
                     <span className="ml-auto pl-1 text-xs">{n}</span>
                   </button>
@@ -752,7 +754,7 @@ export default function LibraryPage() {
           {looseCount > 0 && (
             <button type="button" onClick={() => setNb(nb === "__none__" ? "" : "__none__")} aria-pressed={nb === "__none__"}
                     className={cx("mt-1 flex min-h-[40px] w-full items-center justify-between rounded-lg px-2.5 text-sm",
-                      nb === "__none__" ? "bg-accent-purple/10 text-accent-purple" : "text-text-secondary hover:bg-surface-muted")}>
+                      nb === "__none__" ? "bg-surface-muted font-medium text-text-primary" : "text-text-secondary hover:bg-surface-muted")}>
               <span className="flex items-center gap-2"><Notebook size={14} className="opacity-50" aria-hidden="true" /> Deftersiz</span>
               <span className="text-xs">{looseCount}</span>
             </button>
@@ -837,7 +839,7 @@ export default function LibraryPage() {
 
       {selecting && (
         <div className="fixed inset-x-0 z-40 flex justify-center px-3"
-             style={{ bottom: "calc(var(--bottom-nav, 0px) + 12px)" }}>
+             style={{ bottom: "calc(var(--bottom-nav, 0px) + var(--mini-player-h, 0px) + 12px)" }}>
           <div className="flex w-full max-w-lg items-center gap-2 rounded-2xl border bg-surface p-2 pl-4 shadow-medium" role="region" aria-label="Seçili kaynaklar">
             <span className="flex-1 text-sm" role="status">{selected.size} kaynak seçildi</span>
             <button type="button" onClick={endSelect} className="min-h-[44px] rounded-xl border px-3 text-sm hover:bg-surface-muted">Vazgeç</button>

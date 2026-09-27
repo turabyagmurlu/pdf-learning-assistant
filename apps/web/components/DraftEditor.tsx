@@ -634,7 +634,7 @@ export default function DraftEditor({ notebookId, title, initial, initialRev, ma
                     className={cx("block w-full rounded-lg border bg-surface p-2.5 text-left hover:border-accent-purple/50", inUse && "opacity-50")}>
               {n.selected_text && <p className="line-clamp-3 text-xs leading-relaxed" style={{ borderLeft: "3px solid " + (n.highlight_color || "#FFE78A"), paddingLeft: 8 }}>{n.selected_text}</p>}
               {n.note_content && <p className="mt-1 line-clamp-2 text-xs italic text-text-secondary">{n.note_content}</p>}
-              <p className="mt-1 text-[11px] text-text-secondary">{n.document_title}{n.page_number ? " · s." + n.page_number : ""}{inUse ? " · taslakta" : ""}</p>
+              <p className="mt-1 text-xs text-text-secondary">{n.document_title}{n.page_number ? " · s." + n.page_number : ""}{inUse ? " · taslakta" : ""}</p>
             </button>
           );
         })}
@@ -738,7 +738,7 @@ export default function DraftEditor({ notebookId, title, initial, initialRev, ma
             <div className="flex flex-wrap items-center gap-2">
               <p className="flex items-center gap-1.5 text-sm font-medium"><ShieldCheck size={15} className="text-green-700" /> İddia doğrulama</p>
               {ver.counts && Object.entries(VMETA).map(([k, m]) => (
-                <span key={k} className={cx("rounded-full border px-2 py-0.5 text-[11px]", m.c)}>{m.t}: {ver.counts?.[k] || 0}</span>
+                <span key={k} className={cx("rounded-full border px-2 py-0.5 text-xs", m.c)}>{m.t}: {ver.counts?.[k] || 0}</span>
               ))}
               <button onClick={() => setVer(null)} aria-label="Doğrulama sonuçlarını kapat" className="ml-auto flex h-9 w-9 items-center justify-center rounded-md text-text-secondary hover:bg-surface-muted"><X size={15} /></button>
             </div>
@@ -746,7 +746,7 @@ export default function DraftEditor({ notebookId, title, initial, initialRev, ma
             {ver.error && <p className="mt-2 text-sm text-danger">{ver.error}</p>}
             {!!ver.results?.length && (
               <>
-                <p className="mt-1 text-[11px] text-text-secondary">
+                <p className="mt-1 text-xs text-text-secondary">
                   Yalnız defterindeki kaynaklara göre değerlendirildi{ver.cached ? ` · ${ver.cached} cümle daha önce kontrol edilmişti (ücretsiz)` : ""}.
                 </p>
                 <ul className="mt-3 max-h-[50vh] space-y-2 overflow-y-auto pr-1">
@@ -760,11 +760,11 @@ export default function DraftEditor({ notebookId, title, initial, initialRev, ma
                           {r.evidence && (
                             <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
                               <button onClick={() => openDoc(r.evidence!.document_id, r.evidence!.page)}
-                                      className="flex min-h-[32px] items-center gap-1 rounded-full border bg-surface px-2 py-0.5 text-[11px] text-text-secondary hover:text-accent-purple">
+                                      className="flex min-h-[32px] items-center gap-1 rounded-full border bg-surface px-2 py-0.5 text-xs text-text-secondary hover:text-accent-purple">
                                 <ExternalLink size={10} /> {r.evidence.title}{r.evidence.time ? " · ▶ " + r.evidence.time : r.evidence.page ? ` · ${r.evidence.unit || "s."} ${r.evidence.page}` : ""}
                               </button>
                               {(r.verdict === "destek" || r.verdict === "kismi") && (
-                                <button onClick={() => addEvidence(r)} className="min-h-[32px] rounded-full border border-green-600/40 bg-surface px-2 py-0.5 text-[11px] text-green-800 hover:bg-green-500/10">
+                                <button onClick={() => addEvidence(r)} className="min-h-[32px] rounded-full border border-green-600/40 bg-surface px-2 py-0.5 text-xs text-green-800 hover:bg-green-500/10">
                                   + Kanıtı alıntı olarak ekle
                                 </button>
                               )}
@@ -845,7 +845,7 @@ export default function DraftEditor({ notebookId, title, initial, initialRev, ma
                                 title={costTitle(1)}
                                 className="block w-full px-3 py-2 text-left hover:bg-surface-muted focus-visible:bg-surface-muted">
                           <span className="flex items-center text-sm">{label} <Cost n={1} /></span>
-                          <span className="block text-[11px] text-text-secondary">{desc}</span>
+                          <span className="block text-xs text-text-secondary">{desc}</span>
                         </button>
                       ))}
                     </div>
@@ -913,14 +913,14 @@ export default function DraftEditor({ notebookId, title, initial, initialRev, ma
                   </div>
                   {b.note && <p className="mt-2 pl-6 text-sm italic text-text-secondary">{b.note}</p>}
                   <button onClick={() => openDoc(b.document_id, b.page)}
-                          className="mt-2 ml-6 flex min-h-[32px] items-center gap-1 rounded-full border bg-surface px-2 py-0.5 text-[11px] text-text-secondary hover:border-accent-purple/50 hover:text-accent-purple">
+                          className="mt-2 ml-6 flex min-h-[32px] items-center gap-1 rounded-full border bg-surface px-2 py-0.5 text-xs text-text-secondary hover:border-accent-purple/50 hover:text-accent-purple">
                     <ExternalLink size={10} /> {cite(b)}
                   </button>
                 </div>
               )}
               {b.type === "answer" && (
                 <div className="my-2 rounded-xl border border-accent-purple/30 bg-accent-purple/5 p-3">
-                  <div className="flex items-center gap-1.5 text-[11px] uppercase tracking-wide text-accent-purple"><Sparkles size={12} /> Sohbet cevabı</div>
+                  <div className="flex items-center gap-1.5 text-xs uppercase tracking-wide text-accent-purple"><Sparkles size={12} /> Sohbet cevabı</div>
                   <p className="mt-1 text-sm font-medium">{b.q}</p>
                   {/* H-1: markdown biçimli, metin içindeki [K#] tıklanabilir */}
                   <CitedText text={b.text} sources={b.sources} className="mt-1.5 text-[14px] leading-relaxed"
@@ -928,7 +928,7 @@ export default function DraftEditor({ notebookId, title, initial, initialRev, ma
                   <div className="mt-2 flex flex-wrap items-center gap-1">
                     {b.sources.map((s, j) => (
                       <button key={j} onClick={() => openDoc(s.document_id, s.page)}
-                              className="min-h-[32px] rounded-full border bg-surface px-2 py-0.5 text-[11px] text-text-secondary hover:border-accent-purple/50 hover:text-accent-purple">
+                              className="min-h-[32px] rounded-full border bg-surface px-2 py-0.5 text-xs text-text-secondary hover:border-accent-purple/50 hover:text-accent-purple">
                         [K{j + 1}] {s.title}{s.page ? " · s." + s.page : ""}
                       </button>
                     ))}
@@ -958,7 +958,7 @@ export default function DraftEditor({ notebookId, title, initial, initialRev, ma
                   {assist.error && <p className="text-danger">{assist.error} <button onClick={() => setAssist(null)} className="ml-2 underline">kapat</button></p>}
                   {assist.text !== undefined && !assist.busy && (
                     <>
-                      <p className="mb-1 flex items-center gap-1 text-[11px] uppercase tracking-wide text-accent-purple"><Sparkles size={11} /> Öneri — {assist.action === "paraphrase" ? "kendi cümlelerinle" : assist.action === "shorten" ? "kısaltılmış" : assist.action === "academic" ? "akademik ton" : "düzenlenmiş"}</p>
+                      <p className="mb-1 flex items-center gap-1 text-xs uppercase tracking-wide text-accent-purple"><Sparkles size={11} /> Öneri — {assist.action === "paraphrase" ? "kendi cümlelerinle" : assist.action === "shorten" ? "kısaltılmış" : assist.action === "academic" ? "akademik ton" : "düzenlenmiş"}</p>
                       <p className="whitespace-pre-wrap leading-relaxed">{assist.text}</p>
                       <div className="mt-2 flex flex-wrap gap-2">
                         <button onClick={applyAssist} className="flex min-h-[40px] items-center gap-1 rounded-lg bg-accent-purple px-3 py-1.5 text-white"><Check size={13} /> {assist.action === "paraphrase" ? (blocks[assist.idx]?.type === "quote" ? "Altına paragraf olarak ekle" : "Paragrafın yerine koy") : "Uygula"}</button>
@@ -969,7 +969,7 @@ export default function DraftEditor({ notebookId, title, initial, initialRev, ma
                   )}
                   {assist.suggestions && !assist.busy && (
                     <>
-                      <p className="mb-1 flex items-center gap-1 text-[11px] uppercase tracking-wide text-accent-purple"><Sparkles size={11} /> Bu paragrafı destekleyebilecek vurgular</p>
+                      <p className="mb-1 flex items-center gap-1 text-xs uppercase tracking-wide text-accent-purple"><Sparkles size={11} /> Bu paragrafı destekleyebilecek vurgular</p>
                       {assist.suggestions.length === 0 ? (
                         <p className="text-text-secondary">{assist.why || "Uygun vurgu bulunamadı."}</p>
                       ) : (
@@ -978,10 +978,10 @@ export default function DraftEditor({ notebookId, title, initial, initialRev, ma
                             <button key={sg.id} onClick={() => addSuggested(sg)} title="Alıntı kartı olarak ekle"
                                     className="block w-full rounded-lg border bg-surface p-2 text-left hover:border-accent-purple/50">
                               <p className="line-clamp-2 text-xs leading-relaxed" style={{ borderLeft: "3px solid " + (sg.color || "#FFE78A"), paddingLeft: 8 }}>[{k + 1}] {sg.text}</p>
-                              <p className="mt-0.5 text-[11px] text-text-secondary">{sg.document_title}{sg.page ? " · s." + sg.page : ""} · uyum %{Math.round((sg.score || 0) * 100)}</p>
+                              <p className="mt-0.5 text-xs text-text-secondary">{sg.document_title}{sg.page ? " · s." + sg.page : ""} · uyum %{Math.round((sg.score || 0) * 100)}</p>
                             </button>
                           ))}
-                          {assist.why && <p className="whitespace-pre-wrap pt-1 text-[11px] text-text-secondary">{assist.why}</p>}
+                          {assist.why && <p className="whitespace-pre-wrap pt-1 text-xs text-text-secondary">{assist.why}</p>}
                         </div>
                       )}
                       <button onClick={() => setAssist(null)} className="mt-2 min-h-[40px] rounded-lg border px-3 py-1.5 text-text-secondary">Kapat</button>
@@ -1010,7 +1010,7 @@ export default function DraftEditor({ notebookId, title, initial, initialRev, ma
             </div>
           ))}
         </div>
-        <p className="mt-2 text-[11px] text-text-secondary">
+        <p className="mt-2 text-xs text-text-secondary">
           Kendi yazdıkların düz metin olarak görünür. Renkli kenarlı kartlar kaynaklardan alıntı, mor kartlar sohbet cevabıdır; kartların içine yazılmaz, altına paragraf açılır.
           Bir bloğa dokun ya da üzerine gel: taşı, sil, araya paragraf ekle. Kaldırdığın bloğu 10 saniye içinde “Geri al” ile geri getirebilirsin.
         </p>

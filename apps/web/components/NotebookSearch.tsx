@@ -89,7 +89,7 @@ export default function NotebookSearch({ collectionId, readyCount }: { collectio
           {([["text", "Kelime", Type], ["meaning", "Anlamca", Brain], ["hybrid", "Karma", Layers]] as const).map(([k, l, I]) => (
             <button key={k} onClick={() => setMode(k)} role="radio" aria-checked={mode === k}
                     className={cx("flex min-h-[36px] items-center gap-1 rounded-lg px-2.5 py-1 text-xs",
-                      mode === k ? "bg-accent-soft font-medium text-accent-purple" : "text-text-secondary hover:bg-surface-hover")}>
+                      mode === k ? "bg-surface-muted font-medium text-text-primary" : "text-text-secondary hover:bg-surface-hover")}>
               <I size={12} /> {l}
             </button>
           ))}
@@ -117,26 +117,26 @@ export default function NotebookSearch({ collectionId, readyCount }: { collectio
                         className="flex w-full items-center gap-2 px-3 py-2 text-left hover:bg-surface-hover">
                   <FileText size={14} className="shrink-0 text-accent-purple" />
                   <span className="min-w-0 flex-1 truncate text-sm font-medium">{g.title}</span>
-                  <span className="shrink-0 rounded-full bg-surface px-2 py-0.5 text-2xs text-text-secondary">{g.count} yer</span>
+                  <span className="shrink-0 rounded-full bg-surface px-2 py-0.5 text-xs text-text-secondary">{g.count} yer</span>
                 </button>
                 <div className="divide-y border-t">
                   {g.hits.map((h, i) => (
                     <button key={i} onClick={() => open(g.document_id, h.page)}
                             title={h.how === "meaning" ? "Anlamca yakın (kelime birebir geçmiyor)" : "Kelime birebir geçiyor"}
                             className="flex w-full items-start gap-2.5 px-3 py-2 text-left hover:bg-surface-hover">
-                      <span className={cx("mt-0.5 shrink-0 rounded-md px-1.5 py-0.5 text-2xs font-medium",
+                      <span className={cx("mt-0.5 shrink-0 rounded-md px-1.5 py-0.5 text-xs font-medium",
                         h.how === "meaning" ? "bg-info-bg text-info" : "bg-surface-muted text-text-secondary")}>
                         s.{h.page ?? "?"}
                       </span>
                       <span className="min-w-0 flex-1 text-xs leading-relaxed text-text-secondary">
-                        {h.section && <span className="mr-1 text-2xs uppercase tracking-wide text-text-secondary">{h.section} ·</span>}
+                        {h.section && <span className="mr-1 text-xs uppercase tracking-wide text-text-secondary">{h.section} ·</span>}
                         <Mark text={h.snippet} q={res.query} />
                       </span>
                       <ExternalLink size={12} className="mt-1 shrink-0 text-text-secondary/60" />
                     </button>
                   ))}
                   {g.count > g.hits.length && (
-                    <p className="px-3 py-1.5 text-2xs text-text-secondary">+{g.count - g.hits.length} yer daha bu kaynakta</p>
+                    <p className="px-3 py-1.5 text-xs text-text-secondary">+{g.count - g.hits.length} yer daha bu kaynakta</p>
                   )}
                 </div>
               </div>

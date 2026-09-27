@@ -1,15 +1,15 @@
 "use client";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import dynamic from "next/dynamic";
 import { api } from "@/lib/api";
 import {
   exportMarkdown, Annotation, HIGHLIGHT_COLORS, HighlightStyle, PenPrefs, loadPenPrefs, savePenPrefs,
-  OPACITY_STEPS, DEFAULT_OPACITY,
+  OPACITY_STEPS, DEFAULT_OPACITY, annotationMarks,
 } from "@/lib/reader";
 import { stageInfo } from "@/lib/docstage";
 import { useAnnotations } from "@/hooks/useAnnotations";
 import { usePoll } from "@/hooks/usePoll";
-import ReaderToolbar, { ReaderMoreMenu, ReaderBottomBar, Theme, Tool, isPenTool } from "@/components/reader/ReaderToolbar";
+import ReaderToolbar, { ReaderMoreMenu, ReaderBottomBar, Theme, Tool, usePaper } from "@/components/reader/ReaderToolbar";
 import PenPalette from "@/components/reader/PenPalette";
 import ReaderHeader, { useNotebookContext, notebookHref, useMedia } from "@/components/reader/ReaderHeader";
 import { useAddToDraft } from "@/components/reader/useAddToDraft";
@@ -92,6 +92,8 @@ export default function DocumentPage({ params }: { params: { id: string } }) {
   }
 
   const [theme, setTheme] = useState<Theme>("light");
+  // Okuma kagidi (Ajan V2): Otomatik / Beyaz / Krem / Gece — yalniz sayfa yuzeyi; "typdf-paper"
+  const { paper, setPaper, paperTone } = usePaper(theme);
   const [focus, setFocus] = useState(false);
   // Paneller kapali baslar; genis ekranda (>=1024) kayitli tercih uygulanir. Dar ekranda
   // paneller alttan acilan tabaka olur ve her acilista kapali gelir (PDF once gorunsun).
@@ -124,6 +126,8 @@ export default function DocumentPage({ params }: { params: { id: string } }) {
   const ctx = useNotebookContext(doc);
   const { addToDraft, picker: draftPicker } = useAddToDraft(doc, ctx);
   const { annotations, add, patch, remove, restore } = useAnnotations(id);
+  // vurgu haritasi (metin gorunumu): her vurgu / not icin sayfa + konum + renk
+  const marks = useMemo(() => annotationMarks(annotations), [annotations]);
   // okuma konumu cihazlar arasi: 3 sn gecikmeli yazma, baska cihazdaki konum basliktaki cipte
   const { serverPage, serverDevice } = useReadingSync(id, {
     page, numPages, pct: numPages ? Math.round((page / numPages) * 100) : 0,
@@ -507,7 +511,7 @@ export default function DocumentPage({ params }: { params: { id: string } }) {
   const tb = {
     page, numPages, setPage, scale, setScale, spread, setSpread, tool, setTool, theme, setTheme,
     focus, setFocus, leftOpen, setLeftOpen: openLeft, rightOpen, setRightOpen: openRight, onExport,
-    onUndo: undo, onRedo: redo,
+    onUndo: undo, onRedo: redo, paper, paperTone, setPaper,
     canUndo: histTick >= 0 && undoRef.current.length > 0, canRedo: histTick >= 0 && redoRef.current.length > 0,
   };
   const st = stageInfo(doc);
@@ -631,7 +635,7 @@ export default function DocumentPage({ params }: { params: { id: string } }) {
       <div role="group" aria-label="Görünüm" className="hidden shrink-0 items-center rounded-lg border p-0.5 text-xs md:flex">
         {([["page", "Sayfa", FileText], ["text", "Metin", AlignLeft]] as const).map(([k, label, Icon]) => (
           <button key={k} type="button" aria-pressed={viewMode === k} onClick={() => setViewMode(k)}
-                  className={`flex h-9 min-w-[60px] items-center justify-center gap-1 rounded-md px-2 ${viewMode === k ? "bg-accent-purple/10 font-medium text-accent-purple" : "text-text-secondary hover:bg-surface-muted"}`}>
+                  className={`flex h-10 min-w-[60px] items-center justify-center gap-1 rounded-md px-2 ${viewMode === k ? "bg-accent-purple/10 font-medium text-accent-purple" : "text-text-secondary hover:bg-surface-muted"}`}>
             <Icon size={14} aria-hidden /> {label}
           </button>
         ))}
@@ -665,7 +669,8 @@ export default function DocumentPage({ params }: { params: { id: string } }) {
   const pdfView = fileUrl ? (
     viewMode === "text" ? (
       <TextView fileUrl={fileUrl} page={page} onPageChange={setPage} onAsk={onAsk}
-                onAddToDraft={(text: string, pg: number) => addToDraft(text, pg)} theme={theme} />
+                onAddToDraft={(text: string, pg: number) => addToDraft(text, pg)} theme={theme}
+                paper={paperTone} marks={marks} />
     ) : (
       <PinchZoom scale={scale} onScaleChange={(s: number) => setScale(() => s)} fitLabel="Sığdır">
         <PdfReader
@@ -678,11 +683,13 @@ export default function DocumentPage({ params }: { params: { id: string } }) {
           onSelectAnnotation={(a) => { setEditing(a); showNotes(); }}
           onAsk={onAsk}
           onAddToDraft={(text, pg) => addToDraft(text, pg)}
+          paper={paperTone}
         />
       </PinchZoom>
     )
   ) : (
-    <div className="reader-surround flex h-full items-center justify-center p-6 text-center text-sm" style={{ color: "var(--r-ink-2)" }} role="status">
+    <div className="reader-surround flex h-full items-center justify-center p-6 text-center text-sm" data-paper={paperTone}
+         style={{ color: "var(--paper-surround-ink, var(--r-ink-2))" }} role="status">
       {doc.status === "failed" ? "Bu PDF açılamadı." : "PDF hazırlanıyor…"}
     </div>
   );
@@ -742,7 +749,7 @@ export default function DocumentPage({ params }: { params: { id: string } }) {
           {/* okuma ilerlemesi */}
           <div aria-hidden className="pointer-events-none absolute bottom-0 left-0 h-1 bg-accent-purple/70 transition-all" style={{ width: `${progress}%` }} />
           {numPages > 0 && (
-            <div aria-hidden className="pointer-events-none absolute bottom-3 right-4 hidden rounded-full bg-black/60 px-2.5 py-1 text-xs text-white lg:block">
+            <div aria-hidden className="pointer-events-none absolute bottom-3 right-10 hidden rounded-full bg-black/60 px-2.5 py-1 text-xs text-white lg:block">
               s.{page} / {numPages} · %{progress}
             </div>
           )}
@@ -863,7 +870,7 @@ function NoteEditor({ ann, onClose, onSave, onDelete }: {
           <div role="group" aria-label="Stil" className="flex items-center rounded-lg border p-0.5 text-xs">
             {([["highlight", "Vurgu"], ["underline", "Altı çizili"]] as const).map(([k, label]) => (
               <button key={k} type="button" aria-pressed={style === k} onClick={() => setStyle(k)}
-                      className={`h-9 rounded-md px-2.5 ${style === k ? "bg-accent-purple/10 font-medium text-accent-purple" : "text-text-secondary hover:bg-surface-muted"}`}>
+                      className={`h-10 rounded-md px-2.5 ${style === k ? "bg-accent-purple/10 font-medium text-accent-purple" : "text-text-secondary hover:bg-surface-muted"}`}>
                 {label}
               </button>
             ))}
@@ -871,7 +878,7 @@ function NoteEditor({ ann, onClose, onSave, onDelete }: {
           <div role="group" aria-label={style === "underline" ? "Çizgi kalınlığı" : "Koyuluk"} className="flex items-center rounded-lg border p-0.5 text-xs">
             {OPACITY_STEPS.map((st) => (
               <button key={st.key} type="button" aria-pressed={opacity === st.value} onClick={() => setOpacity(st.value)}
-                      className={`h-9 rounded-md px-2.5 ${opacity === st.value ? "bg-accent-purple/10 font-medium text-accent-purple" : "text-text-secondary hover:bg-surface-muted"}`}>
+                      className={`h-10 rounded-md px-2.5 ${opacity === st.value ? "bg-accent-purple/10 font-medium text-accent-purple" : "text-text-secondary hover:bg-surface-muted"}`}>
                 {st.label}
               </button>
             ))}
@@ -889,7 +896,7 @@ function NoteEditor({ ann, onClose, onSave, onDelete }: {
         </button>
         <div className="flex gap-2">
           <button type="button" onClick={onClose} className="min-h-[44px] rounded-lg px-3 text-sm text-text-secondary hover:bg-black/5">Vazgeç</button>
-          <button type="button" onClick={save} className="min-h-[44px] rounded-lg bg-accent-purple px-4 text-sm text-white">Kaydet</button>
+          <button type="button" onClick={save} className="min-h-[44px] rounded-lg bg-accent-purple px-4 text-sm font-medium text-on-accent">Kaydet</button>
         </div>
       </div>
     </Modal>

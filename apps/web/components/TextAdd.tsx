@@ -55,7 +55,7 @@ export default function TextAdd({ collectionId, onAdded, startOpen, quiet }: {
                 placeholder="Metni buraya yapıştır… (# ile başlayan satırlar bölüm başlığı sayılır)"
                 className="w-full rounded-lg border bg-surface px-3 py-2 text-sm outline-none focus:border-accent-purple" />
       <div className="mt-2 flex items-center gap-2">
-        <span className="text-2xs text-text-secondary">{text.trim() ? `${text.trim().split(/\s+/).length} kelime` : ""}</span>
+        <span className="text-xs text-text-secondary">{text.trim() ? `${text.trim().split(/\s+/).length} kelime` : ""}</span>
         {!startOpen && <Button variant="ghost" onClick={() => setOpen(false)} className="ml-auto">Vazgeç</Button>}
         <Button variant="primary" onClick={save} disabled={busy} className={startOpen ? "ml-auto" : ""}>
           {busy && <Loader2 size={14} className="animate-spin" />} Kaynak olarak ekle

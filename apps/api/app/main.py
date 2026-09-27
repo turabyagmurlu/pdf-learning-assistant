@@ -45,6 +45,9 @@ async def lifespan(app: FastAPI):
             await conn.execute("ALTER TABLE collections ADD COLUMN IF NOT EXISTS topics jsonb")
             await conn.execute("ALTER TABLE collections ADD COLUMN IF NOT EXISTS suggestions_hash text")
             await conn.execute("ALTER TABLE collections ADD COLUMN IF NOT EXISTS suggestions_at timestamptz")
+            # Defter kapagi: renk anahtari + simge adi (bossa istemci/sunucu varsayilani kullanir)
+            await conn.execute("ALTER TABLE collections ADD COLUMN IF NOT EXISTS cover_color text")
+            await conn.execute("ALTER TABLE collections ADD COLUMN IF NOT EXISTS cover_icon text")
             # Belge bazli cikarim onbellegi: sozluk/iliski/olay sonucu belgeye yazilir,
             # "Yenile" yalniz yeni belgeler icin LLM'e gider.
             await conn.execute(

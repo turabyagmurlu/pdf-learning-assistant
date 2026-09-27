@@ -1,5 +1,5 @@
 "use client";
-import { useEffect, useRef, useState } from "react";
+import { Suspense, useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { Library, LogOut, Search, Notebook, Sun, Moon, MonitorSmartphone, MoreHorizontal, Keyboard, Trash2 } from "lucide-react";
@@ -12,6 +12,8 @@ import Wake from "@/components/Wake";
 import QuotaMeter from "@/components/QuotaMeter";
 import CommandPalette, { openPalette } from "@/components/CommandPalette";
 import ToastHost from "@/components/Toast";
+import { AudioProvider } from "@/components/audio/AudioProvider";
+import MiniPlayer from "@/components/audio/MiniPlayer";
 
 const NAV = [
   { href: "/notebooks", label: "Defterler", Icon: Notebook, title: "Defterler" },
@@ -53,6 +55,8 @@ function TrashBadge({ n }: { n: number }) {
  *  --sidebar-w  : sol menu genisligi. Telefon 0 · md (768-1023) 72px ikon rayi · lg+ 224px tam menu.
  *                 Okuyucuda 0. Ornek (yapiskan serit): md:left-[var(--sidebar-w)]
  *  --reader-bar : okuyucunun dar ekrandaki alt cubugu (64px); diger durumlarda 0/tanimsiz.
+ *  --mini-player-h : kalici ses mini cubugu gorunurken 56px (MiniPlayer yazar), yoksa tanimsiz.
+ *                 Alttaki yuzen ogeler ekler: calc(var(--bottom-nav, 0px) + var(--mini-player-h, 0px) + 12px)
  */
 const LAYOUT_VARS = `
 :root{--bottom-nav:calc(56px + env(safe-area-inset-bottom, 0px));--topbar-h:calc(max(env(safe-area-inset-top, 0px), 8px) + 53px);--sidebar-w:0px}
@@ -185,6 +189,7 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
   const navItem = "flex min-h-[40px] items-center rounded-md hover:bg-surface-muted md:min-h-[56px] md:w-full md:flex-col md:justify-center md:gap-0.5 md:px-1 md:text-2xs lg:min-h-[40px] lg:flex-row lg:justify-start lg:gap-2 lg:px-3 lg:text-sm";
 
   return (
+    <AudioProvider>
     <div className="flex min-h-screen">
       <style dangerouslySetInnerHTML={{ __html: LAYOUT_VARS }} />
       <a href="#main"
@@ -292,12 +297,14 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
         )}
 
         <main id="main" tabIndex={-1}
-              className={cx("flex-1 overflow-auto outline-none", !isReader && "pb-[calc(var(--bottom-nav)+16px)] md:pb-0")}>
+              className={cx("flex-1 overflow-auto outline-none", !isReader && "pb-[calc(var(--bottom-nav)+16px+var(--mini-player-h,0px))] md:pb-[var(--mini-player-h,0px)]")}>
           {children}
         </main>
         <Shortcuts />
         <CommandPalette />
         <ToastHost />
+        {/* Kalici ses: sesli ozet calarken baska sayfada "simdi caliyor" cubugu (okuyucuda kucuk kapsul) */}
+        <Suspense fallback={null}><MiniPlayer compact={isReader} /></Suspense>
 
         {/* Mobil: alt sekme cubugu (3 oge). `bottom-nav`: klavye acikken globals.css gizler. */}
         {!isReader && (
@@ -314,5 +321,6 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
         )}
       </div>
     </div>
+    </AudioProvider>
   );
 }

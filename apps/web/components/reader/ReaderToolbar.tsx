@@ -6,8 +6,9 @@
  * - Dar ekran: ReaderMoreMenu (baslikta "⋯") + ReaderBottomBar (altta: Icindekiler · sayfa · Sohbet).
  * Tum hedefler en az 40 px (dar ekranda 44 px); her dugmenin gorunen metni ya da aria-label'i var.
  */
-import { useEffect, useRef, useState } from "react";
-import type { PenTool } from "@/lib/reader";
+import { useCallback, useEffect, useRef, useState } from "react";
+import type { PenTool, PaperChoice, PaperTone } from "@/lib/reader";
+import { PAPER_CHOICES, PAPER_LABEL, loadPaper, savePaper, resolvePaper } from "@/lib/reader";
 import {
   ChevronLeft, ChevronRight, Minus, Plus, Highlighter, StickyNote,
   BookOpen, FileText, Maximize2, Minimize2, Sun, Contrast, Moon, PanelLeft, PanelRight, Download,
@@ -35,6 +36,86 @@ export interface ToolbarProps {
   rightOpen: boolean; setRightOpen: (b: boolean) => void;
   onExport: () => void;
   onUndo?: () => void; onRedo?: () => void; canUndo?: boolean; canRedo?: boolean;
+  /** Okuma kagidi (Ajan V2): secim + o an uygulanan ton. setPaper verilirse "⋯" menusunde secici cikar. */
+  paper?: PaperChoice; paperTone?: PaperTone; setPaper?: (p: PaperChoice) => void;
+}
+
+/* ===== Okuma kagidi (Ajan V2) ===== */
+
+/** Uygulama temasi koyu mu (<html class="dark">); tema degisince guncellenir. */
+export function useAppDark(): boolean {
+  const [dark, setDark] = useState(false);
+  useEffect(() => {
+    const r = document.documentElement;
+    const apply = () => setDark(r.classList.contains("dark"));
+    apply();
+    if (typeof MutationObserver === "undefined") return;
+    const mo = new MutationObserver(apply);
+    mo.observe(r, { attributes: true, attributeFilter: ["class"] });
+    return () => mo.disconnect();
+  }, []);
+  return dark;
+}
+
+/** Kagit secimi (localStorage "typdf-paper") + cozulmus ton. readerTheme: PDF okuyucunun kendi temasi (Otomatik icin). */
+export function usePaper(readerTheme?: Theme) {
+  const [paper, setPaperRaw] = useState<PaperChoice>("auto");
+  useEffect(() => { setPaperRaw(loadPaper()); }, []);
+  const setPaper = useCallback((p: PaperChoice) => { setPaperRaw(p); savePaper(p); }, []);
+  const appDark = useAppDark();
+  return { paper, setPaper, paperTone: resolvePaper(paper, appDark, readerTheme) };
+}
+
+/** Kagit secici: Otomatik / Beyaz / Krem / Gece — yuvarlak ornekli dugmeler (aria-pressed). */
+export function PaperPicker({ value, tone, onChange }: { value: PaperChoice; tone: PaperTone; onChange: (p: PaperChoice) => void }) {
+  return (
+    <div role="group" aria-label="Kağıt rengi" className="px-1 py-1">
+      <div className="flex items-center justify-between px-2 pb-1 text-xs text-text-secondary">
+        <span className="font-medium text-text-primary">Kağıt</span>
+        <span aria-live="polite">{value === "auto" ? `Otomatik · şu an ${PAPER_LABEL[tone]}` : PAPER_LABEL[value]}</span>
+      </div>
+      <div className="flex items-stretch gap-1">
+        {PAPER_CHOICES.map((c) => (
+          <button key={c} type="button" aria-pressed={value === c} onClick={() => onChange(c)}
+                  title={c === "auto" ? "Otomatik: uygulama koyu temadaysa Gece, açıksa Beyaz" : `Kağıt: ${PAPER_LABEL[c]}`}
+                  className={`flex min-h-[56px] min-w-[44px] flex-1 flex-col items-center justify-center gap-1 rounded-lg text-xs hover:bg-surface-muted ${value === c ? "bg-accent-purple/10 font-medium text-text-primary ring-2 ring-inset ring-accent-purple" : "text-text-secondary"}`}>
+            <span className="paper-swatch" data-tone={c} aria-hidden />
+            {PAPER_LABEL[c]}
+          </button>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+/** Tek dugme + acilir kagit secici (menusu olmayan okuyucular icin: metin kaynaklari). */
+export function PaperButton({ value, tone, onChange }: { value: PaperChoice; tone: PaperTone; onChange: (p: PaperChoice) => void }) {
+  const [open, setOpen] = useState(false);
+  const wrap = useRef<HTMLDivElement>(null);
+  const btnRef = useRef<HTMLButtonElement>(null);
+  useEffect(() => {
+    if (!open) return;
+    const onDown = (e: PointerEvent) => { if (!wrap.current?.contains(e.target as Node)) setOpen(false); };
+    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") { e.stopPropagation(); setOpen(false); btnRef.current?.focus(); } };
+    document.addEventListener("pointerdown", onDown);
+    document.addEventListener("keydown", onKey, true);
+    return () => { document.removeEventListener("pointerdown", onDown); document.removeEventListener("keydown", onKey, true); };
+  }, [open]);
+  return (
+    <div ref={wrap} className="relative shrink-0">
+      <button ref={btnRef} type="button" aria-expanded={open} aria-haspopup="true"
+              aria-label={`Kağıt rengi: ${value === "auto" ? `Otomatik (${PAPER_LABEL[tone]})` : PAPER_LABEL[value]}`}
+              title="Kağıt rengi" onClick={() => setOpen((v) => !v)}
+              className="flex h-11 w-11 items-center justify-center rounded-lg hover:bg-surface-hover">
+        <span className="paper-swatch" data-tone={value === "auto" ? "auto" : tone} aria-hidden />
+      </button>
+      {open && (
+        <div className="absolute right-0 top-full z-50 mt-1 w-72 rounded-xl border bg-surface p-1 text-text-primary shadow-xl">
+          <PaperPicker value={value} tone={tone} onChange={onChange} />
+        </div>
+      )}
+    </div>
+  );
 }
 
 const zoomOut = (s: number) => Math.max(0.5, +(s - 0.1).toFixed(2));
@@ -167,8 +248,8 @@ export function ReaderMoreMenu(p: ToolbarProps & { variant: "wide" | "narrow" })
         <MoreHorizontal size={19} />
       </button>
       {open && (
-        <div ref={listRef} role="menu" aria-label="Okuyucu araçları" onKeyDown={onListKey}
-             className="absolute right-0 top-full z-50 mt-1 w-64 rounded-xl border bg-surface p-1 text-text-primary shadow-xl">
+        <div className="absolute right-0 top-full z-50 mt-1 w-72 rounded-xl border bg-surface p-1 text-text-primary shadow-xl">
+        <div ref={listRef} role="menu" aria-label="Okuyucu araçları" onKeyDown={onListKey}>
           {items.map((it) => (
             <button key={it.key} type="button" disabled={it.disabled}
                     role={it.checked !== undefined ? "menuitemcheckbox" : "menuitem"}
@@ -180,6 +261,13 @@ export function ReaderMoreMenu(p: ToolbarProps & { variant: "wide" | "narrow" })
               {it.checked && <Check size={16} className="text-accent-purple" aria-hidden />}
             </button>
           ))}
+        </div>
+        {/* Kagit: menunun altinda ayri grup (secince menu acik kalir, fark hemen gorulur) */}
+        {p.setPaper && (
+          <div className="mt-1 border-t pt-1">
+            <PaperPicker value={p.paper || "auto"} tone={p.paperTone || "white"} onChange={p.setPaper} />
+          </div>
+        )}
         </div>
       )}
     </div>

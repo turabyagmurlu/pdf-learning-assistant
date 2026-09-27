@@ -85,7 +85,7 @@ export default function PwaRegister() {
   return (
     <div role="region" aria-label="Uygulamayı yükle"
          className="fixed inset-x-3 z-40 mx-auto flex max-w-md items-center gap-3 rounded-2xl border bg-surface p-3 shadow-lg"
-         style={{ bottom: "calc(max(var(--bottom-nav, 0px), env(safe-area-inset-bottom, 0px)) + var(--reader-bar, 0px) + 12px)" }}>
+         style={{ bottom: "calc(max(var(--bottom-nav, 0px), env(safe-area-inset-bottom, 0px)) + var(--reader-bar, 0px) + var(--mini-player-h, 0px) + 12px)" }}>
       <div aria-hidden className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-accent-purple text-sm font-bold text-white">TY</div>
       <div className="min-w-0 flex-1">
         {mode === "ios" ? (

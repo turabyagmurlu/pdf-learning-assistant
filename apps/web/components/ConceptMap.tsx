@@ -284,11 +284,11 @@ export default function ConceptMap({ nodes, edges, height = 560, collectionId }:
         </div>
         <div className="flex items-center gap-1 rounded-xl border p-0.5">
           <button onClick={() => setView("net")} title="Ağ görünümü"
-                  className={cx("flex min-h-[32px] items-center gap-1 rounded-lg px-2 py-1 text-xs", view === "net" ? "bg-accent-soft font-medium text-accent-purple" : "text-text-secondary hover:bg-surface-hover")}>
+                  className={cx("flex min-h-[32px] items-center gap-1 rounded-lg px-2 py-1 text-xs", view === "net" ? "bg-surface-muted font-medium text-text-primary" : "text-text-secondary hover:bg-surface-hover")}>
             <Network size={13} /> Ağ
           </button>
           <button onClick={() => setView("list")} title="Liste görünümü"
-                  className={cx("flex min-h-[32px] items-center gap-1 rounded-lg px-2 py-1 text-xs", view === "list" ? "bg-accent-soft font-medium text-accent-purple" : "text-text-secondary hover:bg-surface-hover")}>
+                  className={cx("flex min-h-[32px] items-center gap-1 rounded-lg px-2 py-1 text-xs", view === "list" ? "bg-surface-muted font-medium text-text-primary" : "text-text-secondary hover:bg-surface-hover")}>
             <List size={13} /> Liste
           </button>
         </div>
@@ -301,7 +301,7 @@ export default function ConceptMap({ nodes, edges, height = 560, collectionId }:
             <button key={n.id} onClick={() => openFocus(n.id)}
                     className="flex items-center gap-1.5 rounded-full border bg-surface px-2.5 py-1 text-xs hover:border-accent-purple/50">
               <span className="h-2 w-2 rounded-full" style={{ background: KIND_COLOR[n.kind] || KIND_COLOR.kavram }} />
-              {n.id} <span className="opacity-50">{degree[n.id] || 0}</span>
+              {n.id} <span className="opacity-80">{degree[n.id] || 0}</span>
             </button>
           ))}
           {listNodes.length === 0 && <p className="text-xs text-text-secondary">Eşleşen madde yok.</p>}
@@ -317,7 +317,7 @@ export default function ConceptMap({ nodes, edges, height = 560, collectionId }:
                 <button key={k} onClick={() => setKinds((s) => { const n = new Set(s); if (n.size === 0) kindsPresent.forEach((x) => n.add(x)); n.has(k) ? n.delete(k) : n.add(k); if (n.size === kindsPresent.length) n.clear(); return n; })}
                         className={cx("flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-xs", on ? "bg-surface" : "bg-surface opacity-40")}>
                   <span className="h-2.5 w-2.5 rounded-full" style={{ background: KIND_COLOR[k] || KIND_COLOR.kavram }} />
-                  {KIND_LABEL[k] || k} <span className="opacity-60">{nodes.filter((n) => n.kind === k).length}</span>
+                  {KIND_LABEL[k] || k} <span className="opacity-80">{nodes.filter((n) => n.kind === k).length}</span>
                 </button>
               );
             })}
@@ -330,7 +330,7 @@ export default function ConceptMap({ nodes, edges, height = 560, collectionId }:
                 <span className="block text-sm font-medium">{n.id}</span>
                 {n.definition && <span className="mt-0.5 line-clamp-1 block text-xs text-text-secondary">{n.definition}</span>}
               </span>
-              <span className="shrink-0 rounded-full bg-surface-muted px-2 py-0.5 text-2xs text-text-secondary">
+              <span className="shrink-0 rounded-full bg-surface-muted px-2 py-0.5 text-xs text-text-secondary">
                 {degree[n.id] || 0} bağ
               </span>
             </button>
@@ -343,7 +343,7 @@ export default function ConceptMap({ nodes, edges, height = 560, collectionId }:
             {focusId ? (
               <>
                 <button onClick={() => { setFocusId(null); setSel(null); }}
-                        className="flex items-center gap-1.5 rounded-full border border-accent-purple/40 bg-accent-soft px-2.5 py-1 text-xs text-accent-purple">
+                        className="flex min-h-[36px] items-center gap-1.5 rounded-full border bg-surface px-2.5 py-1 text-xs text-text-primary hover:bg-surface-hover">
                   <ArrowLeft size={12} /> Tüm haritaya dön
                 </button>
                 <span className="text-xs text-text-secondary">
@@ -358,7 +358,7 @@ export default function ConceptMap({ nodes, edges, height = 560, collectionId }:
                     <button key={k} onClick={() => setKinds((s) => { const n = new Set(s); if (n.size === 0) kindsPresent.forEach((x) => n.add(x)); n.has(k) ? n.delete(k) : n.add(k); if (n.size === kindsPresent.length) n.clear(); return n; })}
                             className={cx("flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-xs", on ? "bg-surface" : "bg-surface opacity-40")}>
                       <span className="h-2.5 w-2.5 rounded-full" style={{ background: KIND_COLOR[k] || KIND_COLOR.kavram }} />
-                      {KIND_LABEL[k] || k} <span className="opacity-60">{nodes.filter((n) => n.kind === k).length}</span>
+                      {KIND_LABEL[k] || k} <span className="opacity-80">{nodes.filter((n) => n.kind === k).length}</span>
                     </button>
                   );
                 })}
@@ -485,22 +485,22 @@ export default function ConceptMap({ nodes, edges, height = 560, collectionId }:
                     <div className="flex items-center gap-2 pr-6">
                       <span className="h-2.5 w-2.5 rounded-full" style={{ background: KIND_COLOR[selNode.kind] || KIND_COLOR.kavram }} />
                       <h4 className="font-medium">{selNode.id}</h4>
-                      <span className="text-2xs uppercase tracking-wide text-text-secondary">{KIND_LABEL[selNode.kind] || selNode.kind}</span>
+                      <span className="text-xs uppercase tracking-wide text-text-secondary">{KIND_LABEL[selNode.kind] || selNode.kind}</span>
                     </div>
                     <p className="mt-1.5 text-sm leading-relaxed text-text-secondary">{selNode.definition}</p>
                     <div className="mt-2 flex flex-wrap gap-1">
                       {selNode.mentions.map((m, j) => (m.pages.length ? m.pages.slice(0, 3) : [0]).map((pg, k) => (
                         <button key={j + "-" + k} onClick={() => router.push(docHref(m.document_id, { page: pg || null, from: collectionId }))}
-                                className="flex items-center gap-1 rounded-full border bg-surface px-2 py-0.5 text-2xs text-text-secondary hover:border-accent-purple/50 hover:text-accent-purple">
+                                className="flex items-center gap-1 rounded-full border bg-surface px-2 py-0.5 text-xs text-text-secondary hover:border-accent-purple/50 hover:text-accent-purple">
                           <ExternalLink size={10} /> {m.title}{pg ? " · s." + pg : ""}
                         </button>
                       )))}
                     </div>
                     <div className="mt-2 flex items-center gap-2">
-                      <span className="text-2xs text-text-secondary">{degree[selNode.id] || 0} bağlantı</span>
+                      <span className="text-xs text-text-secondary">{degree[selNode.id] || 0} bağlantı</span>
                       {focusId !== selNode.id && (degree[selNode.id] || 0) > 0 && (
                         <button onClick={() => openFocus(selNode.id)}
-                                className="rounded-full border border-accent-purple/40 bg-accent-soft px-2 py-0.5 text-2xs text-accent-purple">
+                                className="rounded-full border border-accent-purple/40 bg-accent-soft px-2 py-0.5 text-xs text-accent-purple">
                           Bunu merkeze al
                         </button>
                       )}
@@ -512,7 +512,7 @@ export default function ConceptMap({ nodes, edges, height = 560, collectionId }:
                     <div className="pr-6 text-sm"><b>{selEdge.source}</b> <span className="text-accent-purple">{selEdge.label}</span> <b>{selEdge.target}</b></div>
                     <p className="mt-1.5 text-sm leading-relaxed text-text-secondary">{selEdge.sentence}</p>
                     <button onClick={() => router.push(docHref(selEdge.document_id, { page: selEdge.page, from: collectionId }))}
-                            className="mt-2 flex items-center gap-1 rounded-full border bg-surface px-2 py-0.5 text-2xs text-text-secondary hover:border-accent-purple/50 hover:text-accent-purple">
+                            className="mt-2 flex items-center gap-1 rounded-full border bg-surface px-2 py-0.5 text-xs text-text-secondary hover:border-accent-purple/50 hover:text-accent-purple">
                       <ExternalLink size={10} /> {selEdge.document_title}{selEdge.page ? " · s." + selEdge.page : ""}
                     </button>
                   </>

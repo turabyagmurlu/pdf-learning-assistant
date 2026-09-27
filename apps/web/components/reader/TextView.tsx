@@ -21,6 +21,9 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { pdfjs } from "react-pdf";
 import { MessageSquare, PenLine, Copy, Minus, Plus, FileText } from "lucide-react";
 import { api } from "@/lib/api";
+import { PAPER } from "@/lib/reader";
+import type { MapMark, PaperTone } from "@/lib/reader";
+import HighlightMap from "@/components/reader/HighlightMap";
 
 // Worker: PdfReader ile ayni adres (biri once yuklenmisse dokunma).
 if (!pdfjs.GlobalWorkerOptions.workerSrc) {
@@ -41,6 +44,11 @@ export interface TextViewProps {
   onShowOriginal?: (page: number) => void;
   /** Toplam sayfa sayisi ogrenilince */
   onNumPages?: (n: number) => void;
+  /** Okuma kagidi tonu (Ajan V2): verilirse renkler temadan degil kagittan gelir
+   *  (Beyaz #FFFFFF/#2C2C2A, Krem #F6EEDC/#4A3A20, Gece #1E1E1C/#D3D1C7). */
+  paper?: PaperTone;
+  /** Vurgu haritasi isaretleri (PDF vurgulari; metin gorunumunde sayfa bazli gosterilir) */
+  marks?: MapMark[];
 }
 
 type Para = { kind: "p" | "h" | "li"; text: string };
@@ -181,7 +189,7 @@ async function extractPage(e: Entry, n: number): Promise<Para[]> {
 
 type Sel = { page: number; text: string; top: number; left: number };
 
-export default function TextView({ fileUrl, page, onPageChange, onAsk, onAddToDraft, theme, docId, onShowOriginal, onNumPages }: TextViewProps) {
+export default function TextView({ fileUrl, page, onPageChange, onAsk, onAddToDraft, theme, docId, onShowOriginal, onNumPages, paper, marks }: TextViewProps) {
   const rootRef = useRef<HTMLDivElement>(null);
   const [numPages, setNumPages] = useState(0);
   const [err, setErr] = useState("");
@@ -194,7 +202,7 @@ export default function TextView({ fileUrl, page, onPageChange, onAsk, onAddToDr
   const bubbleDownAt = useRef(0);
   const coarse = useRef(false);
   const entry = useMemo(() => (fileUrl ? entryFor(fileUrl) : null), [fileUrl]);
-  const c = THEME[theme] || THEME.light;
+  const c = paper ? PAPER[paper] : (THEME[theme] || THEME.light);
 
   useEffect(() => { coarse.current = typeof window !== "undefined" && !!window.matchMedia?.("(pointer: coarse)").matches; }, []);
   useEffect(() => {
@@ -350,6 +358,7 @@ export default function TextView({ fileUrl, page, onPageChange, onAsk, onAddToDr
   const lineH = 1.62;
 
   return (
+    <div className="relative h-full w-full" data-paper={paper}>
     <div ref={rootRef} className="relative h-full w-full overflow-auto overscroll-contain"
          style={{ background: c.bg, color: c.ink }}
          onPointerUp={readSelection} onKeyUp={(e) => { if (e.shiftKey) readSelection(); }}
@@ -401,7 +410,7 @@ export default function TextView({ fileUrl, page, onPageChange, onAsk, onAddToDr
                   <span className="h-px flex-1" style={{ background: c.rule }} aria-hidden />
                   <span>— s. {n} —</span>
                   {onShowOriginal && (
-                    <button type="button" onClick={() => onShowOriginal(n)} className="flex min-h-[32px] items-center gap-1 rounded-md px-1.5 hover:underline"
+                    <button type="button" onClick={() => onShowOriginal(n)} className="flex min-h-[40px] items-center gap-1 rounded-md px-1.5 hover:underline"
                             aria-label={`Sayfa ${n}: aslını sayfa görünümünde gör`}>
                       <FileText size={12} aria-hidden /> Aslını gör
                     </button>
@@ -455,6 +464,11 @@ export default function TextView({ fileUrl, page, onPageChange, onAsk, onAddToDr
           )}
         </div>
       )}
+    </div>
+    {/* Vurgu haritasi: sayfa bazli (her sayfa bolumunun yuksekligine gore olculur) */}
+    {marks && marks.length > 0 && scanned !== "none" && (
+      <HighlightMap scrollRef={rootRef} numPages={numPages} marks={marks} layoutKey={size} />
+    )}
     </div>
   );
 }

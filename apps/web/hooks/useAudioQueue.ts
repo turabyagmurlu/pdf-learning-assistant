@@ -7,6 +7,8 @@
  * - Henüz hazır olmayan parçaya gelince "bekliyor" durumuna geçer, parça gelince kendiliğinden devam eder.
  * - iOS/Android ses kilidi: `primeAudio()` ya da `unlock()` tıklama anında (SENKRON) çağrılırsa
  *   iki <audio> öğesi sessiz WAV ile bir kez çalınır; ses çok sonra gelse de aynı öğeler çalabilir.
+ * - `reset()`: yeni bir kayda geçerken (kalıcı oynatıcı, AudioProvider) öğeleri bırakır; bir sonraki parça
+ *   `primeAudio()` ile ısıtılmış yeni öğeleri kullanır. Ayrıca `useMediaSession` ve `useQueueAutostart` yardımcıları.
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
@@ -202,6 +204,67 @@ export function useAudioQueue(chunks: QueueChunk[], opts: { rate?: number; stora
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  /** Yeni kayda geçiş: çalanı durdurur, öğeleri bırakır (sonraki parça ısıtılmış öğeleri alır), durumu sıfırlar. */
+  const reset = useCallback(() => {
+    els.current.forEach((a) => {
+      if (!a) return;
+      try { a.pause(); a.removeAttribute("src"); delete a.dataset.url; delete a.dataset.idx; a.load(); } catch {}
+    });
+    els.current = [];
+    unlocked.current = false;
+    idxRef.current = 0; playingRef.current = false; pendingSeek.current = null;
+    setIndex(0); setChunkTime(0); setPlaying(false); setWaiting(false); setBlocked(false); setMeasured({});
+  }, []);
+
   return { index, chunkTime, time, total, allKnown, durations, offsets, playing, waiting, blocked, firstReady,
-           play, pause, toggle, seek, skip, unlock, isUnlocked: () => unlocked.current };
+           play, pause, toggle, seek, skip, unlock, reset, isUnlocked: () => unlocked.current };
+}
+
+export type AudioQueue = ReturnType<typeof useAudioQueue>;
+export type MediaMeta = { title: string; subtitle?: string; artwork?: string };
+
+/** Kilit ekranı / kulaklık düğmeleri / bildirim (Media Session). `meta` null ise denetimler bırakılır. */
+export function useMediaSession(q: AudioQueue, meta: MediaMeta | null, speed: number, skipSec = 15) {
+  const qRef = useRef(q); qRef.current = q;
+  const on = !!meta;
+  useEffect(() => {
+    if (!meta || typeof navigator === "undefined" || !("mediaSession" in navigator)) return;
+    const ms = (navigator as any).mediaSession;
+    try {
+      ms.metadata = new (window as any).MediaMetadata({
+        title: meta.title, artist: meta.subtitle || "TY PDF · Sesli özet", album: "TY PDF",
+        artwork: meta.artwork ? [{ src: meta.artwork, sizes: "512x512", type: "image/png" }] : [],
+      });
+      ms.setActionHandler("play", () => qRef.current.play());
+      ms.setActionHandler("pause", () => qRef.current.pause());
+      ms.setActionHandler("seekbackward", () => qRef.current.skip(-skipSec));
+      ms.setActionHandler("seekforward", () => qRef.current.skip(skipSec));
+      ms.setActionHandler("seekto", (d: any) => { if (typeof d.seekTime === "number") qRef.current.seek(d.seekTime); });
+    } catch {}
+    return () => {
+      try { ["play", "pause", "seekbackward", "seekforward", "seekto"].forEach((k) => ms.setActionHandler(k, null)); } catch {}
+      try { ms.metadata = null; } catch {}
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [meta?.title, meta?.subtitle, meta?.artwork, skipSec]);
+  useEffect(() => {
+    if (!on || typeof navigator === "undefined") return;
+    const ms = (navigator as any).mediaSession; if (!ms) return;
+    try { ms.playbackState = q.playing ? "playing" : "paused"; } catch {}
+    try { if (q.total > 0) ms.setPositionState({ duration: q.total, playbackRate: speed, position: Math.min(q.time, q.total) }); } catch {}
+  }, [on, q.playing, q.time, q.total, speed]);
+}
+
+/** İlk parça hazır olunca (her kayıt için bir kez): kaldığı yerden devam + istenirse otomatik başlat. */
+export function useQueueAutostart(q: AudioQueue, key: string | number | null, storageKey: string | undefined, autoPlay: boolean | undefined) {
+  const done = useRef<string | number | null>(null);
+  useEffect(() => {
+    if (key == null || !q.firstReady || done.current === key) return;
+    done.current = key;
+    let saved = 0;
+    try { if (storageKey) saved = parseFloat(localStorage.getItem(storageKey) || "0") || 0; } catch {}
+    if (saved > 3 && saved < q.total - 3) q.seek(saved);
+    if (autoPlay) q.play();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [key, q.firstReady]);
 }

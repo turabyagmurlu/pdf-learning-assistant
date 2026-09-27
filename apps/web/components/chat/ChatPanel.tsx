@@ -340,7 +340,7 @@ export function ChatPanel({ documentId, onGoPage, video, generic, prefill, noteb
                    className="absolute right-0 top-full z-20 mt-1 max-h-72 w-64 overflow-y-auto rounded-xl border bg-surface p-1 shadow-lg">
                 {!sessions.length ? <p className="p-3 text-xs text-text-secondary">Bu kaynakta kayıtlı sohbet yok.</p> : sessions.map((s) => (
                   <button key={s.id} type="button" role="menuitem" onClick={() => loadSession(s)}
-                          className={`block min-h-[44px] w-full rounded-lg px-2.5 py-1.5 text-left text-xs hover:bg-surface-muted ${s.id === sessionId ? "bg-accent-purple/10" : ""}`}>
+                          className={`block min-h-[44px] w-full rounded-lg px-2.5 py-1.5 text-left text-xs hover:bg-surface-muted ${s.id === sessionId ? "bg-surface-muted font-medium text-text-primary" : ""}`}>
                     <span className="block truncate">{s.first_q || "Sohbet"}</span>
                     <span className="text-text-secondary">{new Date(s.created_at).toLocaleString("tr-TR", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" })} · {MODES.find((m) => m[0] === s.mode)?.[1] || s.mode}</span>
                   </button>

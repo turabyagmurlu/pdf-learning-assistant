@@ -4,6 +4,7 @@
  * "Geri getir" aynı kimlikle geri getirir (bağlar da döner); "Kalıcı sil" ve "Çöpü boşalt" onaylıdır.
  */
 import { useCallback, useEffect, useMemo, useState } from "react";
+import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { api, errorMessage } from "@/lib/api";
 import PageHeader from "@/components/PageHeader";
@@ -11,10 +12,10 @@ import { CardSkeleton } from "@/components/Skeleton";
 import { useRefreshOn } from "@/components/Wake";
 import { toast } from "@/components/Toast";
 import { useConfirm } from "@/components/Confirm";
-import Button from "@/components/ui/Button";
+import Button, { buttonClass } from "@/components/ui/Button";
 import SourceIcon, { sourceLabel } from "@/components/SourceIcon";
 import { darken } from "@/lib/reader";
-import { Notebook, StickyNote, Highlighter, Underline, MessageSquare, RotateCcw, Trash2, Clock } from "lucide-react";
+import { Notebook, StickyNote, Highlighter, Underline, MessageSquare, RotateCcw, Trash2, Clock, Library } from "lucide-react";
 
 type Kind = "document" | "collection" | "note" | "chat";
 type Item = {
@@ -34,6 +35,13 @@ const TABS: { key: "all" | Kind; label: string }[] = [
   { key: "chat", label: "Sohbetler" },
 ];
 const KIND_LABEL: Record<Kind, string> = { document: "Kaynak", collection: "Defter", note: "Not", chat: "Sohbet" };
+/** Sekme boşken kısa metin */
+const EMPTY_TAB: Record<Kind, string> = {
+  document: "Çöpte silinmiş kaynak yok.",
+  collection: "Çöpte silinmiş defter yok.",
+  note: "Çöpte silinmiş not ya da vurgu yok.",
+  chat: "Çöpte silinmiş sohbet yok.",
+};
 
 function ago(iso: string) {
   const d = (Date.now() - new Date(iso).getTime()) / 1000;
@@ -161,12 +169,15 @@ export default function TrashPage() {
       ) : !data ? (
         <CardSkeleton n={3} />
       ) : data.total === 0 ? (
-        <div className="rounded-2xl border border-dashed p-10 text-center">
-          <Trash2 size={28} aria-hidden className="mx-auto mb-3 text-text-secondary" />
-          <p className="font-heading text-lg">Çöp kutusu boş</p>
-          <p className="mx-auto mt-1 max-w-md text-sm text-text-secondary">
-            Bir kaynağı, defteri, vurguyu ya da sohbeti sildiğinde burada {days} gün bekler; yanlışlıkla sildiysen buradan geri getirirsin.
+        <div className="rounded-2xl border border-dashed p-8 text-center md:p-12">
+          <Trash2 size={30} aria-hidden className="mx-auto text-accent-purple" />
+          <h2 className="mt-3 font-heading text-lg">Çöp kutun boş</h2>
+          <p className="mx-auto mt-2 max-w-md text-sm text-text-secondary">
+            Sildiğin kaynak, defter, not ve sohbetler {days} gün burada durur.
           </p>
+          <Link href="/library" className={buttonClass({ variant: "secondary", size: "lg", className: "mt-5" })}>
+            <Library size={16} aria-hidden /> Kütüphaneye dön
+          </Link>
         </div>
       ) : (
         <>
@@ -186,7 +197,9 @@ export default function TrashPage() {
           </div>
 
           {items.length === 0 ? (
-            <p className="rounded-xl border border-dashed p-6 text-center text-sm text-text-secondary">Bu türde silinmiş öğe yok.</p>
+            <p className="rounded-xl border border-dashed p-6 text-center text-sm text-text-secondary">
+              {tab === "all" ? "Çöp kutun boş." : EMPTY_TAB[tab]}
+            </p>
           ) : (
             <ul className="space-y-2" aria-label="Silinen öğeler">
               {items.map((it) => {

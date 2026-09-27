@@ -131,11 +131,11 @@ export default function ReaderHeader({ doc, ctx, children, className, serverPage
       {showChip && (
         <div role="status" className="order-last flex w-full items-center gap-1 px-1 pb-1.5 pt-0.5 sm:w-auto sm:pb-0 sm:pt-0 lg:order-none lg:w-auto">
           <button type="button" onClick={() => { onGoServerPage?.(serverPage as number); setChipDismissed(true); }}
-                  className="flex min-h-[36px] items-center gap-1.5 rounded-full border border-accent-purple/40 bg-accent-purple/10 px-3 text-xs font-medium text-text-primary hover:bg-accent-purple/20">
+                  className="flex min-h-[40px] items-center gap-1.5 rounded-full border border-accent-purple/40 bg-accent-purple/10 px-3 text-xs font-medium text-text-primary hover:bg-accent-purple/20">
             {dev} s.{serverPage}&apos;deydin · <span className="text-accent-purple">Oraya git</span>
           </button>
           <button type="button" onClick={() => setChipDismissed(true)} aria-label="Bu öneriyi kapat"
-                  className="flex h-9 w-9 items-center justify-center rounded-full text-text-secondary hover:bg-surface-muted"><X size={14} /></button>
+                  className="flex h-10 w-10 items-center justify-center rounded-full text-text-secondary hover:bg-surface-muted"><X size={14} aria-hidden /></button>
         </div>
       )}
     </header>

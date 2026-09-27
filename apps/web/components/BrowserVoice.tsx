@@ -178,7 +178,7 @@ export default function BrowserVoice({ text, onClose, autoPlay = false }: { text
         <span className="text-xs text-text-secondary">· ücretsiz, ama anlatıcı sesi kadar doğal değil</span>
       </div>
       {voices.length > 0 && !voiceQuality(voices.find((v) => v.name === voiceName) || voices[0]).female && (
-        <p className="mt-2 rounded-lg bg-warning/10 px-3 py-2 text-[11px] text-text-secondary">
+        <p className="mt-2 rounded-lg bg-warning/10 px-3 py-2 text-xs text-text-secondary">
           {IS_MOBILE
             ? "Bu cihazda yüklü Türkçe ses erkek ve biraz robotik; cihaz ayarlarından başka bir Türkçe ses yükleyebilirsin. "
             : <>Bu cihazda yüklü tek Türkçe ses erkek ve robotik. Doğal bir kadın sesi istersen uygulamayı
@@ -209,7 +209,7 @@ export default function BrowserVoice({ text, onClose, autoPlay = false }: { text
           {SPEEDS.map((s) => (
             <button key={s} onClick={() => { setRate(s); if (state !== "idle") setTimeout(() => speakFrom(idx.current), 0); }}
                     aria-label={`Hız ${s}×`} aria-pressed={rate === s}
-                    className={"min-h-[40px] min-w-[40px] rounded-lg px-2 py-1 text-xs " + (rate === s ? "bg-accent-purple text-white" : "text-text-secondary")}>
+                    className={"min-h-[40px] min-w-[40px] rounded-lg px-2 py-1 text-xs " + (rate === s ? "bg-surface-muted font-semibold text-text-primary ring-1 ring-text-primary/60" : "text-text-secondary")}>
               {s}×
             </button>
           ))}
@@ -226,7 +226,7 @@ export default function BrowserVoice({ text, onClose, autoPlay = false }: { text
       <div className="mt-3 h-1 w-full overflow-hidden rounded-full bg-border">
         <div className="h-full bg-accent-purple transition-all" style={{ width: pos + "%" }} />
       </div>
-      <p className="mt-1.5 text-[11px] text-text-secondary">
+      <p className="mt-1.5 text-xs text-text-secondary">
         {state === "idle" && pos === 0
           ? `${parts.current.length} cümle hazır.`
           : `%${pos} · ${idx.current + 1}/${parts.current.length}. cümle`}

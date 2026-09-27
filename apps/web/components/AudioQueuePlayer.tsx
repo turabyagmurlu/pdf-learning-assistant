@@ -3,10 +3,17 @@
  * Tam oynatıcı (parçalı kuyruk): ilerleme, ±15 sn, hız, kaldığın yer, kilit ekranı (Media Session),
  * iOS ses kilidi, cümle vurgusu (metin cümlelere bölünür; çalan cümle vurgulanır ve görünür kaydırılır;
  * cümleye tıklayınca oraya atlar). Parçalar hazır oldukça çalar: "2/4 parça hazır · ~40 sn".
+ *
+ * İki kip:
+ *  - `<AudioQueuePlayer />` (parça vermeden): kalıcı global sesi (AudioProvider) gösterir ve denetler.
+ *    Sayfadan çıkınca ses kesilmez; alttaki mini çubuk devralır. Sesli özet sekmesi bunu kullanır.
+ *  - `<AudioQueuePlayer chunks=... />`: bu bileşene ait yerel ses (sayfadan çıkınca durur; PodcastPlayer).
+ *    Yerel ses çalmaya başlayınca global ses duraklatılır.
  */
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Play, Pause, RotateCcw, RotateCw, Gauge, Loader2 } from "lucide-react";
-import { useAudioQueue, type QueueChunk } from "@/hooks/useAudioQueue";
+import { useAudioQueue, useMediaSession, useQueueAutostart, type AudioQueue, type QueueChunk } from "@/hooks/useAudioQueue";
+import { useAudioPlayback, useAudioPlaybackOptional, useAudioSession } from "@/components/audio/AudioProvider";
 import { API, getToken } from "@/lib/api";
 
 export const SPEEDS = [0.8, 1, 1.15, 1.3, 1.5];
@@ -50,8 +57,7 @@ export function splitSentences(chunks: QueueChunk[], durations: number[]): Sente
   return out;
 }
 
-export default function AudioQueuePlayer({ chunks, total, title, subtitle, artwork, storageKey, autoPlay, showText = true,
-                                           syncDocId, note, preparingEta }: {
+export type LocalPlayerProps = {
   chunks: QueueChunk[];
   total?: number;                 // beklenen toplam parça (hazır olmayanlar dâhil)
   title: string; subtitle?: string; artwork?: string; storageKey: string; autoPlay?: boolean;
@@ -59,52 +65,58 @@ export default function AudioQueuePlayer({ chunks, total, title, subtitle, artwo
   syncDocId?: string;             // verilirse konum sunucuya da yazılır (PUT /documents/{id}/reading media_pos)
   note?: string;                  // ek durum satırı (ör. kota beklemesi)
   preparingEta?: number;          // bir sonraki parça için tahmini saniye
-}) {
+};
+type GlobalPlayerProps = { chunks?: undefined; showText?: boolean };
+
+export default function AudioQueuePlayer(props: LocalPlayerProps | GlobalPlayerProps) {
+  if (props.chunks !== undefined) return <LocalPlayer {...props} />;
+  return <GlobalPlayer showText={props.showText} />;
+}
+
+/** Kalıcı global ses: durum ve denetimler AudioProvider'dan. */
+function GlobalPlayer({ showText = true }: { showText?: boolean }) {
+  const { session } = useAudioSession();
+  const { q, speed, setSpeed } = useAudioPlayback();
+  if (!session || !session.chunks) return null;
+  const chunks = session.chunks;
+  const totalN = session.total || chunks.length;
+  const readyN = chunks.filter((c) => !!c.url).length;
+  const preparingEta = totalN > readyN ? Math.round(((chunks[readyN]?.text.length || 2600) / 100) + 2) : undefined;
+  return (
+    <PlayerView q={q} chunks={chunks} total={totalN} title={session.title} subtitle={session.subtitle} artwork={session.artwork}
+                speed={speed} setSpeed={setSpeed} showText={showText} note={session.note || undefined} preparingEta={preparingEta} />
+  );
+}
+
+/** Yerel ses (bu bileşenle yaşar). */
+function LocalPlayer({ chunks, total, title, subtitle, artwork, storageKey, autoPlay, showText = true,
+                       syncDocId, note, preparingEta }: LocalPlayerProps) {
   const [speed, setSpeed] = useState<number>(() => {
     try { return parseFloat(localStorage.getItem("lecture.speed") || "1") || 1; } catch { return 1; }
   });
   const q = useAudioQueue(chunks, { rate: speed, storageKey });
+  useEffect(() => { try { localStorage.setItem("lecture.speed", String(speed)); } catch {} }, [speed]);
+  useQueueAutostart(q, storageKey, storageKey, autoPlay);
+  useMediaSession(q, useMemo(() => ({ title, subtitle, artwork }), [title, subtitle, artwork]), speed);
+  // Aynı anda iki ses çalmasın: yerel ses başlayınca kalıcı sesi duraklat
+  const global = useAudioPlaybackOptional();
+  const pauseGlobal = useRef(global?.q.pause); pauseGlobal.current = global?.q.pause;
+  useEffect(() => { if (q.playing) pauseGlobal.current?.(); }, [q.playing]);
+  return (
+    <PlayerView q={q} chunks={chunks} total={total ?? chunks.length} title={title} subtitle={subtitle} artwork={artwork}
+                speed={speed} setSpeed={setSpeed} showText={showText} syncDocId={syncDocId} note={note} preparingEta={preparingEta} />
+  );
+}
+
+function PlayerView({ q, chunks, total, title, subtitle, artwork, speed, setSpeed, showText, syncDocId, note, preparingEta }: {
+  q: AudioQueue; chunks: QueueChunk[]; total: number;
+  title: string; subtitle?: string; artwork?: string;
+  speed: number; setSpeed: (n: number) => void;
+  showText: boolean; syncDocId?: string; note?: string; preparingEta?: number;
+}) {
   const { index, chunkTime, time, total: dur, allKnown, durations, playing, waiting, blocked, firstReady } = q;
   const readyN = chunks.filter((c) => !!c.url).length;
-  const totalN = total ?? chunks.length;
-
-  useEffect(() => { try { localStorage.setItem("lecture.speed", String(speed)); } catch {} }, [speed]);
-
-  // İlk parça hazır olunca: kaldığı yerden devam + (istenirse) otomatik başlat
-  const started = useRef(false);
-  useEffect(() => {
-    if (started.current || !firstReady) return;
-    started.current = true;
-    let saved = 0;
-    try { saved = parseFloat(localStorage.getItem(storageKey) || "0") || 0; } catch {}
-    if (saved > 3 && saved < dur - 3) q.seek(saved);
-    if (autoPlay) q.play();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [firstReady]);
-
-  // Media Session: kilit ekranı / kulaklık düğmeleri / bildirim
-  useEffect(() => {
-    if (typeof navigator === "undefined" || !("mediaSession" in navigator)) return;
-    const ms = (navigator as any).mediaSession;
-    try {
-      ms.metadata = new (window as any).MediaMetadata({
-        title, artist: subtitle || "TY PDF · Sesli özet", album: "TY PDF",
-        artwork: artwork ? [{ src: artwork, sizes: "512x512", type: "image/png" }] : [],
-      });
-      ms.setActionHandler("play", () => q.play());
-      ms.setActionHandler("pause", () => q.pause());
-      ms.setActionHandler("seekbackward", () => q.skip(-SKIP));
-      ms.setActionHandler("seekforward", () => q.skip(SKIP));
-      ms.setActionHandler("seekto", (d: any) => { if (typeof d.seekTime === "number") q.seek(d.seekTime); });
-    } catch {}
-    return () => { try { ["play", "pause", "seekbackward", "seekforward", "seekto"].forEach((k) => ms.setActionHandler(k, null)); } catch {} };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [title, subtitle, artwork]);
-  useEffect(() => {
-    const ms = (navigator as any)?.mediaSession; if (!ms) return;
-    try { ms.playbackState = playing ? "playing" : "paused"; } catch {}
-    try { if (dur > 0) ms.setPositionState({ duration: dur, playbackRate: speed, position: Math.min(time, dur) }); } catch {}
-  }, [playing, time, dur, speed]);
+  const totalN = total;
 
   // Konumu sunucuya yaz (cihazlar arası): 5 sn'de bir, değiştiyse
   const lastSync = useRef(0);
@@ -185,7 +197,7 @@ export default function AudioQueuePlayer({ chunks, total, title, subtitle, artwo
         <div className="h-2 w-full overflow-hidden rounded-full bg-surface-muted">
           <div className="h-full rounded-full bg-accent-purple transition-[width]" style={{ width: pct + "%" }} />
         </div>
-        <div className="mt-1 flex justify-between text-[11px] text-text-secondary">
+        <div className="mt-1 flex justify-between text-xs text-text-secondary">
           <span>{fmt(time)}</span><span>{allKnown ? "" : "~"}-{fmt(Math.max(0, dur - time))}</span>
         </div>
       </div>
