@@ -61,6 +61,9 @@ def _txt(v: Any) -> str:
     return re.sub(r"\s+", " ", str(v or "")).strip()
 
 
+_DEHYPH = re.compile(r"([^\W\d_])- ([a-zçğıöşüâîû])")
+
+
 def extract_cards(blocks: list[dict], scope_kind: str, scope_id: str, scope_title: str | None = None) -> list[dict]:
     """Taslak bloklarindan kartlar. quote: metni dolu; p: >= 40 karakter. Metni bos olanlar atlanir."""
     out: list[dict] = []
@@ -69,8 +72,14 @@ def extract_cards(blocks: list[dict], scope_kind: str, scope_id: str, scope_titl
             continue
         t = b.get("type")
         text = _txt(b.get("text"))
+        note_txt = _txt(b.get("note"))
+        # kenar notu: alinti metni bos, yorumu dolu -> kartin metni yorumun kendisi
+        if not text and t == "quote" and note_txt:
+            text, b = note_txt, {**b, "note": None, "style": b.get("style") or "sticky"}
         if not text:
             continue
+        # PDF satir sonu tireleri: "pro- tein" -> "protein" (yalniz kucuk harfle devam ediyorsa)
+        text = _DEHYPH.sub(r"\1\2", text)
         if t == "quote":
             nid = str(b.get("note_id") or "")
             key = f"note:{nid}" if nid else f"blk:{scope_kind}:{scope_id}:{b.get('id') or i}"
