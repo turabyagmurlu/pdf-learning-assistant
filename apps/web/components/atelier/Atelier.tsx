@@ -19,6 +19,7 @@ import ReadMode from "./ReadMode";
 import RecallMode from "./RecallMode";
 import ListenMode from "./ListenMode";
 import { AllDone, EmptyAtelier, SessionEnd } from "./SessionEnd";
+import { DECK_MS, prefersReduced } from "./motion";
 
 const cx = (...a: (string | false | null | undefined)[]) => a.filter(Boolean).join(" ");
 const ICON: Record<Practice, LucideIcon> = { read: BookOpen, recall: Brain, listen: Headphones };
@@ -52,6 +53,16 @@ export default function Atelier({ initialScope, initialPractice }: { initialScop
   useEffect(() => { setAnyway(false); }, [scope, practice]);
 
   useAtelierKeys({ Escape: close });
+
+  // Son karttan sonra: kart yumuşakça çekilir, sonra oturum sonu belirir
+  const [endShown, setEndShown] = useState(false);
+  useEffect(() => {
+    if (!a.finished) { setEndShown(false); return; }
+    if (prefersReduced()) { setEndShown(true); return; }
+    const t = window.setTimeout(() => setEndShown(true), DECK_MS);
+    return () => window.clearTimeout(t);
+  }, [a.finished]);
+  const leaving = a.finished && !endShown;
 
   // Belge kapsamının adı kartlardan
   const docTitle = useMemo(() => {
@@ -87,7 +98,7 @@ export default function Atelier({ initialScope, initialPractice }: { initialScop
         </button>
       </div>
     );
-  } else if (a.finished) {
+  } else if (a.finished && endShown) {
     body = <SessionEnd practice={practice} count={practice === "recall" ? a.stats.count : a.count}
                        known={a.stats.known} onAgain={a.restart} />;
   } else if (!a.cards.length) {
@@ -95,7 +106,7 @@ export default function Atelier({ initialScope, initialPractice }: { initialScop
       ? <AllDone onAnyway={() => setAnyway(true)} />
       : <EmptyAtelier scoped={scope !== "all"} />;
   } else if (practice === "read") {
-    body = <ReadMode cards={a.cards} index={a.index} onPrev={a.prev} onNext={a.next} />;
+    body = <ReadMode cards={a.cards} index={a.index} onPrev={a.prev} onNext={a.next} onJump={a.go} />;
   } else if (practice === "recall") {
     body = <RecallMode cards={a.cards} index={a.index} onGrade={a.review} />;
   } else {
@@ -150,7 +161,8 @@ export default function Atelier({ initialScope, initialPractice }: { initialScop
       </header>
       <div className="rule-gold mx-3 md:mx-6" aria-hidden />
       <div className="flex flex-1 flex-col pt-phi-3" aria-busy={a.loading}>
-        {body}
+        {/* Sarmalayıcı hep aynı: çıkış geçişinde pratik bileşeni yeniden kurulmaz */}
+        <div className={cx("flex flex-1 flex-col", leaving && "deck-leave")} aria-hidden={leaving || undefined}>{body}</div>
       </div>
     </div>
   );

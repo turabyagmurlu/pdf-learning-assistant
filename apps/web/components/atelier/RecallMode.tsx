@@ -3,11 +3,14 @@
  * Hatırla: cümledeki 1–3 anahtar kelime sfumato perdesi altında. Dokununca perde kalkar
  * (ya da "Hepsini göster" / boşluk). Sonra Tekrar · Zor · Bildim · Kolay (1–4) → aralıklı tekrar.
  * İsteğe bağlı "Yazarak cevapla": Türkçe büyük/küçük harf ve aksan farkı gözetmeden karşılaştırır.
+ * Deste: kartı sağa sürükle = "Bildim", sola = "Tekrar" (kenarda yeşil/kırmızı soluk ipucu); düğmeler de durur.
+ * Bildim/Kolay kartı sağa, Tekrar/Zor sola uçurur.
  */
-import { useEffect, useId, useMemo, useRef, useState } from "react";
+import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { Eye, Keyboard, Check, X } from "lucide-react";
 import QuoteCard, { quoteSize } from "./QuoteCard";
 import Progress from "./Progress";
+import Deck from "./Deck";
 import { checkAnswer, pickKeywords, segments } from "./text";
 import { useAtelierKeys, type AtelierCard, type Grade } from "@/hooks/useAtelier";
 
@@ -42,12 +45,13 @@ export default function RecallMode({ cards, index, onGrade }: {
   const [answer, setAnswer] = useState("");
   const [verdict, setVerdict] = useState<{ hits: boolean[]; all: boolean } | null>(null);
   const gradeRef = useRef<HTMLDivElement>(null);
+  const exitDir = useRef(0);
   const inputRef = useRef<HTMLInputElement>(null);
   const fid = useId();
 
   useEffect(() => { try { setTyped(localStorage.getItem(TYPED_KEY) === "1"); } catch {} }, []);
-  // Yeni kart: perde yeniden iner
-  useEffect(() => { setOpen(new Set()); setAnswer(""); setVerdict(null); }, [card?.key, index]);
+  // Yeni kart: perde yeniden iner (boyamadan önce — gelen kartta cevap bir an bile görünmesin)
+  useLayoutEffect(() => { setOpen(new Set()); setAnswer(""); setVerdict(null); }, [card?.key, index]);
   useEffect(() => { if (typed && keys.length) setTimeout(() => inputRef.current?.focus(), 60); }, [typed, index, keys.length]);
 
   const allOpen = keys.length === 0 || open.size >= keys.length;
@@ -61,7 +65,11 @@ export default function RecallMode({ cards, index, onGrade }: {
     setTimeout(() => gradeRef.current?.querySelector<HTMLButtonElement>(`[data-g="${v.all ? "good" : "again"}"]`)?.focus(), 80);
   }
 
-  function grade(g: Grade) { if (!allOpen) revealAll(); onGrade(g); }
+  function grade(g: Grade) {
+    if (!allOpen) revealAll();
+    exitDir.current = g === "good" || g === "easy" ? 1 : -1;
+    onGrade(g);
+  }
 
   useAtelierKeys({
     " ": revealAll, Enter: () => { if (!allOpen) revealAll(); },
@@ -93,9 +101,15 @@ export default function RecallMode({ cards, index, onGrade }: {
   return (
     <div className="mx-auto flex w-full max-w-4xl flex-col px-4 pb-phi-5 md:px-8">
       <Progress index={index} count={cards.length} label="Kart" />
-      <div key={card.key + ":" + index} className="card-turn mt-phi-3">
-        <QuoteCard card={card}>{body}</QuoteCard>
+      <div className="mt-phi-3">
+        <Deck cards={cards} index={index} label="Kart" exitDir={exitDir}
+              hints={{ left: "Tekrar", right: "Bildim" }}
+              onSwipe={(d) => grade(d === "right" ? "good" : "again")}
+              render={(c, _i, active) => (active
+                ? <QuoteCard card={c}>{body}</QuoteCard>
+                : <QuoteCard card={c} dropCap={false} />)} />
       </div>
+      <p className="mt-2 text-center text-xs text-text-secondary">Kartı sağa kaydır: Bildim · sola: Tekrar</p>
 
       {keys.length > 0 && (
         <div className="mt-phi-3 flex flex-wrap items-center justify-center gap-2">

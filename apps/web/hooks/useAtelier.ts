@@ -3,7 +3,7 @@
  * Atölye (bottega) veri kancaları — yapay zekâ harcamaz.
  *  - useAtelier({ scope, mode }) : kartları yükler, oturumu yürütür, tekrar sonucunu iyimser gönderir.
  *  - useAtelierCounts(dep)       : menü ve kapak rozetleri için hafif sayım (GET /atelier/counts).
- *  - useAtelierKeys(map, on)     : yazı alanlarında devre dışı kalan basit klavye kısayolları.
+ *  - useAtelierKeys(map, on, o) : yazı alanlarında devre dışı kalan basit klavye kısayolları.
  *
  * Kapsam: "all" | "collection:<id>" | "document:<id>".
  * Deste modu: "due" (Hatırla: vadesi gelenler + günlük yeni kartlar) | "all" (Oku/Dinle: kapsamdaki her şey).
@@ -124,7 +124,7 @@ export function useAtelier({ scope, deck, session }: {
   /** Hatırla sonucu: arayüz hemen ilerler; istek arka planda gider (başarısızsa sessizce bir kez daha denenir). */
   const review = useCallback((grade: Grade) => {
     const card = cards && cards[index];
-    if (!card) return;
+    if (!card || finished) return;               // oturum biterken (çıkış geçişi) çift not verilmesin
     const known = grade === "good" || grade === "easy";
     setStats((s) => ({ count: s.count + 1, known: s.known + (known ? 1 : 0) }));
     setResults((r) => ({ ...r, [card.key]: grade }));
@@ -144,7 +144,7 @@ export function useAtelier({ scope, deck, session }: {
       if (i + 1 >= (cards?.length ?? 0)) { setFinished(true); return i; }
       return i + 1;
     });
-  }, [cards, index]);
+  }, [cards, index, finished]);
 
   const restart = useCallback(() => { void load(); }, [load]);
 
@@ -175,9 +175,11 @@ export function useAtelierCounts(dep?: unknown): AtelierCounts | null {
   return c;
 }
 
-/** Yazı alanı dışında tuş kısayolları. `map` anahtarı KeyboardEvent.key. */
-export function useAtelierKeys(map: Record<string, () => void>, enabled = true) {
+/** Yazı alanı dışında tuş kısayolları. `map` anahtarı KeyboardEvent.key.
+ *  `opts.capture`: dinleyici önce çalışır ve yakaladığı tuşu diğerlerine geçirmez (ör. ızgarada Esc → Atölyeyi kapatmasın). */
+export function useAtelierKeys(map: Record<string, () => void>, enabled = true, opts?: { capture?: boolean }) {
   const ref = useRef(map); ref.current = map;
+  const capture = !!opts?.capture;
   useEffect(() => {
     if (!enabled) return;
     const onKey = (e: KeyboardEvent) => {
@@ -190,9 +192,10 @@ export function useAtelierKeys(map: Record<string, () => void>, enabled = true) 
       const fn = ref.current[e.key];
       if (!fn) return;
       e.preventDefault();
+      if (capture) e.stopPropagation();
       fn();
     };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [enabled]);
+    window.addEventListener("keydown", onKey, capture);
+    return () => window.removeEventListener("keydown", onKey, capture);
+  }, [enabled, capture]);
 }

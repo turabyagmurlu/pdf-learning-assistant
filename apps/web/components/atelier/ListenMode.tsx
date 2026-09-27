@@ -13,8 +13,9 @@ import { useAudioPlayback, useAudioSession } from "@/components/audio/AudioProvi
 import { primeAudio, type QueueChunk } from "@/hooks/useAudioQueue";
 import { useAtelierKeys, type AtelierCard } from "@/hooks/useAtelier";
 import { useDeviceVoice } from "./voice";
-import { SourceLine, cardColor } from "./QuoteCard";
+import QuoteCard, { SourceLine, cardColor } from "./QuoteCard";
 import Progress from "./Progress";
+import Deck from "./Deck";
 
 const cx = (...a: (string | false | null | undefined)[]) => a.filter(Boolean).join(" ");
 const SESSION_ID = "atelier";
@@ -31,7 +32,6 @@ export default function ListenMode({ cards, onDone }: { cards: AtelierCard[]; on
   const audio = useAudioSession();
   const { q, setSpeed } = useAudioPlayback();
   const narrKey = useRef<number | null>(null);
-  const listRef = useRef<HTMLOListElement>(null);
   const texts = cards.map((c) => c.text);
 
   const narrOn = engine === "narrator" && !!audio.session && audio.session.collectionId === SESSION_ID && narrKey.current === audio.session.key;
@@ -39,12 +39,9 @@ export default function ListenMode({ cards, onDone }: { cards: AtelierCard[]; on
   const playing = narrOn ? q.playing : voice.state === "playing";
   const waiting = narrOn && (audio.session?.busy || q.waiting);
 
-  // Çalan kart görünür kalsın
-  useEffect(() => {
-    listRef.current?.querySelector<HTMLElement>(`[data-i="${current}"]`)?.scrollIntoView({
-      block: "center", behavior: window.matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth",
-    });
-  }, [current]);
+  // Cihaz sesi ilerledikçe seçili kart onu izler (durunca kaldığı kartta kalır)
+  useEffect(() => { if (voice.item >= 0) setPos(voice.item); }, [voice.item]);
+  useEffect(() => { if (narrOn && q.index >= 0) setPos(q.index); }, [narrOn, q.index]);
 
   // Atölyeden çıkınca anlatıcı durur
   const { stopIf } = audio;
@@ -137,7 +134,7 @@ export default function ListenMode({ cards, onDone }: { cards: AtelierCard[]; on
 
   return (
     <div className="mx-auto flex w-full max-w-3xl flex-col px-4 pb-phi-5 md:px-8">
-      <Progress index={Math.max(0, current)} count={cards.length} />
+      <Progress index={Math.max(0, current)} count={cards.length} announce={!playing} />
 
       {/* Denetimler */}
       <div className="vellum sticky top-2 z-10 mt-phi-3 flex flex-col gap-3 rounded-2xl border p-phi-2 shadow-soft md:flex-row md:items-center">
@@ -182,8 +179,17 @@ export default function ListenMode({ cards, onDone }: { cards: AtelierCard[]; on
         <p role="alert" className="mt-2 text-center text-sm text-text-secondary">Bu tarayıcıda cihaz sesi yok; anlatıcı sesini deneyebilirsin.</p>
       )}
 
-      {/* Alıntılar */}
-      <ol ref={listRef} className="mt-phi-3 flex flex-col gap-phi-2" aria-label="Dinlenecek alıntılar">
+      {/* Çalan kart: seslendirmeyle eşzamanlı, Oku ile aynı deste geçişi */}
+      <div className="mt-phi-3">
+        <Deck cards={cards} index={Math.max(0, Math.min(cards.length - 1, current))}
+              onSwipe={(d) => jump(current + (d === "left" ? 1 : -1))}
+              canSwipe={(d) => (d === "left" ? current < cards.length - 1 : current > 0)}
+              render={(c, _i, active) => <QuoteCard card={c} active={active && playing} dropCap={false} />} />
+      </div>
+
+      {/* Tüm alıntılar */}
+      <p className="eyebrow mt-phi-4 px-1">Sıradakiler</p>
+      <ol className="mt-phi-2 flex flex-col gap-phi-2" aria-label="Dinlenecek alıntılar">
         {cards.map((c, i) => {
           const on = i === current;
           return (
