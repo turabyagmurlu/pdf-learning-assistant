@@ -27,7 +27,7 @@ export function applyTheme(mode: ThemeMode) {
   }
   link.href = dark ? "/brand-night.svg" : "/brand-day.svg";
   // durum cubugu rengi = uygulama zemini (--bg); marka turuncusu yalniz ikon/illustrasyonda kalir.
-  const color = dark ? "#13100C" : "#F4EEE3";
+  const color = dark ? "#0F1420" : "#FAF8F4";
   const metas = document.querySelectorAll<HTMLMetaElement>('meta[name="theme-color"]');
   if (metas.length) metas.forEach((m) => { m.content = color; });
   else {

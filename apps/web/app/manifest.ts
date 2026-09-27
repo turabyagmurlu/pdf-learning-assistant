@@ -10,7 +10,7 @@ export default function manifest(): MetadataRoute.Manifest {
     display: "standalone",
     orientation: "any",
     // Sfumato: acilis ekrani parsomen zemin; durum cubugu/pencere rengi lapis (marka)
-    background_color: "#F4EEE3",
+    background_color: "#FAF8F4",
     theme_color: "#2E4C8E",
     lang: "tr",
     icons: [

@@ -43,7 +43,7 @@ export interface ToolbarProps {
 /* ===== Okuma kagidi (Ajan V2) ===== */
 
 /** Kagit adlari (2.0 parsomen dili): "cream" anahtari ayni kaldi, adi "Parşömen". */
-export const PAPER_NAME: Record<PaperChoice, string> = { ...PAPER_LABEL, cream: "Parşömen" };
+export const PAPER_NAME: Record<PaperChoice, string> = { ...PAPER_LABEL, cream: "Krem" };
 
 /** Uygulama temasi koyu mu (<html class="dark">); tema degisince guncellenir. */
 export function useAppDark(): boolean {

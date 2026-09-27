@@ -254,3 +254,42 @@
   font-size: 12px; line-height: 16px; white-space: normal;
   background: var(--surface, #FBF8F2); color: var(--text-primary, #2A2017);
   border: 1px solid var(--border, #E2D6C1); box-shadow: 0 4px 14px rgba(0,0,0,.14); }
+
+/* ===== KLASIK TEMA YAMASI (2.0.1): okuyucu renkleri ve kagit tonlari 1.x degerlerine doner ===== */
+.reader-root { --r-shadow: 0 1px 2px rgba(31,29,26,0.05), 0 12px 34px rgba(31,29,26,0.12); }
+.reader-root[data-theme="light"] {
+  --bg:#FAF8F4; --surface:#FFFFFF; --surface-muted:#F3F1EC; --border:#E7E3DA; --border-strong:#8F8A7E;
+  --text-primary:#1B2233; --text-secondary:#5B6172;
+  --accent-purple:#5A48D8; --accent-soft:rgba(90,72,216,.10); --surface-hover:#EFECE5; --on-accent:#FFFFFF;
+  --success:#28784A; --warning:#8A5A00; --danger:#B3402D; --info:#17756B;
+  --success-bg:#E6F2EA; --warning-bg:#FBF0DA; --danger-bg:#FBE9E5; --info-bg:#E2F2EF;
+  --gold:#5A48D8; --gold-soft:rgba(90,72,216,.10); --gold-ink:#5A48D8;
+}
+.reader-root[data-theme="sepia"] {
+  --bg:#EFE7D7; --surface:#F7EFDF; --surface-muted:#EFE4CE; --border:rgba(59,51,32,0.12); --border-strong:#8C7B57;
+  --text-primary:#3B3320; --text-secondary:#6B5F45;
+  --accent-purple:#5A48D8; --accent-soft:rgba(90,72,216,.10); --surface-hover:#E8DCC4; --on-accent:#FFFFFF;
+  --gold:#5A48D8; --gold-soft:rgba(90,72,216,.10); --gold-ink:#5A48D8;
+  --r-page: #FBF3E3;
+  --r-shadow: 0 1px 2px rgba(59,51,32,0.06), 0 12px 34px rgba(59,51,32,0.14);
+}
+.reader-root[data-theme="dark"] {
+  --bg:#0F1420; --surface:#161C2B; --surface-muted:#1E2637; --border:#293246; --border-strong:#606B85;
+  --text-primary:#EDEFF5; --text-secondary:#A5AEC2;
+  --accent-purple:#A99BFF; --accent-soft:rgba(169,155,255,.15); --surface-hover:#232C40; --on-accent:#0F1420;
+  --success:#4FB877; --warning:#E7AC4C; --danger:#F08A76; --info:#48C9BA;
+  --success-bg:rgba(79,184,119,.15); --warning-bg:rgba(231,172,76,.15); --danger-bg:rgba(240,138,118,.15); --info-bg:rgba(72,201,186,.15);
+  --gold:#A99BFF; --gold-soft:rgba(169,155,255,.15); --gold-ink:#A99BFF;
+  --r-page: #F3EFE7;
+  --r-shadow: 0 1px 2px rgba(0,0,0,0.4), 0 14px 40px rgba(0,0,0,0.5);
+}
+.reader-root[data-theme="dark"] .textLayer ::selection { background: rgba(169,155,255,.35); }
+[data-paper="white"] { --paper-bg:#FFFFFF; --paper-ink:#2C2C2A; --paper-ink-2:#5F5E5A; --paper-rule:rgba(44,44,42,.12); --paper-surround:#ECEBE8; --paper-surround-ink:#5F5E5A; --paper-tint:#FFFFFF; }
+[data-paper="cream"] { --paper-bg:#F6EEDC; --paper-ink:#4A3A20; --paper-ink-2:#6E5C3C; --paper-rule:rgba(74,58,32,.14); --paper-surround:#E6DCC6; --paper-surround-ink:#62512F; --paper-tint:#F6EEDC; }
+[data-paper="night"] { --paper-bg:#1E1E1C; --paper-ink:#D3D1C7; --paper-ink-2:#A3A198; --paper-rule:rgba(255,255,255,.12); --paper-surround:#121211; --paper-surround-ink:#A3A198; --paper-tint:#E8DCC6; }
+.reader-surround[data-paper], .reader-surround[data-paper="night"] { background-image: none; }
+.reader-surround[data-paper] .paper-page { border-color: var(--border); box-shadow: var(--r-shadow); }
+.reader-surround[data-paper="cream"] .paper-page::before { display: none; }
+@media (max-width: 1023px) {
+  .reader-page { box-shadow: 0 1px 2px rgba(31,29,26,0.06), 0 6px 18px rgba(31,29,26,0.10); }
+}

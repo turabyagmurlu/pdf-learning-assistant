@@ -27,24 +27,24 @@ export interface Annotation {
   created_at?: string;
 }
 
-/* Vurgu pigmentleri (Sfumato): anahtarlar ayni, degerler Leonardo'nun paletinden.
- * Uzerlerinde --text-primary (#2A2017) 10.1–11.1:1. */
+/* Vurgu renkleri (klasik tema, 2.0.1): 1.x renkleri geri geldi. 2.0'da kaydedilen pigment degerleri
+ * de bu renklere eslenir (pigmentOf). */
 export const HIGHLIGHT_COLORS: { key: string; label: string; value: string }[] = [
-  { key: "yellow", label: "Aşı boyası", value: "#F1D58C" },
-  { key: "green", label: "Yeşil toprak", value: "#C5DDB6" },
-  { key: "blue", label: "Lapis", value: "#C2D2EF" },
-  { key: "pink", label: "Kırmızı tebeşir", value: "#F2C4B2" },
-  { key: "purple", label: "Mor", value: "#DCCAE7" },
+  { key: "yellow", label: "Sarı", value: "#FFE78A" },
+  { key: "green", label: "Yeşil", value: "#BFECCB" },
+  { key: "blue", label: "Mavi", value: "#BFDFFF" },
+  { key: "pink", label: "Pembe", value: "#FFD1E8" },
+  { key: "purple", label: "Mor", value: "#D9CBFF" },
 ];
 
-/** Eski (v1) vurgu renkleri → yeni pigment. #E0A233: eski koyu sari/amber isaret rengi → Asi boyasi. */
+/** 2.0 pigmentleri ve eski amber isaret rengi → klasik renk. */
 const LEGACY_PIGMENT: Record<string, string> = {
-  "#FFE78A": "#F1D58C",
-  "#BFECCB": "#C5DDB6",
-  "#BFDFFF": "#C2D2EF",
-  "#FFD1E8": "#F2C4B2",
-  "#D9CBFF": "#DCCAE7",
-  "#E0A233": "#F1D58C",
+  "#F1D58C": "#FFE78A",
+  "#C5DDB6": "#BFECCB",
+  "#C2D2EF": "#BFDFFF",
+  "#F2C4B2": "#FFD1E8",
+  "#DCCAE7": "#D9CBFF",
+  "#E0A233": "#FFE78A",
 };
 
 /** Kayitli bir vurgu rengini (eski ya da yeni) gosterilecek pigmente esler; bilinmeyeni aynen dondurur. */

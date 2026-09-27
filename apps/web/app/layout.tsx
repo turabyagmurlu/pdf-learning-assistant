@@ -41,8 +41,8 @@ export const metadata: Metadata = {
 // hooks/useVisualViewport --vvh / --kb degiskenlerini verir.
 export const viewport: Viewport = {
   themeColor: [
-    { media: "(prefers-color-scheme: light)", color: "#F4EEE3" },
-    { media: "(prefers-color-scheme: dark)", color: "#13100C" },
+    { media: "(prefers-color-scheme: light)", color: "#FAF8F4" },
+    { media: "(prefers-color-scheme: dark)", color: "#0F1420" },
   ],
   colorScheme: "light dark",
   width: "device-width",
