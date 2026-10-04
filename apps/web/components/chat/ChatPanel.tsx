@@ -360,7 +360,7 @@ export function ChatPanel({ documentId, onGoPage, video, generic, prefill, noteb
               {quick.map((s) => (
                 <button key={s.label} type="button" onClick={() => send(s.q, { withPage: !!s.page })} disabled={loading}
                         className="min-h-[44px] rounded-xl border bg-surface-muted px-3 py-2 text-left hover:border-accent-purple disabled:opacity-60">
-                  <span className="font-medium text-text-primary">{s.label}</span>
+                  <span className="font-medium text-text-primary">{s.label} <span className="text-xs font-normal text-text-secondary">· ⚡{cost}</span></span>
                   <span className="block text-xs">{s.q}</span>
                 </button>
               ))}
@@ -371,9 +371,9 @@ export function ChatPanel({ documentId, onGoPage, video, generic, prefill, noteb
           <div className="flex flex-wrap gap-1.5" role="group" aria-label="Hazır sorular">
             {quick.map((s) => (
               <button key={s.label} type="button" onClick={() => send(s.q, { withPage: !!s.page })} disabled={loading}
-                      title={s.q}
+                      title={`${s.q} · ⚡${cost}`}
                       className="min-h-[44px] rounded-full border bg-surface px-3 text-xs text-text-secondary hover:border-accent-purple/50 hover:text-accent-purple disabled:opacity-60">
-                {s.label}
+                {s.label} · ⚡{cost}
               </button>
             ))}
           </div>

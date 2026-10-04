@@ -375,9 +375,9 @@ export default function ChatTab({ id, colTitle, readyN, active, chatId, setChatU
       {/* Hazir sorular: her zaman tek satir */}
       <div className="mb-3 flex flex-wrap gap-1.5" role="group" aria-label="Hazır sorular">
         {quick.map((s) => (
-          <button key={s.label} type="button" onClick={() => ask(s.q)} disabled={asking} title={s.q}
+          <button key={s.label} type="button" onClick={() => ask(s.q)} disabled={asking} title={`${s.q} · ⚡${cost}`}
                   className="flex min-h-[44px] items-center gap-1 rounded-full border bg-surface px-3 text-sm text-text-secondary hover:border-accent-purple/50 hover:text-accent-purple disabled:opacity-60">
-            <Sparkles size={12} className="text-accent-purple" aria-hidden /> {s.label}
+            <Sparkles size={12} className="text-accent-purple" aria-hidden /> {s.label} <span className="text-xs">· ⚡{cost}</span>
           </button>
         ))}
       </div>

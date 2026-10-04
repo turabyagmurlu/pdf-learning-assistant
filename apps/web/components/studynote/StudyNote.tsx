@@ -89,8 +89,14 @@ export default function StudyNote({ scope, compact, onOpenPage, title }: StudyNo
         return;
       }
       tries = 0;
+      (window as unknown as { __typdfExportAt?: number }).__typdfExportAt = 0;
       h.openExport();
-      document.querySelector('[aria-label="Biriktirdiklerin"]')?.scrollIntoView({ block: "start", behavior: "smooth" });
+      // menü açıldıktan sonra görünür alana getir (uzun notta ekranın çok altında kalıyordu)
+      setTimeout(() => {
+        const menus = document.querySelectorAll('[role="menu"]');
+        const m = menus[menus.length - 1] as HTMLElement | undefined;
+        (m || document.querySelector('[aria-label="Biriktirdiklerin"]'))?.scrollIntoView({ block: "center", behavior: "smooth" });
+      }, 60);
     };
     const onDraftChanged = (e: Event) => {
       const d = ((e as CustomEvent).detail || {}) as { document_id?: string };
@@ -98,6 +104,9 @@ export default function StudyNote({ scope, compact, onOpenPage, title }: StudyNo
       void draftRef.current?.refresh();
     };
     window.addEventListener("typdf:studynote-export", onExport);
+    // sekme bu istekten sonra yüklendiyse (olay kaçtıysa) bekleyen dışa aktarmayı şimdi yap
+    const pendingAt = (window as unknown as { __typdfExportAt?: number }).__typdfExportAt || 0;
+    if (pendingAt && Date.now() - pendingAt < 8000) retry = setTimeout(onExport, 400);
     window.addEventListener(DRAFT_CHANGED_EVENT, onDraftChanged);
     return () => {
       if (retry) clearTimeout(retry);

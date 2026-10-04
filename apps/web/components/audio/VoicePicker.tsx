@@ -114,7 +114,7 @@ export default function VoicePicker({ open, onClose }: { open: boolean; onClose:
   return (
     <Modal open={open} onClose={onClose} title="Anlatıcı sesi" size="md">
       <p className="text-sm text-text-secondary">
-        Sesli dinleme ve Sesli özet bu sesle okunur. “Dinle” ile örnek cümleyi ücretsiz dene; seçimin bu cihazda saklanır.
+        Sesli dinleme ve Sesli özet bu sesle okunur. “Dinle” ile örnek cümleyi dene (hazır örnekler ücretsiz; ilk kez üretilecekse 1 kullanım); seçimin bu cihazda saklanır.
       </p>
       {err && <p role="alert" className="mt-2 text-sm text-danger">{err}</p>}
       {!lists && !err && (

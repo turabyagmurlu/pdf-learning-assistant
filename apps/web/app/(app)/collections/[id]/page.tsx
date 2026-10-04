@@ -335,7 +335,7 @@ function CollectionPage({ id }: { id: string }) {
     } as MoreAction] : []),
     { key: "export", label: "Dışa aktar", Icon: Download,
       hint: st.draft_words || st.notes ? "Çalışma notunu Markdown / Word olarak indir" : "Çalışma notu henüz boş; önce bir vurgu ya da not ekle",
-      run: () => { setTab("not"); setTimeout(() => window.dispatchEvent(new CustomEvent("typdf:studynote-export")), 350); } },
+      run: () => { (window as unknown as { __typdfExportAt?: number }).__typdfExportAt = Date.now(); setTab("not"); setTimeout(() => window.dispatchEvent(new CustomEvent("typdf:studynote-export")), 350); } },
     { key: "delete", label: "Defteri sil", Icon: Trash2, danger: true, run: deleteNotebook },
   ];
 
