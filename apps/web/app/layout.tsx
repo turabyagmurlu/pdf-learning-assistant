@@ -22,7 +22,7 @@ const inter = Inter({
 });
 
 export const metadata: Metadata = {
-  title: "TY PDF — Araştırma Defteri",
+  title: "TY PDF",
   description: "Kaynaklarını yükle, defterde soru sor, atıflı not al ve yaz.",
   applicationName: "TY PDF",
   manifest: "/manifest.webmanifest",

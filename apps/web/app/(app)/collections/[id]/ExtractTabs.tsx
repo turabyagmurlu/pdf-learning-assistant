@@ -98,11 +98,16 @@ function EmptyTool({ Icon, children, action, busy, busyText, cost, err, extra }:
       <Icon size={28} className="mx-auto text-accent-purple" />
       <p className="mt-3 text-sm text-text-secondary">{children}</p>
       {extra}
-      <button onClick={action} disabled={busy} title={costTitle(cost)}
+      <button onClick={action} disabled={busy} title={`${costTitle(cost)} — kaynak başına 1; sonuç saklanır, bir daha harcamaz`}
               className="mx-auto mt-4 flex min-h-[44px] items-center gap-1.5 rounded-xl bg-accent-purple px-4 text-sm text-white disabled:opacity-60">
         {busy ? <Loader2 size={15} className="animate-spin" /> : <Sparkles size={15} />}
         {busy ? busyText : <>Oluştur <Cost n={cost} className="bg-white/20" /></>}
       </button>
+      {!busy && (
+        <p className="mt-2 text-xs text-text-secondary">
+          ⚡{cost} = {cost} kaynak × 1 çağrı · yalnız ilk kez; sonuç saklanır, sonra yalnız yeni eklenen kaynaklar işlenir.
+        </p>
+      )}
       <ErrNote err={err} className="mt-3" />
     </div>
   );
@@ -151,7 +156,6 @@ export function GlossaryTab({ id, readyN, confirm }: { id: string; readyN: numbe
       <EmptyTool Icon={BookMarked} action={build} busy={busy} busyText="Çıkarılıyor… (kaynak başına ~15 sn)" cost={b.buildCost(readyN)} err={err}
                  extra={readyN < 3 ? <p className="mt-2 text-xs text-text-secondary">3 ya da daha fazla kaynakla daha verimli olur; şimdi de oluşturabilirsin.</p> : null}>
         Bu defterdeki tüm kaynaklardan <b>kişi, yer, olay, kurum ve kavramları</b> çıkarır; her birinin kısa açıklamasını ve hangi kaynakta hangi sayfada geçtiğini gösterir.
-        Kaynak başına 1 yapay zekâ kullanımı harcar; sonuç saklanır.
       </EmptyTool>
     );
   }

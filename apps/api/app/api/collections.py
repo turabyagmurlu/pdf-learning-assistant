@@ -368,7 +368,9 @@ ASK_COST = {"kisa": 1, "ayrintili": 1, "derin": 2}
 
 
 async def _save_turn(conn, cid: str, body: AskIn, user, out: dict) -> dict:
-    """Soru-cevabi sohbet gecmisine yazar; chat_id'yi cevaba ekler (yazilamazsa cevap yine doner)."""
+    """Soru-cevabi sohbet gecmisine yazar; chat_id'yi cevaba ekler (yazilamazsa cevap yine doner).
+    Kaydedilen govdede devam-sorulari isareti KALMAZ (kayitli/eski cevaplar da buradan gecer)."""
+    out = intent_svc.clean_answer_payload(out)
     try:
         chat_id = body.chat_id
         if chat_id:
@@ -484,8 +486,10 @@ async def get_chat(cid: str, chat_id: str, conn=Depends(db), user=Depends(curren
         raise NotFound("Sohbet bulunamadı.")
     rows = await conn.fetch("SELECT question, payload, created_at FROM collection_messages WHERE chat_id=$1 ORDER BY id",
                             chat_id)
+    # Eski kayitlarda govdeye gomulu kalmis "<<<DEVAM" blogu okunurken temizlenir (goc gerekmez)
     return {"id": chat_id, "title": ok["title"],
-            "messages": [{"q": r["question"], **(r["payload"] or {}), "at": r["created_at"]} for r in rows]}
+            "messages": [{"q": r["question"], **intent_svc.clean_answer_payload(r["payload"] or {}), "at": r["created_at"]}
+                         for r in rows]}
 
 
 class ChatPatch(BaseModel):
@@ -673,7 +677,7 @@ async def annotate_media(conn, sources: list[dict]):
     return sources
 
 
-# Devam sorulari ayristirma -> app/services/intent.split_followups (FOLLOWUP_MARKER + eski baslik uyumu)
+# Devam sorulari ayristirma -> app/services/intent.split_followups ("## Devam soruları" basligi; eski <<<DEVAM>>> ve bozuk bicimler de)
 
 
 def _suggest_digest(docs, max_chars: int = 14000) -> tuple[str, list[str]]:

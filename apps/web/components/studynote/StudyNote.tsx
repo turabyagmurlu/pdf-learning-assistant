@@ -14,7 +14,7 @@
  *
  * Uçlar: GET/POST /documents/{id}/study-note(/feedback), GET/POST /collections/{cid}/study-note(/feedback) — app/api/study_notes.py
  */
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { CheckCircle2, Clock, Gauge, Loader2, RefreshCw, Sparkles } from "lucide-react";
 import { api, errorMessage } from "@/lib/api";
@@ -22,7 +22,8 @@ import { docHref } from "@/lib/links";
 import Markdown from "@/components/Markdown";
 import { Cost, costTitle, ErrNote, toErr, type Err } from "@/components/CostBadge";
 import { Skeleton } from "@/components/Skeleton";
-import DraftEditor from "@/components/DraftEditor";
+import { toast } from "@/components/Toast";
+import DraftEditor, { DRAFT_CHANGED_EVENT, type DraftEditorHandle } from "@/components/DraftEditor";
 import { fmtMinutes } from "./cites";
 import LessonNote from "./LessonNote";
 import SynthesisNote from "./SynthesisNote";
@@ -30,6 +31,14 @@ import FeedbackBox from "./FeedbackBox";
 import type { ColNote, DocNote, NoteData, OpenPage, StudyScope } from "./types";
 
 const cx = (...a: (string | false | null | undefined)[]) => a.filter(Boolean).join(" ");
+
+/** Zorluk her zaman Türkçe: sunucu `difficulty_tr` verir; eski kayıtlarda yalnız İngilizce seviye varsa burada çevrilir. */
+const DIFFICULTY_TR: Record<string, string> = { beginner: "giriş", intermediate: "orta", advanced: "ileri" };
+function difficultyLabel(l1: { difficulty_tr: string | null; difficulty_level: string | null }): string | null {
+  if (l1.difficulty_tr) return l1.difficulty_tr;
+  const lv = (l1.difficulty_level || "").trim().toLowerCase();
+  return DIFFICULTY_TR[lv] || null;
+}
 
 export type StudyNoteProps = {
   scope: StudyScope;
@@ -61,6 +70,41 @@ export default function StudyNote({ scope, compact, onOpenPage, title }: StudyNo
     if (onOpenPage) onOpenPage(docId, page);
     else router.push(docHref(docId, { page, from: scope.kind === "collection" ? scope.id : null }));
   }, [onOpenPage, router, scope.kind, scope.id]);
+
+  /* ---------- window olayları ----------
+   *  typdf:studynote-export → "Biriktirdiklerin" dışa aktarma menüsü (Word / Markdown) açılır
+   *                           (defter sayfası "Daha fazla ▾ › Dışa aktar" bunu fırlatır).
+   *  typdf:draft-changed    → okuyucu bir vurgu kaydetti: editör sunucu sürümünü (draft_rev) hemen sorgular. */
+  const draftRef = useRef<DraftEditorHandle>(null);
+  useEffect(() => {
+    let tries = 0;
+    let retry: ReturnType<typeof setTimeout> | null = null;
+    const onExport = () => {
+      const h = draftRef.current;
+      if (!h) {
+        // Sekme az önce değişti; not ve taslak henüz yükleniyor olabilir: en çok ~4 sn boyunca yeniden dene
+        if (tries++ < 12) { retry = setTimeout(onExport, 350); return; }
+        tries = 0;
+        toast.info("Biriktirdiklerin yüklenemedi; sayfayı yenileyip tekrar dene.");
+        return;
+      }
+      tries = 0;
+      h.openExport();
+      document.querySelector('[aria-label="Biriktirdiklerin"]')?.scrollIntoView({ block: "start", behavior: "smooth" });
+    };
+    const onDraftChanged = (e: Event) => {
+      const d = ((e as CustomEvent).detail || {}) as { document_id?: string };
+      if (scope.kind === "document" && d.document_id && d.document_id !== scope.id) return;
+      void draftRef.current?.refresh();
+    };
+    window.addEventListener("typdf:studynote-export", onExport);
+    window.addEventListener(DRAFT_CHANGED_EVENT, onDraftChanged);
+    return () => {
+      if (retry) clearTimeout(retry);
+      window.removeEventListener("typdf:studynote-export", onExport);
+      window.removeEventListener(DRAFT_CHANGED_EVENT, onDraftChanged);
+    };
+  }, [scope.kind, scope.id]);
 
   /* ---------- L2 üretimi (⚡): bir kez, saklanır; force ile yenile ---------- */
   const [busy, setBusy] = useState(false);
@@ -120,7 +164,7 @@ export default function StudyNote({ scope, compact, onOpenPage, title }: StudyNo
             {scope.kind === "collection" ? "Defterdeki kaynaklardan vurguların, kaynak ve sayfa sırasıyla; aralarına kendi cümlelerin." : "Bu kaynaktaki vurguların, sayfa sırasıyla; aralarına kendi cümlelerin."}
           </span>
         </div>
-        <DraftEditor scope={scope} title={heading} compact={compact} onOpenPage={openPage} />
+        <DraftEditor ref={draftRef} scope={scope} title={heading} compact={compact} onOpenPage={openPage} />
       </section>
     </div>
   );
@@ -138,7 +182,8 @@ function DocTop({ d, compact, busy, genErr, onGenerate, openPage }: {
   const time = fmtMinutes(l1.reading_minutes);
   const goals = l1.learn_goals || [];
   const hard = l1.difficult_concepts || [];
-  const hasL1 = !!(l1.paragraph || goals.length || hard.length || time || l1.difficulty_tr);
+  const difficulty = difficultyLabel(l1);
+  const hasL1 = !!(l1.paragraph || goals.length || hard.length || time || difficulty);
 
   return (
     <section aria-label="Ders notu" className={compact ? "space-y-3" : "space-y-4"}>
@@ -163,7 +208,7 @@ function DocTop({ d, compact, busy, genErr, onGenerate, openPage }: {
             <div className={cx("vellum rounded-2xl border", compact ? "p-3" : "p-4 md:p-5")}>
               <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-text-secondary">
                 {time && <span className="inline-flex items-center gap-1"><Clock size={12} aria-hidden /> {isMedia ? "izleme" : "okuma"} ~{time}</span>}
-                {l1.difficulty_tr && <span className="inline-flex items-center gap-1"><Gauge size={12} aria-hidden /> zorluk: {l1.difficulty_tr}</span>}
+                {difficulty && <span className="inline-flex items-center gap-1"><Gauge size={12} aria-hidden /> zorluk: {difficulty}</span>}
                 {d.plan.sections > 0 && <span>{d.plan.sections} bölüm</span>}
                 {compact && (l1.paragraph || goals.length > 0 || hard.length > 0) && (
                   <button type="button" onClick={() => setMore((m) => !m)} aria-expanded={more}

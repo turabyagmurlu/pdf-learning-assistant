@@ -33,6 +33,8 @@ import PinchZoom from "@/components/reader/PinchZoom";
 import TextView from "@/components/reader/TextView";
 // Okuma paketi (Ajan TO): okuma konumunu sunucuya yazar, baska cihazdaki konumu dondurur
 import { useReadingSync } from "@/hooks/useReadingSync";
+// Sor → "Bu sayfayı anlat": açık sayfanın metni (pdf.js textContent; taranmışsa /content OCR metni)
+import { usePageText } from "@/hooks/usePageText";
 
 // react-pdf yalniz istemcide (SSR yok); PDF disi okuyucular da ayri parca olarak yuklenir
 const PdfReader = dynamic(() => import("@/components/reader/PdfReader"), { ssr: false });
@@ -525,6 +527,36 @@ export default function DocumentPage({ params }: { params: { id: string } }) {
   const showLeft = leftOpen && (!focus || peek === "left");
   const showRight = rightOpen && (!focus || peek === "right");
   const progress = numPages ? Math.round((page / numPages) * 100) : 0;
+  // açık sayfanın metni yalnız Sor sekmesi seçiliyken çıkarılır ("Bu sayfayı anlat" hazır sorusu)
+  const getPageText = usePageText(fileUrl, id, page, rightTab === "ai" && !!fileUrl);
+
+  // Dış olaylar: `typdf:open-panel` {panel: "sor"|"note"|"links"} sağ paneli açar;
+  // `typdf:ask` {text, page, document_id} (Çalışma notundaki alıntı yanındaki "Sor") soruyu hazırlar ve Sor'u açar.
+  const openRightRef = useRef(openRight);
+  openRightRef.current = openRight;
+  useEffect(() => {
+    const PANEL: Record<string, RightTab> = { sor: "ai", ai: "ai", note: "note", not: "note", links: "links", baglantilar: "links" };
+    const onOpen = (e: Event) => {
+      const d = (e as CustomEvent).detail || {};
+      const key = PANEL[String(d.panel || "")] || "note";
+      setRightTab(key);
+      openRightRef.current(true);
+    };
+    const onAskEvt = (e: Event) => {
+      const d = (e as CustomEvent).detail || {};
+      if (d.document_id && d.document_id !== id) return;
+      const t = String(d.text || "").trim().replace(/\s+/g, " ");
+      if (t) {
+        const snip = t.length > 600 ? t.slice(0, 600) + "…" : t;
+        setPrefill({ text: `«${snip}»${d.page ? ` (s.${d.page})` : ""} — bu kısmı açıklar mısın?`, key: Date.now() });
+      }
+      setRightTab("ai");
+      openRightRef.current(true);
+    };
+    window.addEventListener("typdf:open-panel", onOpen);
+    window.addEventListener("typdf:ask", onAskEvt);
+    return () => { window.removeEventListener("typdf:open-panel", onOpen); window.removeEventListener("typdf:ask", onAskEvt); };
+  }, [id]);
   // Çalışma notu sekmesi gorunur olunca "+N" sifirlanir (yeni birikenler goruldu)
   const draftVisible = rightTab === "note" && (isLg ? showRight : rightOpen);
   useEffect(() => { if (draftVisible) setDraftFresh(0); }, [draftVisible]);
@@ -743,6 +775,7 @@ export default function DocumentPage({ params }: { params: { id: string } }) {
       ) : rightTab === "ai" ? (
         /* Ajan S: "Bu sayfayı anlat" hazır sorusu + cevabın altında "Sesli dinle" (eski Anlat paneli) */
         <ChatPanel documentId={id} prefill={prefill} notebookHref={ctx.id ? notebookHref(ctx) : null}
+                   page={page} getPageText={getPageText}
                    onGoPage={(pg) => { setPage(Math.max(1, Math.min(numPages || pg, pg))); closeAfterJump(); }} />
       ) : (
         <ConnectionsPanel documentId={id} page={page}

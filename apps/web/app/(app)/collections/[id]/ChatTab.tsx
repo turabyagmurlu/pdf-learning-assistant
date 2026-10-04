@@ -20,10 +20,31 @@ import { toast } from "@/components/Toast";
 import { streamSse, type ChatError } from "@/hooks/useChatStream";
 import DepthPicker from "@/components/chat/DepthPicker";
 import { AnswerActions, Understood, Followups, type AddState } from "@/components/chat/AnswerExtras";
-import { type Depth, loadDepth, saveDepth, depthCost, quickQuestions } from "@/components/chat/depth";
+import { type Depth, loadDepth, saveDepth, depthCost, quickQuestions, splitFollowups, stripFollowups, askPrefillText } from "@/components/chat/depth";
 
 /** Sohbet silme 10 sn ertelenir ("Geri al" icin); sekmeden cikilsa da zamanlayici calisir. */
 const UNDO_MS = 10000;
+
+/* Çalışma notundaki alıntının yanındaki "Sor" → window "typdf:ask" {text, page, document_id}.
+ * Sekme bağlıysa kendisi dinler (aşağıdaki useEffect). Sor sekmesi daha hiç açılmadıysa ChatTab bağlı değildir;
+ * o durumda bu modül düzeyindeki dinleyici metni saklar ve adresi ?tab=sor yapar (Next 14.2 native pushState'i
+ * izler → sekme bağlanır → saklanan metin kutuya düşer). Okuyucu sayfasında (/documents) devreye girmez. */
+const ASK_EVENT = "typdf:ask";
+const ASK_STASH = "typdf.askPending";
+let mountedTabs = 0;
+if (typeof window !== "undefined") {
+  window.addEventListener(ASK_EVENT, (e: Event) => {
+    if (mountedTabs > 0) return;
+    if (!/^\/collections\/[^/?#]+/.test(window.location.pathname)) return;
+    const d = (e as CustomEvent).detail || {};
+    const text = String(d.text || "");
+    if (!text.trim()) return;
+    try { sessionStorage.setItem(ASK_STASH, askPrefillText(text, d.page)); } catch {}
+    const p = new URLSearchParams(window.location.search);
+    p.set("tab", "sor");
+    window.history.pushState(null, "", `${window.location.pathname}?${p.toString()}`);
+  });
+}
 
 export type SGroup = { kind: string; label: string; questions: { q: string; why: string }[] };
 export type Sugg = { theme: string; groups: SGroup[]; source: string };
@@ -37,9 +58,13 @@ const scrollTop = () => {
 };
 
 function toThread(msgs: any[]): Turn[] {
-  return (msgs || []).map((m: any) => ({ q: m.q, answer: m.answer || "", sources: m.sources || [],
-    followups: m.followups || [], cached: !!m.cached, cachedQ: m.cached_question, rewritten: m.rewritten_question || null,
-    depth: m.depth }));
+  return (msgs || []).map((m: any) => {
+    // Güvenlik ağı: eski kayıtta gövdeye gömülü kalmış devam bloğu varsa ayır
+    const { body, followups } = splitFollowups(m.answer || "");
+    return { q: m.q, answer: body, sources: m.sources || [],
+      followups: (m.followups && m.followups.length ? m.followups : followups) || [], cached: !!m.cached,
+      cachedQ: m.cached_question, rewritten: m.rewritten_question || null, depth: m.depth };
+  });
 }
 
 export default function ChatTab({ id, colTitle, readyN, active, chatId, setChatUrl, sugg, suggBusy, loadSuggestions,
@@ -73,8 +98,50 @@ export default function ChatTab({ id, colTitle, readyN, active, chatId, setChatU
   // H-6: silinmesi bekleyen sohbetler (10 sn "Geri al"); listeden hemen gizlenir, sunucuya sonra gider
   const pendingDel = useRef(new Map<string, ReturnType<typeof setTimeout>>());
   const [hidden, setHidden] = useState<Set<string>>(new Set());
+  const focusWanted = useRef(false);
   useEffect(() => { setDepth(loadDepth()); }, []);
   const changeDepth = (d: Depth) => { setDepth(d); saveDepth(d); };
+
+  // Sekme başlığı: Sor açıkken "<defter adı> · Sor · TY PDF" (sayfa 60 ms sonra kendi başlığını yazar; onu bekleyip geçeriz)
+  useEffect(() => {
+    if (!active || !colTitle) return;
+    const t = `${colTitle} · Sor · TY PDF`;
+    document.title = t;
+    const h = setTimeout(() => { if (document.title !== t) document.title = t; }, 140);
+    return () => clearTimeout(h);
+  }, [active, colTitle]);
+
+  // typdf:ask (alıntının yanındaki "Sor"): kutuya «alıntı» (s.N) — bunu açıkla; Sor sekmesine geç; odakla
+  useEffect(() => { mountedTabs++; return () => { mountedTabs--; }; }, []);
+  useEffect(() => {
+    const onAsk = (e: Event) => {
+      const d = (e as CustomEvent).detail || {};
+      const text = String(d.text || "");
+      if (!text.trim()) return;
+      setQ(askPrefillText(text, d.page));
+      focusWanted.current = true;
+      if (active) setTimeout(() => inputRef.current?.focus(), 50);
+      else {
+        const p = new URLSearchParams(window.location.search);
+        p.set("tab", "sor");
+        router.push(`${window.location.pathname}?${p.toString()}`, { scroll: false });
+      }
+    };
+    window.addEventListener(ASK_EVENT, onAsk);
+    return () => window.removeEventListener(ASK_EVENT, onAsk);
+  }, [active, router]);
+  useEffect(() => {
+    if (!active) return;
+    try {
+      const s = sessionStorage.getItem(ASK_STASH);
+      if (s) { sessionStorage.removeItem(ASK_STASH); setQ(s); focusWanted.current = true; }
+    } catch {}
+    if (focusWanted.current) {
+      focusWanted.current = false;
+      const h = setTimeout(() => { const el = inputRef.current; if (el) { el.focus(); try { el.setSelectionRange(el.value.length, el.value.length); } catch {} } }, 120);
+      return () => clearTimeout(h);
+    }
+  }, [active]);
 
   async function loadChats(openLatest = false) {
     try {
@@ -217,6 +284,10 @@ export default function ChatTab({ id, colTitle, readyN, active, chatId, setChatU
       setAsking(false);
       return;
     }
+    // Güvenlik ağı: sunucudan kaçan bir devam bloğu varsa gövdeden ayır (ekranda ve notta işaret kalmaz)
+    const split = splitFollowups(full);
+    full = split.body;
+    if (!followups.length) followups = split.followups;
     let fu = followups.map((s) => s.replace(/\s*\[K\s*\d+(?:\s*s\.\s*\d+)?(?:\s*[,;]\s*K?\s*\d+(?:\s*s\.\s*\d+)?)*\]/g, "").trim()).filter(Boolean);
     if (!fu.length && sugg?.groups?.length) {
       // Devam sorusu gelmediyse: henuz sorulmamis onerilerden 3 tane (ek maliyet yok)
@@ -239,7 +310,7 @@ export default function ChatTab({ id, colTitle, readyN, active, chatId, setChatU
       await api(`/collections/${id}/draft/blocks`, { method: "POST", body: JSON.stringify({ blocks: [{ type: "answer", q: t.q, text: t.answer.trim(),
         sources: (t.sources || []).map((s: any) => ({ title: s.title, page: s.page ?? null, document_id: s.document_id })) }] }) }, 1);
       setAddState((s) => ({ ...s, [i]: "done" }));
-      toast("Çalışma notuna eklendi", { action: { label: "Notu aç", run: () => router.push(`/collections/${id}?tab=taslak`) } });
+      toast("Çalışma notuna eklendi", { action: { label: "Notu aç", run: () => router.push(`/collections/${id}?tab=not`) } });
     } catch (e) {
       setAddState((s) => ({ ...s, [i]: "idle" }));
       toast.error(errorMessage(e, "Çalışma notuna eklenemedi. Birkaç saniye sonra tekrar dene."));
@@ -441,7 +512,7 @@ export default function ChatTab({ id, colTitle, readyN, active, chatId, setChatU
             </div>
             <div className="rounded-2xl border bg-surface p-4 md:p-5">
               {live.text ? (
-                <CitedText text={live.text} sources={[]} className="font-reading" onCite={() => {}} />
+                <CitedText text={stripFollowups(live.text)} sources={[]} className="font-reading" onCite={() => {}} />
               ) : (
                 <p className="flex items-center gap-2 text-sm text-text-secondary">
                   <Loader2 size={14} className="animate-spin" />

@@ -2,7 +2,7 @@ import type { MetadataRoute } from "next";
 
 export default function manifest(): MetadataRoute.Manifest {
   return {
-    name: "TY PDF — Araştırma Defteri",
+    name: "TY PDF — Oku, sor, not al",
     short_name: "TY PDF",
     description: "Kaynaklarını yükle, defterde soru sor, atıflı not al ve yaz.",
     start_url: "/notebooks",

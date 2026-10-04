@@ -29,6 +29,35 @@ export function nearestSpeed(v: number): number {
   return SPEEDS.reduce((a, b) => (Math.abs(b - v) < Math.abs(a - v) ? b : a), SPEEDS[0]);
 }
 
+// ---- Ses seçimi: tek anahtar, tek liste ----------------------------------------------------------
+/** Seçili anlatıcı sesi (localStorage). LectureTab ve ListenDock aynı anahtarı okur; eski `lecture.voice` bir kez taşınır. */
+export const VOICE_KEY = "typdf-voice";
+/** Ses seçici tabakayı açma isteği (okuyucu ⋯ → "Ses seçimi"; ListenDock dinler). ReaderToolbar VOICE_PICKER_EVENT ile aynı. */
+export const VOICE_PICKER_EVENT = "typdf:voice-picker";
+/** Seçim değişti: detail {voice}. Açık oynatıcı/sekme yeni sesi alır. */
+export const VOICE_CHANGED_EVENT = "typdf:voice-changed";
+export type VoiceOption = { id: string; label: string; sample_ready?: boolean };
+
+export function loadVoice(): string {
+  if (typeof window === "undefined") return "";
+  try {
+    const v = localStorage.getItem(VOICE_KEY);
+    if (v) return v;
+    const old = localStorage.getItem("lecture.voice");
+    if (old && old !== "__device") { localStorage.setItem(VOICE_KEY, old); return old; }
+  } catch {}
+  return "";
+}
+export function saveVoice(v: string) {
+  if (typeof window === "undefined") return;
+  try { localStorage.setItem(VOICE_KEY, v); localStorage.setItem("lecture.voice", v); } catch {}
+  window.dispatchEvent(new CustomEvent(VOICE_CHANGED_EVENT, { detail: { voice: v } }));
+}
+export function requestVoicePicker() {
+  if (typeof window === "undefined") return;
+  window.dispatchEvent(new CustomEvent(VOICE_PICKER_EVENT));
+}
+
 // ---- "Sesli dinle" olayı ---------------------------------------------------------------------
 export const LISTEN_EVENT = "typdf:listen";
 export type ListenRequest = { text: string; title?: string; subtitle?: string; voice?: string; device?: boolean; id?: string };

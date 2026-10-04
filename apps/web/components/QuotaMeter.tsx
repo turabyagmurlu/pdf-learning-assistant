@@ -51,6 +51,38 @@ export function atTime(hhmm: string): string {
   return `${hhmm}'${sfx}`;
 }
 
+/* ===== Paylaşılan /usage önbelleği (modül düzeyi) =====
+ * Layout'ta 3 QuotaMeter örneği var (ray, tam menü, telefon). Hepsi tek kaynaktan okur:
+ *  - aynı anda yalnız 1 istek (uçuştaki söz paylaşılır), sonuç 60 sn tazedir;
+ *  - rota değişiminde / yeniden bağlanmada tazeyse istek atılmaz; `force` yalnız pencere açılınca. */
+const USAGE_TTL_MS = 60_000;
+let usageCache: { data: U | null; at: number } = { data: null, at: 0 };
+let usageInflight: Promise<U | null> | null = null;
+const usageSubs = new Set<(u: U | null) => void>();
+function fetchUsage(force = false): Promise<U | null> {
+  const fresh = usageCache.data && Date.now() - usageCache.at < USAGE_TTL_MS;
+  if (fresh && !force) return Promise.resolve(usageCache.data);
+  if (usageInflight) return usageInflight;
+  usageInflight = api("/usage", {}, 1)
+    .then((d: U) => { usageCache = { data: d, at: Date.now() }; usageSubs.forEach((fn) => fn(d)); return d; })
+    .catch(() => usageCache.data /* gosterge sessizce eski degerde kalir */)
+    .finally(() => { usageInflight = null; });
+  return usageInflight;
+}
+/** Tek /usage akışına bağlanır; 60 sn'de bir ve sekme öne gelince (eskiyse) yeniler. */
+function useUsage(): [U | null, (force?: boolean) => void] {
+  const [u, setU] = useState<U | null>(usageCache.data);
+  useEffect(() => {
+    usageSubs.add(setU);
+    void fetchUsage();
+    const t = setInterval(() => { if (document.visibilityState === "visible") void fetchUsage(); }, USAGE_TTL_MS);
+    const onVis = () => { if (document.visibilityState === "visible") void fetchUsage(); };
+    document.addEventListener("visibilitychange", onVis);
+    return () => { usageSubs.delete(setU); clearInterval(t); document.removeEventListener("visibilitychange", onVis); };
+  }, []);
+  return [u, (force?: boolean) => { void fetchUsage(force); }];
+}
+
 /** `service` alanını tek biçime indirger. */
 function readService(s: Service): { state: ServiceState; retryMin: number | null } {
   if (!s) return { state: "aktif", retryMin: null };
@@ -60,7 +92,7 @@ function readService(s: Service): { state: ServiceState; retryMin: number | null
 }
 
 export default function QuotaMeter({ compact }: { compact?: boolean }) {
-  const [u, setU] = useState<U | null>(null);
+  const [u, reload] = useUsage();
   const [open, setOpen] = useState(false);
   const [lastBackup, setLastBackup] = useState<string | null | undefined>(undefined);
   const [dl, setDl] = useState(false);
@@ -81,18 +113,11 @@ export default function QuotaMeter({ compact }: { compact?: boolean }) {
     } finally { setDl(false); }
   }
 
-  async function load() { try { setU(await api("/usage", {}, 1)); } catch { /* gosterge sessizce eski degerde kalir */ } }
-  useEffect(() => {
-    load();
-    const t = setInterval(() => { if (document.visibilityState === "visible") load(); }, 60000);
-    const onVis = () => { if (document.visibilityState === "visible") load(); };
-    document.addEventListener("visibilitychange", onVis);
-    return () => { clearInterval(t); document.removeEventListener("visibilitychange", onVis); };
-  }, []);
   useEffect(() => {
     if (!open) return;
-    load();
+    reload(true);
     api("/me/backup-status", {}, 1).then((r) => setLastBackup(r?.last_backup ?? null)).catch(() => setLastBackup(null));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open]);
 
   const me = u?.me;

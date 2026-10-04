@@ -11,6 +11,7 @@
 import { useEffect, useRef, useState } from "react";
 import { Loader2, Headphones, Volume2, RefreshCw, X } from "lucide-react";
 import { api, API, getToken } from "@/lib/api";
+import { VOICE_CHANGED_EVENT, loadVoice, saveVoice } from "@/lib/audio";
 import AudioQueuePlayer from "@/components/AudioQueuePlayer";
 import { useAudioSession } from "@/components/audio/AudioProvider";
 import { primeAudio, type QueueChunk } from "@/hooks/useAudioQueue";
@@ -18,7 +19,7 @@ import BrowserVoice, { browserVoiceSupported } from "@/components/BrowserVoice";
 import { Cost, costTitle, isUsageLimit } from "@/components/CostBadge";
 import type { ConfirmOptions } from "@/components/Confirm";
 
-type Voice = { id: string; label: string };
+type Voice = { id: string; label: string; sample_ready?: boolean };
 type Fmt = "solo" | "dialog";
 type JobState = {
   job_id: string; status: "running" | "ready" | "error"; done: number; total: number;
@@ -97,7 +98,7 @@ export default function LectureTab({ id, title, readyN, confirm }: {
   useEffect(() => { setCanSpeak(browserVoiceSupported()); }, []);
   useEffect(() => {
     try { const t = localStorage.getItem(LEC_KEY); if (t) setLecture(t); } catch {}
-    try { const v = localStorage.getItem("lecture.voice"); if (v) setVoice(v); } catch {}
+    { const v = loadVoice(); if (v) setVoice(v); }          // tek anahtar: typdf-voice (ListenDock ile ortak)
     try { const v = localStorage.getItem("lecture.voice2"); if (v) setVoice2(v); } catch {}
     try { const f = localStorage.getItem("lecture.format"); if (f === "dialog" || f === "solo") setFmt(f); } catch {}
     try { const a = localStorage.getItem("lecture.autoAudio"); if (a === "0") setAutoAudio(false); } catch {}
@@ -354,6 +355,17 @@ export default function LectureTab({ id, title, readyN, confirm }: {
   // ---- Ses örneği (H6: sunucuda sabit örnek, ilk dinleme 1 kullanım) --------------------------------
   const [sampling, setSampling] = useState("");
   const sampleRef = useRef<HTMLAudioElement | null>(null);
+  // Seçili sesin örneği sunucuda hazırsa dinlemek ücretsiz (GET /lecture/voices → sample_ready); alan yoksa ücretsiz say
+  const sampleFree = voiceList.find((v) => v.id === voice)?.sample_ready !== false;
+  // Ses başka yerden değişti (okuyucu "Ses seçimi" / Sesli dinle oynatıcısı): aynı anahtar, anında yansır
+  useEffect(() => {
+    const onChanged = (e: Event) => {
+      const v = String((e as CustomEvent).detail?.voice || "");
+      if (v && v !== "__device") setVoice((cur) => (cur === v ? cur : v));
+    };
+    window.addEventListener(VOICE_CHANGED_EVENT, onChanged);
+    return () => window.removeEventListener(VOICE_CHANGED_EVENT, onChanged);
+  }, []);
   async function sampleVoice(v: string) {
     setSampling(v); setLecErr("");
     const ac = new AbortController();
@@ -373,6 +385,8 @@ export default function LectureTab({ id, title, readyN, confirm }: {
       const a = new Audio(url); sampleRef.current = a;
       a.onended = () => URL.revokeObjectURL(url);
       a.play().catch(() => setLecErr("Tarayıcı sesi engelledi; sayfaya bir kez dokunup tekrar dene."));
+      // Örnek artık sabit önbellekte: bundan sonra ücretsiz
+      setVoiceList((l) => l.map((x) => (x.id === v ? { ...x, sample_ready: true } : x)));
     } catch (e: any) {
       setLecErr(e?.name === "AbortError" ? "Örnek zaman aşımına uğradı; tekrar dene." : (e?.message || "Örnek dinlenemedi."));
     } finally { clearTimeout(netTimer); setSampling(""); }
@@ -436,7 +450,7 @@ export default function LectureTab({ id, title, readyN, confirm }: {
           <div role="radiogroup" aria-label="Anlatıcı sesi" className="mt-3 flex flex-wrap gap-1.5">
             {voiceList.map((v) => (
               <button key={v.id} role="radio" aria-checked={voice === v.id}
-                      onClick={() => { setVoice(v.id); try { localStorage.setItem("lecture.voice", v.id); } catch {} stopAudio(); }}
+                      onClick={() => { setVoice(v.id); saveVoice(v.id); stopAudio(); }}
                       className={"min-h-[40px] rounded-xl border px-3 py-1.5 text-xs " +
                         (voice === v.id ? "border-accent-purple bg-accent-purple/10 font-semibold text-text-primary" : "hover:bg-black/5")}>
                 {v.label}
@@ -462,10 +476,11 @@ export default function LectureTab({ id, title, readyN, confirm }: {
             </>
           )}
           <div className="mt-3 flex flex-wrap items-center gap-2">
-            <button onClick={() => sampleVoice(voice)} disabled={!voice || !!sampling} title={costTitle(1) + " (aynı örnek ikinci kez ücretsiz)"}
+            <button onClick={() => sampleVoice(voice)} disabled={!voice || !!sampling}
+                    title={sampleFree ? "Örnek cümle hazır · ücretsiz" : costTitle(1) + " (örnek ilk kez üretilir; sonra herkes için ücretsiz)"}
                     className="flex min-h-[40px] items-center gap-1.5 rounded-lg border px-3 py-1.5 text-xs hover:bg-black/5 disabled:opacity-60">
               {sampling ? <Loader2 size={13} className="animate-spin" /> : <Volume2 size={13} />}
-              {sampling ? "Örnek hazırlanıyor…" : <>Bu sesi dinle <Cost n={1} /></>}
+              {sampling ? "Örnek hazırlanıyor…" : sampleFree ? "Bu sesi dinle · ücretsiz" : <>Bu sesi dinle <Cost n={1} /></>}
             </button>
             <span className="text-xs text-text-secondary">
               Sesi değiştirirsen özet o sesle yeniden seslendirilir; her ses ayrı saklanır.

@@ -1,6 +1,6 @@
 "use client";
 /**
- * El yazısı notunun küçük önizlemesi (Vurgular paneli, not penceresi, taslak ve Atölye kartları).
+ * El yazısı notunun küçük önizlemesi (Çalışma notu, not penceresi, Bugün kartları).
  * Darbeler kutuya ölçeklenir; koyu temada da okunsun diye açık kâğıt zemin üzerinde çizilir.
  */
 import { useMemo } from "react";

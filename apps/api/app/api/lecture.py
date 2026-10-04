@@ -23,6 +23,7 @@ from app.deps import db, current_user
 from app.services import tts_jobs
 from app.services.analysis_service import lecture_prompt, lecture_script, warm_kwargs
 from app.services.tts_service import FEMALE_VOICES, DEFAULT_VOICE, MALE_VOICES, DEFAULT_MALE_VOICE
+from app.api.study import samples_ready
 
 router = APIRouter(tags=["lecture"])
 
@@ -164,11 +165,13 @@ async def lecture_stream(cid: str, refresh: bool = False, format: str | None = N
 
 @router.get("/lecture/voices")
 async def lecture_voices(user=Depends(current_user)):
-    """Anlatici (4 kadin) ve ogrenci (3 erkek) sesleri; sohbet bicimi ikisini birlikte kullanir."""
+    """Anlatici (4 kadin) ve ogrenci (3 erkek) sesleri; sohbet bicimi ikisini birlikte kullanir.
+    `sample_ready`: ornek cumlesi sabit onbellekte hazir (dinlemek ucretsiz)."""
+    ready = await samples_ready()
     return {
-        "voices": [{"id": k, "label": v} for k, v in FEMALE_VOICES.items()],
+        "voices": [{"id": k, "label": v, "sample_ready": k in ready} for k, v in FEMALE_VOICES.items()],
         "default": DEFAULT_VOICE,
-        "student_voices": [{"id": k, "label": v} for k, v in MALE_VOICES.items()],
+        "student_voices": [{"id": k, "label": v, "sample_ready": k in ready} for k, v in MALE_VOICES.items()],
         "default_student": DEFAULT_MALE_VOICE,
         "speakers": {"teacher": tts_jobs.SPEAKER_A, "student": tts_jobs.SPEAKER_B},
     }

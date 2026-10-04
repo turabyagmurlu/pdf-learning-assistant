@@ -1,7 +1,8 @@
 "use client";
 /**
  * Defter sayfasi. Sekme ve acik sohbet adreste tutulur (?tab=, &chat=); geri tusu sekmeler arasinda calisir.
- * 3 sekme: Kaynaklar · Sor · Çalışma notu; "Daha fazla ▾": Sözlük, Sesli özet, Dışa aktar, Kapağı düzenle, Defteri sil.
+ * 3 sekme: Kaynaklar · Sor · Çalışma notu; "Daha fazla ▾" (≤5): Sözlük, Sesli özet, [Konuya göre grupla ⚡1 — ≥3 kaynak], Dışa aktar, Defteri sil.
+ * Kapağı düzenle: başlıktaki kapak rozetine tıkla.
  * Parcalar: tabs.tsx (sekme seridi + kilitler + Daha fazla), ChatTab (Ajan S), components/studynote/StudyNote (Ajan N),
  * ExtractTabs (Sözlük), LectureTab (Sesli özet, Ajan V), useUploader, components/AddSourceDialog.
  */
@@ -152,9 +153,14 @@ function CollectionPage({ id }: { id: string }) {
     return !((d?.documents || []) as Doc[]).some(isProc);
   }, { active: processingN > 0, base: 3000, max: 15000 });
 
+  // Sekme başlığı: ?tab= / &chat= değişiminde Next kök başlığa dönebiliyor → her adres değişiminde yeniden yaz
   useEffect(() => {
-    if (data?.collection?.title) document.title = `${data.collection.title} · TY PDF`;
-  }, [data?.collection?.title]);
+    if (!data?.collection?.title) return;
+    const t = `${data.collection.title} · TY PDF`;
+    document.title = t;
+    const h = setTimeout(() => { if (document.title !== t) document.title = t; }, 60);
+    return () => clearTimeout(h);
+  }, [data?.collection?.title, tab, chatId]);
 
   /* ---------- yukleme + kaynak ekleme ---------- */
   const uploader = useUploader(id, async () => { await load().catch(() => {}); });
@@ -313,14 +319,23 @@ function CollectionPage({ id }: { id: string }) {
     catch (e: any) { toast.error(e?.message || "Defter silinemedi; tekrar dene."); }
   }
 
-  /* ---------- "Daha fazla ▾" eylemleri ---------- */
+  /* ---------- "Daha fazla ▾" eylemleri (Sözlük · Sesli özet görünümleri + en çok 3 eylem = ≤5 madde) ----------
+   * Konuya göre grupla: sunucu konu gruplarını kaynak kümesi değişmedikçe saklar → ⚡1 yalnız ilk üretimde;
+   * sonrası ücretsiz aç/kapa. 3'ten az hazır kaynakta madde hiç gösterilmez (pasif madde kalabalığı yok).
+   * Kapağı düzenle: başlıktaki kapak rozetine tıklanır (menüde değil). */
   const toggleGroup = () => { const v = !grouped; setGrouped(v); try { localStorage.setItem("typdf-group", v ? "1" : "0"); } catch {} if (v && !topics) loadTopics(); };
+  const savedTopics = (() => { try { const t = typeof col.topics === "string" ? JSON.parse(col.topics) : col.topics; return Array.isArray(t?.groups) ? t.groups.length : 0; } catch { return 0; } })();
+  const topicsReady = !!(topics?.groups?.length || savedTopics);
   const moreActions: MoreAction[] = [
-    { key: "group", label: grouped ? "Konu gruplarını gizle" : "Konuya göre grupla", Icon: Tags, cost: !topics && !grouped ? 1 : undefined,
-      disabled: readyN >= 3 ? null : "En az 3 hazır kaynak gerekir", run: toggleGroup },
-    { key: "export", label: "Dışa aktar", Icon: Download, disabled: st.draft_words || st.notes ? null : "Çalışma notu henüz boş",
+    ...(readyN >= 3 ? [{
+      key: "group", label: grouped ? "Konu gruplarını gizle" : "Konuya göre grupla", Icon: Tags,
+      cost: !topicsReady && !grouped ? 1 : undefined,
+      hint: !topicsReady && !grouped ? "⚡1 · yalnız ilk kez; kaynaklar değişmedikçe bir daha harcamaz" : "Ücretsiz · kaynak kartları konu rengine göre dizilir",
+      run: toggleGroup,
+    } as MoreAction] : []),
+    { key: "export", label: "Dışa aktar", Icon: Download,
+      hint: st.draft_words || st.notes ? "Çalışma notunu Markdown / Word olarak indir" : "Çalışma notu henüz boş; önce bir vurgu ya da not ekle",
       run: () => { setTab("not"); setTimeout(() => window.dispatchEvent(new CustomEvent("typdf:studynote-export")), 350); } },
-    { key: "cover", label: "Kapağı düzenle", Icon: Palette, run: () => setCoverOpen(true) },
     { key: "delete", label: "Defteri sil", Icon: Trash2, danger: true, run: deleteNotebook },
   ];
 
@@ -394,8 +409,15 @@ function CollectionPage({ id }: { id: string }) {
       {/* başlık */}
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0">
-          <div className="flex items-center gap-2">
-            <CoverBadge id={col.id} color={col.cover_color} icon={col.cover_icon} size={40} className="shrink-0 md:h-12 md:w-12" />
+          <div className="flex min-w-0 items-center gap-2">
+            {/* Kapak rozeti = "Kapağı düzenle" (Daha fazla menüsünde değil; üzerine gelince kalem belirir) */}
+            <button type="button" onClick={() => setCoverOpen(true)} aria-label="Kapağı düzenle: renk ve simge" title="Kapağı düzenle"
+                    className="group/cover relative shrink-0 rounded-xl focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-purple">
+              <CoverBadge id={col.id} color={col.cover_color} icon={col.cover_icon} size={40} className="md:h-12 md:w-12" />
+              <span aria-hidden className="absolute -bottom-1 -right-1 flex h-5 w-5 items-center justify-center rounded-full border bg-surface text-text-secondary shadow-soft transition md:opacity-0 md:group-hover/cover:opacity-100 md:group-focus-visible/cover:opacity-100">
+                <Palette size={11} />
+              </span>
+            </button>
             {renaming ? (
               <div className="flex items-center gap-1.5">
                 <input value={newTitle} onChange={(e) => setNewTitle(e.target.value)} aria-label="Defter adı"
@@ -405,7 +427,7 @@ function CollectionPage({ id }: { id: string }) {
                         className="flex h-10 w-10 items-center justify-center rounded-lg border border-border-strong/60 bg-surface text-text-primary hover:bg-surface-hover"><Check size={16} /></button>
               </div>
             ) : (
-              <h1 className="line-clamp-2 font-heading text-[30px] leading-[1.08] tracking-tight md:text-[40px] md:leading-[1.05]">{col.title}</h1>
+              <h1 className="line-clamp-2 min-w-0 break-words font-heading text-[28px] leading-[1.08] tracking-tight sm:text-[30px] md:text-[40px] md:leading-[1.05]">{col.title}</h1>
             )}
             {!renaming && (
               <button onClick={() => { setNewTitle(col.title || ""); setRenaming(true); }} aria-label="Defteri yeniden adlandır"

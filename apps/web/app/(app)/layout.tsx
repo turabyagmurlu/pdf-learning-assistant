@@ -299,8 +299,9 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
           </header>
         )}
 
+        {/* overflow-x-hidden: telefon genisliginde (<=400) hicbir sayfa yatay kaydirma uretmesin (guvenlik agi) */}
         <main id="main" tabIndex={-1}
-              className={cx("flex-1 overflow-auto outline-none", !bare && "pb-[calc(var(--bottom-nav)+16px+var(--mini-player-h,0px))] md:pb-[var(--mini-player-h,0px)]")}>
+              className={cx("flex-1 overflow-y-auto overflow-x-hidden outline-none", !bare && "pb-[calc(var(--bottom-nav)+16px+var(--mini-player-h,0px))] md:pb-[var(--mini-player-h,0px)]")}>
           {children}
         </main>
         <Shortcuts />

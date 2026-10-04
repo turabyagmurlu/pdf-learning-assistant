@@ -15,13 +15,12 @@
  * `primeAudio()` çağırır, `play()` önceki öğeleri bırakır ve sıradaki parça ısıtılmış öğeleri kullanır.
  * Çıkışta ((app) dışına geçiş) sağlayıcı kalkar ve ses durur; başka sekmede çıkış yapılırsa da durur.
  * V3: `kind: "lecture" | "listen"` — "listen" oturumları (Sor cevabı "Sesli dinle") ListenDock'ta gösterilir;
- * `dock` açıkken mini çubuk gizlenir. Hız tek kaynaktan (lib/audio, `audio.speed`). ListenDock burada bağlanır,
- * böylece (app) layout'a dokunmadan her sayfada `typdf:listen` olayı dinlenir.
+ * `dock` açıkken mini çubuk gizlenir. Hız tek kaynaktan (lib/audio, `audio.speed`). ListenDock (app) layout'ta bir kez
+ * bağlanır (içinde MiniPlayer); her sayfada `typdf:listen` ve `typdf:voice-picker` olayları dinlenir.
  */
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { useAudioQueue, useMediaSession, useQueueAutostart, type AudioQueue, type QueueChunk } from "@/hooks/useAudioQueue";
 import { loadSpeed, saveSpeed } from "@/lib/audio";
-import ListenDock from "@/components/audio/ListenDock";
 
 export type AudioSession = {
   key: number;
@@ -139,7 +138,8 @@ export function AudioProvider({ children }: { children: ReactNode }) {
     <SessionContext.Provider value={sessionValue}>
       <PlaybackContext.Provider value={playbackValue}>
         {children}
-        <ListenDock />
+        {/* ListenDock (ve içindeki MiniPlayer) (app) layout'ta Suspense içinde BİR kez bağlanır; burada ikinci kopya
+            iki `typdf:listen` dinleyicisi ve çift ses isteği doğuruyordu (V tur 2). */}
       </PlaybackContext.Provider>
     </SessionContext.Provider>
   );

@@ -80,7 +80,7 @@ function ViewMenu({ view, setView, density, setDensity, selecting, onSelect, can
 
 type Doc = {
   id: string; title: string; status: string; processing_stage?: string | null; source_type?: string | null;
-  page_count?: number | null; short_summary?: string | null; difficulty_level?: string | null;
+  page_count?: number | null; short_summary?: string | null; difficulty_level?: string | null; difficulty_tr?: string | null;
   key_concepts?: unknown; category?: string | null; tags?: unknown; is_favorite?: boolean;
   collection_id?: string | null; collection_ids?: string[] | null; created_at?: string;
   progress_done?: number | null; progress_total?: number | null; error_message?: string | null;
@@ -88,6 +88,15 @@ type Doc = {
   progress_pct?: number | null;
   reading?: { page?: number | null; pct?: number | null; updated_at?: string | null } | null;
 };
+
+/** Zorluk çipi Türkçe: sunucu `difficulty_tr` verirse o; yoksa İngilizce düzey eşlenir (Başlangıç · Orta · İleri). */
+const DIFFICULTY_TR: Record<string, string> = { beginner: "Başlangıç", giris: "Başlangıç", giriş: "Başlangıç", intermediate: "Orta", orta: "Orta", advanced: "İleri", ileri: "İleri" };
+function difficultyLabel(d: Doc): string | null {
+  const raw = (d.difficulty_tr || d.difficulty_level || "").trim();
+  if (!raw) return null;
+  const k = raw.toLocaleLowerCase("tr");
+  return DIFFICULTY_TR[k] || (k[0].toLocaleUpperCase("tr") + k.slice(1));
+}
 type Col = { id: string; title: string; cover_color?: string | null; cover_icon?: string | null };
 type Prog = { page: number | null; numPages: number | null; pct: number };
 
@@ -622,7 +631,7 @@ export default function LibraryPage() {
                 )}
                 {d.category && <span className="rounded-full bg-surface-muted px-2 py-0.5 text-text-secondary">{d.category}</span>}
                 {d.page_count ? <span className="rounded-full bg-surface-muted px-2 py-0.5 text-text-secondary">{d.page_count} sayfa</span> : null}
-                {d.difficulty_level && <span className="hidden rounded-full bg-surface-muted px-2 py-0.5 text-text-secondary sm:inline">{d.difficulty_level}</span>}
+                {difficultyLabel(d) && <span className="hidden rounded-full bg-surface-muted px-2 py-0.5 text-text-secondary sm:inline" title="Zorluk">{difficultyLabel(d)}</span>}
                 {toArr(d.tags).slice(0, 3).map((t, i) => <span key={i} className="rounded-full bg-surface-muted px-2 py-0.5 text-text-secondary">#{String(t)}</span>)}
               </div>
               {cids.length > 0 && (

@@ -5,14 +5,18 @@
  * - Verisini kapsamına göre kendisi çeker (components/draft/scope.ts).
  * - Otomatik kayıt (1 sn), koşullu yazım (draft_rev); çakışmada (defter 200+conflict, belge 409) tazeler,
  *   yerel değişikliği korur (mergeRemote). Kaydedilemeyen son hâl cihazda yedeklenir.
- * - Sekme odaklanınca ve boştayken 15 sn'de bir sunucu sürümüne bakar; kendiliğinden biriken (auto)
- *   vurgular `.gilded` altın parıltıyla belirir.
+ * - Sekme odaklanınca ve 5 sn'de bir sunucu sürümüne (draft_rev) bakar; okuyucu bir vurgu kaydedince
+ *   (`hooks/useAnnotations` → window "typdf:draft-changed") anında bakar. Sunucudan gelen yeni bloklar
+ *   yerel değişiklik beklerken de (mergeRemote ile sona eklenerek) hemen listeye girer; kendiliğinden
+ *   biriken (auto) vurgular `.gilded` altın parıltıyla belirir.
+ * - ref (DraftEditorHandle): `openExport()` dışa aktarma menüsünü açar (defter "Daha fazla → Dışa aktar"),
+ *   `refresh()` sunucu sürümünü hemen sorgular.
  * - 3.0 "Çalışma notu → Biriktirdiklerin": sade araç çubuğu (Vurguları getir · Sayfa sırasına diz · Dışa aktar · ⋯ [Önceki sürümler]).
  *   AI düzenle menüsü ve "Atölyede çalış" KALKTI. Her alıntının yanında "Sor": window "typdf:ask" olayı
  *   ({text, page, document_id}) → Sor paneli/sekmesi alıntıyı soruya ekler.
  * - compact: okuyucu yan paneli — tek sütun, küçük araç çubuğu.
  */
-import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { forwardRef, useEffect, useImperativeHandle, useMemo, useRef, useState, type ForwardedRef, type ReactNode } from "react";
 import { useRouter } from "next/navigation";
 import { api, API, getToken, errorMessage } from "@/lib/api";
 import { docHref } from "@/lib/links";
@@ -164,8 +168,29 @@ export type DraftEditorProps = {
   onOpenPage?: (docId: string, page: number | null) => void;
 };
 
+/** Dışarıdan tetiklenebilen işlemler (StudyNote: "Dışa aktar" olayı, vurgu sonrası tazeleme). */
+export type DraftEditorHandle = {
+  /** "Dışa aktar ▾" menüsünü açar (Word / Markdown / Paylaş). */
+  openExport: () => void;
+  /** Sunucudaki taslağı hemen sorgular; eklenen yeni blok sayısını döndürür. */
+  refresh: () => Promise<number>;
+};
+
+/** Okuyucu bir vurgu kaydedince yayınlanan olay: detail {document_id}. Editör sunucu sürümünü anında sorgular. */
+export const DRAFT_CHANGED_EVENT = "typdf:draft-changed";
+/** Sunucu sürümüne bakma aralığı (ms). Vurgu → not akışı canlı kalsın diye 5 sn. */
+const POLL_MS = 5000;
+
+/** Bu olay bu kapsamı ilgilendiriyor mu? (belge kapsamı: aynı belge; defter: her belge olabilir) */
+function concernsScope(scope: DraftScope, detail: unknown): boolean {
+  const d = (detail || {}) as { document_id?: string; scope?: { kind?: string; id?: string } };
+  if (d.scope?.kind && d.scope?.id) return d.scope.kind === scope.kind && d.scope.id === scope.id;
+  if (scope.kind === "document" && d.document_id) return d.document_id === scope.id;
+  return true;
+}
+
 /* ---------- dış kabuk: veriyi çeker ---------- */
-export default function DraftEditor(props: DraftEditorProps) {
+const DraftEditor = forwardRef<DraftEditorHandle, DraftEditorProps>(function DraftEditor(props, ref) {
   const { scope } = props;
   const [remote, setRemote] = useState<{ draft: string | null; draft_rev: number } | null>(null);
   const [err, setErr] = useState<string | null>(null);
@@ -202,12 +227,13 @@ export default function DraftEditor(props: DraftEditorProps) {
       </div>
     );
   }
-  return <DraftBody key={scope.kind + ":" + scope.id} {...props} initial={remote.draft} initialRev={remote.draft_rev} />;
-}
+  return <DraftBody key={scope.kind + ":" + scope.id} {...props} handle={ref} initial={remote.draft} initialRev={remote.draft_rev} />;
+});
+export default DraftEditor;
 
 /* ---------- editör ---------- */
-function DraftBody({ scope, title, compact, onOpenPage, initial, initialRev }: DraftEditorProps & {
-  initial: string | null; initialRev: number;
+function DraftBody({ scope, title, compact, onOpenPage, initial, initialRev, handle }: DraftEditorProps & {
+  initial: string | null; initialRev: number; handle: ForwardedRef<DraftEditorHandle>;
 }) {
   const router = useRouter();
   const isCol = scope.kind === "collection";
@@ -369,11 +395,17 @@ function DraftBody({ scope, title, compact, onOpenPage, initial, initialRev }: D
       }
       localStorage.setItem(SEEN_KEY, new Date().toISOString());
     } catch {}
-    // Sekmeye dönünce ve boştayken 15 sn'de bir: taslak başka yerden güncellendiyse tazele
+    // Sekmeye dönünce ve 5 sn'de bir: taslak başka yerden güncellendiyse tazele
     const onVisible = () => { if (document.visibilityState === "visible") refreshRemote(); };
     document.addEventListener("visibilitychange", onVisible);
     window.addEventListener("focus", onVisible);
-    const poll = setInterval(() => { if (document.visibilityState === "visible") refreshRemote(); }, 15000);
+    const poll = setInterval(() => { if (document.visibilityState === "visible") refreshRemote(); }, POLL_MS);
+    // Okuyucu bir vurgu kaydetti (useAnnotations → typdf:draft-changed): sunucu sürümünü hemen sorgula
+    const onDraftChanged = (e: Event) => {
+      if (!concernsScope(scope, (e as CustomEvent).detail)) return;
+      refreshRemote(true);
+    };
+    window.addEventListener(DRAFT_CHANGED_EVENT, onDraftChanged);
     // Bağlantı gelince bekleyen kaydı hemen dene
     const onOnline = () => { if (savedVersion.current < version.current) saveNow(); };
     // Kaydedilmemiş değişiklik varken sayfadan çıkışta tarayıcı uyarısı + son bir deneme
@@ -386,6 +418,7 @@ function DraftBody({ scope, title, compact, onOpenPage, initial, initialRev }: D
     window.addEventListener("beforeunload", onUnload);
     return () => {
       clearInterval(poll);
+      window.removeEventListener(DRAFT_CHANGED_EVENT, onDraftChanged);
       window.removeEventListener("online", onOnline);
       window.removeEventListener("beforeunload", onUnload);
       document.removeEventListener("visibilitychange", onVisible);
@@ -428,33 +461,70 @@ function DraftBody({ scope, title, compact, onOpenPage, initial, initialRev }: D
     return () => { document.removeEventListener("pointerdown", onDown); document.removeEventListener("keydown", onKey); };
   }, [exportOpen, moreOpen]);
 
-  // Sunucudaki taslak daha yeniyse ve bekleyen yerel değişiklik yoksa sunucudakini göster.
-  // Bekleyen değişiklik varsa bir şey yapma: sıradaki kayıt koşullu gider ve birleştirir.
+  // Sunucudaki taslak daha yeniyse:
+  //  - bekleyen yerel değişiklik yoksa (idle) sunucudakini olduğu gibi göster;
+  //  - bekleyen değişiklik varsa (yazıyor / kayıt yolda) sunucudan gelen YENİ blokları mergeRemote ile yerel
+  //    taslağın sonuna ekle (yerel değişiklik korunur); sıradaki kayıt yeni draft_rev ile çakışmasız gider.
+  // Eski davranış (idle değilse hiçbir şey yapma) yeni vurguların açık panelde görünmesini engelliyordu.
   const refreshing = useRef(false);
+  const refreshAgain = useRef(false);
   async function refreshRemote(force = false): Promise<number> {
-    if (refreshing.current) return 0;
+    if (refreshing.current) { refreshAgain.current = refreshAgain.current || force; return 0; }
     refreshing.current = true;
     try {
+      // Yolda bir kayıt varsa bitmesini bekle: onun cevabı rev'i günceller, biz güncel hâlin üstüne bakarız.
+      if (inflight.current) { try { await inflight.current; } catch {} }
       const r = await fetchDraft(scope);
       if (!mounted.current || (!force && r.draft_rev === rev.current)) return 0;
-      if (!idleNow()) return 0;
       const remote = parseDraft(r.draft);
-      const before = new Set(latest.current.map((b) => b.id));
-      const fresh = remote.filter((b) => !before.has(b.id) && !(b.type === "p" && !b.text.trim()));
+      if (idleNow()) {
+        const before = new Set(latest.current.map((b) => b.id));
+        const fresh = remote.filter((b) => !before.has(b.id) && !(b.type === "p" && !b.text.trim()));
+        rev.current = r.draft_rev;
+        baseIds.current = new Set(remote.map((b) => b.id));
+        if (serializeDraft(remote) === serializeDraft(latest.current)) return 0;
+        skipSave.current = true;
+        latest.current = remote;
+        setBlocks(remote);
+        markGild(fresh.map((b) => b.id));
+        announceFresh(fresh, force);
+        return fresh.length;
+      }
+      // Yerel değişiklik bekliyor: yalnız yeni blokları al (3 yollu birleştirme), rev'i ilerlet.
+      if (process.env.NODE_ENV !== "production") {
+        console.debug("[DraftEditor] boşta değil; sunucu blokları birleştiriliyor", {
+          version: version.current, savedVersion: savedVersion.current, timer: !!timer.current, inflight: !!inflight.current,
+        });
+      }
+      const m = mergeRemote(latest.current, remote, baseIds.current);
       rev.current = r.draft_rev;
       baseIds.current = new Set(remote.map((b) => b.id));
-      if (serializeDraft(remote) === serializeDraft(latest.current)) return 0;
+      if (!m.added && !m.changed) return 0;
+      // skipSave: bu setBlocks sürümü artırmasın; bekleyen kayıt birleşik içeriği (latest) gönderir.
       skipSave.current = true;
-      latest.current = remote;
-      setBlocks(remote);
-      markGild(fresh.map((b) => b.id));
-      const autoN = fresh.filter((b) => b.type === "quote" && b.auto).length;
-      if (fresh.length && autoN === fresh.length) sayFlash(autoN === 1 ? "Yeni bir vurgu düştü" : `${autoN} yeni vurgu düştü`, 3000);
-      else if (!force) toast.info("Notun başka yerden güncellendi, yenilendi.");
-      return fresh.length;
+      latest.current = m.blocks;
+      setBlocks(m.blocks);
+      markGild(m.addedIds);
+      const fresh = m.blocks.filter((b) => m.addedIds.includes(b.id));
+      announceFresh(fresh, force);
+      return m.added;
     } catch { return 0; /* sessiz: bir sonraki kayıt zaten birleştirir */ }
-    finally { refreshing.current = false; }
+    finally {
+      refreshing.current = false;
+      if (refreshAgain.current) { refreshAgain.current = false; void refreshRemote(true); }
+    }
   }
+  function announceFresh(fresh: Block[], force: boolean) {
+    const autoN = fresh.filter((b) => b.type === "quote" && b.auto).length;
+    if (fresh.length && autoN === fresh.length) sayFlash(autoN === 1 ? "Yeni bir vurgu düştü" : `${autoN} yeni vurgu düştü`, 3000);
+    else if (!force) toast.info("Notun başka yerden güncellendi, yenilendi.");
+  }
+
+  // Dışarıdan: "Dışa aktar" menüsünü aç (defter "Daha fazla → Dışa aktar" olayı) / sunucu sürümünü sorgula
+  useImperativeHandle(handle, () => ({
+    openExport: () => { setMoreOpen(false); setExportOpen(true); },
+    refresh: () => refreshRemote(true),
+  }));
 
   /* ---------- Mevcut vurgularını getir ---------- */
   async function importHighlights() {

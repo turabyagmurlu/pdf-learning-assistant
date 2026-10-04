@@ -432,7 +432,14 @@ _EXPANDED_APOS = re.compile(r"\b(yüzyıl|lira|derece|kilometrekare|metrekare|ki
 
 # 3) Gorsel referanslari
 _VISUAL_PAREN = re.compile(r"\(\s*(?:bkz\.?|bk\.|a\.g\.e\.|age\.)[^()]*\)", re.IGNORECASE)
-_VISUAL_BKZ = re.compile(r"\b(?:bkz|bk)\.?\s*[^.;,!?\n()]*", re.IGNORECASE)
+# "bkz." + hemen ardindaki tek hedef (Sekil 3 / Tablo 2 / s. 45 / Ek 1 / Bolum 3). Eski desen ilk noktalamaya
+# kadar her seyi siliyordu: "Bkz. Şekil 3 ve Tablo 2'de görüldüğü gibi sonuçlar arttı" cumlesi tumden kayboluyordu
+# (V tur 2). Hedef sonrasi kalan "ve Tablo 2'de görüldüğü gibi" parcasini _VISUAL_REF temizler.
+_VISUAL_BKZ = re.compile(
+    r"\b(?:bkz|bk)\.?\s*"
+    r"(?:(?:Şekil|Tablo|Grafik|Resim|Harita|Çizelge|Fotoğraf|Görsel|Diyagram|Ek|Bölüm|Dipnot|Not|sayfa|sf\.|ss?\.)"
+    r"\s*\d*(?:\.\d+)?(?:\s*[-–]\s*\d+)?(?:['’][" + _TR_LOWER + r"]+)?\s*)?",
+    re.IGNORECASE)
 _VISUAL_REF = re.compile(
     r"\b(?:Şekil|Tablo|Grafik|Resim|Harita|Çizelge|Fotoğraf|Görsel|Diyagram)\s*\d+(?:\.\d+)?"
     r"(?:['’][" + _TR_LOWER + r"]+)?\s*"

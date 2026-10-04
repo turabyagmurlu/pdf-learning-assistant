@@ -18,6 +18,8 @@ export function useAnnotations(docId: string) {
   const add = useCallback(async (a: Omit<Annotation, "id" | "created_at">) => {
     const created = await createAnnotation(docId, a);
     if (created) setAnnotations((prev) => [...prev, created]);
+    // Vurgu sunucuda kendiliğinden Çalışma notuna birikti: açık editör (DraftEditor/StudyNote) sunucu sürümünü hemen sorgular
+    if (created) window.dispatchEvent(new CustomEvent("typdf:draft-changed", { detail: { document_id: docId, note_id: created.id } }));
     return created;
   }, [docId]);
 

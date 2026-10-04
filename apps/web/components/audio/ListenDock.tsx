@@ -7,19 +7,28 @@
  *    çağrılmalı (iOS ses kilidi burada `primeAudio()` ile açılır).
  *  - Metin sunucuda `tts_prepare`'den geçer: kısa metin (≤ 600 kr) POST /tts (tek parça), uzun metin
  *    POST /tts/jobs/chunked (paragraf hizalı parçalar, hazır oldukça çalar). Gösterilen metin = seslendirilen metin.
- *  - AudioProvider oturumu (`kind: "listen"`) kullanılır: başka sayfaya geçince ses sürer, dock kapatılırsa
- *    MiniPlayer devralır; `AudioQueuePlayer` (global kip) bölümler, uyku zamanlayıcısı, indir, cümle vurgusu verir.
+ *  - AudioProvider oturumu (`kind: "listen"`) kullanılır: başka sayfaya geçince ses sürer, dock küçültülürse
+ *    (ya da sesli özet başka sayfada çalarken) buradan bağlanan MiniPlayer devralır (okuyucuda küçük kapsül);
+ *    `AudioQueuePlayer` (global kip) bölümler, uyku zamanlayıcısı, indir, cümle vurgusu verir.
  *  - "Cihaz sesi" seçeneği: kota yok; metin `ttsPrepareClient` ile hazırlanır, BrowserVoice okur.
- *  AudioProvider içinde bir kez bağlanır ((app) layout'a dokunulmaz).
+ *  - Ses seçimi: `typdf:voice-picker` olayında (okuyucu ⋯ → "Ses seçimi", dock'taki "Sesler…") tek listeli
+ *    VoicePicker açılır (4 kadın + 3 erkek, örnek dinleme ücretsiz). Seçim localStorage `typdf-voice`
+ *    (lib/audio loadVoice/saveVoice); LectureTab aynı anahtarı okur. Çalarken ses değişirse aynı metin yeni sesle başlar.
+ *  (app) layout'ta Suspense içinde BİR kez bağlanır (AudioProvider'daki ikinci kopya kaldırıldı: çift dinleyici/çift istek).
  */
 import { useCallback, useEffect, useRef, useState } from "react";
+import { usePathname } from "next/navigation";
 import { ChevronDown, Headphones, Loader2, Smartphone, Volume2, X } from "lucide-react";
 import { api, API, getToken } from "@/lib/api";
-import { LISTEN_EVENT, ttsPrepareClient, type ListenRequest } from "@/lib/audio";
+import {
+  LISTEN_EVENT, VOICE_CHANGED_EVENT, VOICE_PICKER_EVENT, loadVoice, saveVoice, ttsPrepareClient, type ListenRequest,
+} from "@/lib/audio";
 import { primeAudio, type QueueChunk } from "@/hooks/useAudioQueue";
 import { useAudioSession } from "@/components/audio/AudioProvider";
 import AudioQueuePlayer from "@/components/AudioQueuePlayer";
 import BrowserVoice, { browserVoiceSupported } from "@/components/BrowserVoice";
+import VoicePicker from "@/components/audio/VoicePicker";
+import MiniPlayer from "@/components/audio/MiniPlayer";
 
 const SHORT_MAX = 600;          // bu uzunluğa kadar tek çağrı (/tts); üstü parçalı iş
 type Voice = { id: string; label: string };
@@ -48,14 +57,22 @@ export default function ListenDock() {
   const [voices, setVoices] = useState<Voice[]>([]);
   const [voice, setVoice] = useState("");
   const [canSpeak, setCanSpeak] = useState(false);
+  const [pickerOpen, setPickerOpen] = useState(false);
   const runRef = useRef(0);
+  const pathname = usePathname() || "";
 
-  useEffect(() => { setCanSpeak(browserVoiceSupported()); try { setVoice(localStorage.getItem("lecture.voice") || ""); } catch {} }, []);
+  useEffect(() => { setCanSpeak(browserVoiceSupported()); setVoice(loadVoice()); }, []);
 
-  // Sesler (4 kadın): dock ilk açıldığında bir kez
+  // Sesler (4 kadın + 3 erkek, tek liste): dock ilk açıldığında bir kez
   useEffect(() => {
     if (!req || voices.length) return;
-    (async () => { try { const r = await api("/tts/voices"); setVoices(r.voices || []); setVoice((v) => v || r.default || ""); } catch {} })();
+    (async () => {
+      try {
+        const r = await api("/tts/voices");
+        setVoices([...(r.voices || []), ...(r.male_voices || [])]);
+        setVoice((v) => v || r.default || "");
+      } catch {}
+    })();
   }, [req, voices.length]);
 
   const start = useCallback(async (r: ListenRequest, useDevice: boolean, v: string) => {
@@ -138,26 +155,62 @@ export default function ListenDock() {
       if (!d || !d.text) return;
       primeAudio();
       setReq(d);
-      let v = d.voice || voice;
-      try { v = v || localStorage.getItem("lecture.voice") || ""; } catch {}
+      const v = d.voice || voice || loadVoice();
       void start(d, !!d.device, v);
     };
     window.addEventListener(LISTEN_EVENT, onListen);
     return () => window.removeEventListener(LISTEN_EVENT, onListen);
   }, [start, voice]);
 
+  // Ses seçici: okuyucu ⋯ → "Ses seçimi" (typdf:voice-picker). Dock kapalıyken de açılır (yalnız seçim yapılır).
+  useEffect(() => {
+    const onPicker = () => setPickerOpen(true);
+    window.addEventListener(VOICE_PICKER_EVENT, onPicker);
+    return () => window.removeEventListener(VOICE_PICKER_EVENT, onPicker);
+  }, []);
+  // Seçim değişti (VoicePicker / LectureTab): çalan metin varsa aynı metin yeni sesle baştan
+  const reqRef = useRef<ListenRequest | null>(null);
+  reqRef.current = req;
+  const deviceRef = useRef(false);
+  deviceRef.current = device;
+  const voiceRef = useRef("");
+  voiceRef.current = voice;
+  useEffect(() => {
+    const onChanged = (e: Event) => {
+      const v = String((e as CustomEvent).detail?.voice || "");
+      if (!v || v === "__device" || v === voiceRef.current) return;
+      setVoice(v);
+      const r = reqRef.current;
+      if (r && !deviceRef.current && audio.session?.kind === "listen") { primeAudio(); void start(r, false, v); }
+    };
+    window.addEventListener(VOICE_CHANGED_EVENT, onChanged);
+    return () => window.removeEventListener(VOICE_CHANGED_EVENT, onChanged);
+  }, [audio, start]);
+
+  // Her sayfada: ses seçici + (dock kapalıyken / sesli özet başka sayfada çalarken) mini çubuk; okuyucuda küçük kapsül
+  const always = (
+    <>
+      <VoicePicker open={pickerOpen} onClose={() => setPickerOpen(false)} />
+      <MiniPlayer compact={pathname.startsWith("/documents/")} />
+    </>
+  );
+
   const open = !!req && (device || (!!session && session.dock) || !!err);
-  if (!open || !req) return null;
+  if (!open || !req) return always;
 
   const close = () => { runRef.current++; audio.stop(); setDevice(false); setErr(""); setReq(null); };
   const collapse = () => { if (session) audio.update(session.key, { dock: false }); else close(); };
   const changeVoice = (v: string) => {
-    setVoice(v); try { localStorage.setItem("lecture.voice", v); } catch {}
-    if (v === "__device") { void start(req, true, voice); return; }
+    if (v === "__device") { setDevice(true); void start(req, true, voice); return; }
+    if (v === "__more") { setPickerOpen(true); return; }
+    voiceRef.current = v;            // saveVoice'un yaydığı typdf:voice-changed burada ikinci bir başlatma yapmasın
+    setVoice(v); saveVoice(v);
     primeAudio(); void start(req, false, v);
   };
 
   return (
+    <>
+    {always}
     <div role="dialog" aria-label={`Sesli dinle: ${req.title || ""}`}
          className="bottom-nav fixed z-[36] border-t bg-surface/95 shadow-medium backdrop-blur"
          style={{ left: "var(--sidebar-w, 0px)", right: 0, bottom: "var(--bottom-nav, 0px)",
@@ -173,9 +226,10 @@ export default function ListenDock() {
           </div>
           <select value={device ? "__device" : voice} onChange={(e) => changeVoice(e.target.value)} aria-label="Ses"
                   className="min-h-[40px] max-w-[11rem] rounded-xl border bg-surface px-2 py-1.5 text-xs">
-            {voices.map((v) => <option key={v.id} value={v.id}>{v.label}</option>)}
+            {voices.map((v) => <option key={v.id} value={v.id}>{v.id} · {v.label}</option>)}
             {!voices.length && voice && <option value={voice}>Anlatıcı sesi</option>}
             {canSpeak && <option value="__device">Cihaz sesi · ücretsiz</option>}
+            <option value="__more">Sesleri dinle ve seç…</option>
           </select>
           {!device && (
             <button type="button" onClick={collapse} aria-label="Küçült" title="Küçült (alt çubukta devam eder)"
@@ -217,5 +271,6 @@ export default function ListenDock() {
         )}
       </div>
     </div>
+    </>
   );
 }

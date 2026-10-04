@@ -19,7 +19,12 @@ import { Cost, costTitle } from "@/components/CostBadge";
 import { toast } from "@/components/Toast";
 import DepthPicker from "./DepthPicker";
 import { AnswerActions, Understood, Followups, type AddState } from "./AnswerExtras";
-import { type Depth, loadDepth, saveDepth, depthCost, quickQuestions } from "./depth";
+import { type Depth, loadDepth, saveDepth, depthCost, quickQuestions, splitFollowups, stripFollowups, askPrefillText } from "./depth";
+
+/** Çalışma notundaki alıntının yanındaki "Sor" (DraftEditor) bu olayı yayınlar: {text, page, document_id}. */
+const ASK_EVENT = "typdf:ask";
+/** Panel durumu sayfada (documents/[id]/page.tsx) tutulur; "Sor" paneline geçmesi için bu olay yayınlanır. */
+export const OPEN_PANEL_EVENT = "typdf:open-panel";
 
 /** Okuyucu sohbetinin bagli oldugu defter: `notebookId` > `notebookHref` icindeki id > `?from=` > kaynagin ilk defteri. */
 function notebookIdFromHref(href?: string | null): string | null {
@@ -27,10 +32,10 @@ function notebookIdFromHref(href?: string | null): string | null {
   const m = href.match(/\/collections\/([^/?#]+)/);
   return m ? decodeURIComponent(m[1]) : null;
 }
-/** `/collections/{cid}?tab=sohbet&q=…` — "Tüm deftere sor" soruyu da tasir. */
+/** `/collections/{cid}?tab=sor&q=…` — "Tüm deftere sor" soruyu da tasir. */
 export function notebookAskHref(cid: string, question?: string | null): string {
   const q = (question || "").trim();
-  return `/collections/${encodeURIComponent(cid)}?tab=sohbet${q ? "&q=" + encodeURIComponent(q.slice(0, 1000)) : ""}`;
+  return `/collections/${encodeURIComponent(cid)}?tab=sor${q ? "&q=" + encodeURIComponent(q.slice(0, 1000)) : ""}`;
 }
 
 type Turn = { q: string; a: string; citations: Citation[]; cached?: boolean; error?: string; meta?: AskMeta | null; followups?: string[] };
@@ -40,6 +45,8 @@ function Answer({ q, text, citations, onGoPage, cached, onAddNote, addState, ask
   q?: string; text: string; citations: Citation[]; onGoPage?: (p: number) => void; cached?: boolean;
   onAddNote?: () => Promise<void>; addState?: AddState; askAllHref?: string | null; title: string; streaming?: boolean;
 }) {
+  // Güvenlik ağı: gövdede kalmış "<<<DEVAM" / "## Devam soruları" ve sonrası ekrana basılmaz
+  text = stripFollowups(text);
   return (
     <div className="rounded-xl border bg-surface px-3.5 py-3 text-sm">
       {cached && (
@@ -188,7 +195,12 @@ export function ChatPanel({ documentId, onGoPage, video, generic, prefill, noteb
       const out: Turn[] = [];
       for (const m of msgs) {
         if (m.role === "user") out.push({ q: m.content, a: "", citations: [] });
-        else if (out.length) { out[out.length - 1].a = m.content; out[out.length - 1].citations = m.citations || []; }
+        else if (out.length) {
+          // Güvenlik ağı: eski kayıtta gövdeye gömülü devam bloğu varsa ayır
+          const { body, followups } = splitFollowups(m.content || "");
+          out[out.length - 1].a = body; out[out.length - 1].citations = m.citations || [];
+          if (followups.length) out[out.length - 1].followups = followups;
+        }
       }
       setTurns(out); setSessionId(s.id); setShowHist(false); setAddState({});
     } catch {}
@@ -217,6 +229,26 @@ export function ChatPanel({ documentId, onGoPage, video, generic, prefill, noteb
     }, 60);
     return () => clearTimeout(t);
   }, [prefill?.key, prefill?.text]);
+
+  // Çalışma notundaki alıntının yanındaki "Sor" (typdf:ask): kutuya «alıntı» (s.N) — bunu açıkla; paneli aç; odakla.
+  // Panel seçimi sayfada tutulur → typdf:open-panel {panel:"sor"} yayınlanır (documents/[id]/page.tsx dinler).
+  useEffect(() => {
+    const onAsk = (e: Event) => {
+      const d = (e as CustomEvent).detail || {};
+      const text = String(d.text || "");
+      if (!text.trim()) return;
+      setQ(askPrefillText(text, d.page));
+      try { window.dispatchEvent(new CustomEvent(OPEN_PANEL_EVENT, { detail: { panel: "sor" } })); } catch {}
+      setTimeout(() => {
+        const el = inputRef.current;
+        if (!el) return;
+        el.focus();
+        try { el.setSelectionRange(el.value.length, el.value.length); } catch {}
+      }, 120);
+    };
+    window.addEventListener(ASK_EVENT, onAsk);
+    return () => window.removeEventListener(ASK_EVENT, onAsk);
+  }, []);
 
   // gecmis menusu: disari dokununca / Esc ile kapansin
   useEffect(() => {
@@ -247,7 +279,9 @@ export function ChatPanel({ documentId, onGoPage, video, generic, prefill, noteb
     }
     const pageText = opts.withPage && page && getPageText ? (getPageText(page) || "").trim().slice(0, 8000) : null;
     const r = await ask(question, sid, { depth, fresh: opts.fresh, page: pageText ? page : null, pageText });
-    setTurns((t) => [...t, { q: question, a: r.answer, citations: r.citations, cached: r.cached, error: r.error?.message, meta: r.meta, followups: r.followups }]);
+    const split = splitFollowups(r.answer);   // güvenlik ağı: sunucudan kaçan devam bloğu gövdede kalmaz
+    setTurns((t) => [...t, { q: question, a: split.body, citations: r.citations, cached: r.cached, error: r.error?.message, meta: r.meta,
+                             followups: r.followups?.length ? r.followups : split.followups }]);
     setPending(null);
   }
 

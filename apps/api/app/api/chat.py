@@ -150,7 +150,13 @@ async def messages(sid: str, conn=Depends(db), user=Depends(current_user)):
     rows = await conn.fetch(
         "SELECT role, content, citations, created_at FROM chat_messages WHERE session_id=$1 ORDER BY created_at",
         sid)
-    return [dict(r) for r in rows]
+    out = []
+    for r in rows:
+        d = dict(r)
+        if d.get("role") == "assistant" and isinstance(d.get("content"), str):
+            d["content"] = intent_svc.strip_followups(d["content"])   # eski kayitlardaki "<<<DEVAM" blogu gorunmez
+        out.append(d)
+    return out
 
 
 # Not: SSE için token'ı query param olarak da kabul ediyoruz (EventSource header gönderemez)
@@ -209,12 +215,15 @@ async def send(sid: str, body: MessageIn, token: str | None = None):
             if not body.fresh and not body.page_text:
                 hit = await _cached_doc_answer(conn, doc_id, ckey, rq, q_emb)
                 if hit:
-                    ans = hit["answer"] or ""
+                    # Eski kayitta govdeye gomulu devam blogu varsa ayrilir; ekrana ve gecmise temiz govde gider
+                    ans, fu = intent_svc.split_followups(hit["answer"] or "")
                     for i in range(0, len(ans), 60):
                         yield _sse("token", {"text": ans[i:i + 60]})
                     cits = hit["citations"] or []
                     for c in cits:
                         yield _sse("citation", c)
+                    if fu:
+                        yield _sse("followups", {"items": fu})
                     await conn.execute(
                         "INSERT INTO chat_messages (session_id, role, content, citations) VALUES ($1,'assistant',$2,$3)",
                         sid, ans, cits)

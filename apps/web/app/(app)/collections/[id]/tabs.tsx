@@ -1,7 +1,8 @@
 "use client";
 /**
  * Defter sekmeleri (3.0 "Derin ve Sade"): Kaynaklar · Sor · Çalışma notu + "Daha fazla ▾"
- * (Sözlük, Sesli özet, Dışa aktar, Defteri sil).
+ * (≤5 madde: Sözlük, Sesli özet, [Konuya göre grupla ⚡1 — yalnız ≥3 hazır kaynakta], Dışa aktar, Defteri sil).
+ * Menü genişliği ≤288 px (telefonda ekrana sığar): ⚡ maddelerinin altında maliyet ipucu satırı var.
  * - Eski adresler: ?tab=sohbet / karsilastir → Sor; ?tab=taslak / yaz / kaynakca → Çalışma notu;
  *   ?tab=harita / zaman (kaldırıldı) → Sözlük; ?tab=ders → Sesli özet.
  * - Az kaynakta sekmeler gizlenmez: kilitli ama görünür, açıklamalı (dokununca/odaklanınca).
@@ -63,9 +64,13 @@ function arrowNav(e: KeyboardEvent<HTMLDivElement>) {
   list[j].focus(); list[j].click();
 }
 
-export type MoreAction = { key: string; label: string; Icon: typeof FileText; run: () => void; danger?: boolean; disabled?: string | null; /** ⚡ maliyeti (yalnız harcayan eylemde) */ cost?: number };
+export type MoreAction = {
+  key: string; label: string; Icon: typeof FileText; run: () => void; danger?: boolean; disabled?: string | null;
+  /** ⚡ maliyeti (yalnız harcayan eylemde; rozet + ipucu satırı) */ cost?: number;
+  /** Etiketin altında küçük açıklama (maliyet / ne yapar) */ hint?: string;
+};
 
-/** "Daha fazla ▾" menüsü: Sözlük · Sesli özet · Dışa aktar · Defteri sil */
+/** "Daha fazla ▾" menüsü (≤5 madde): Sözlük · Sesli özet · [Konuya göre grupla ⚡1] · Dışa aktar · Defteri sil */
 function MoreMenu({ tab, onTab, readyN, processing, actions, compact }: {
   tab: TabKey; onTab: (t: TabKey) => void; readyN: number; processing: number; actions: MoreAction[]; compact?: boolean;
 }) {
@@ -96,13 +101,13 @@ function MoreMenu({ tab, onTab, readyN, processing, actions, compact }: {
   return (
     <div ref={wrap} className="relative shrink-0">
       <button ref={btn} type="button" aria-haspopup="menu" aria-expanded={open} onClick={() => setOpen((v) => !v)}
-              className={cx("flex min-h-[40px] items-center gap-1 whitespace-nowrap rounded-full px-3 text-sm transition",
+              className={cx("flex min-h-[40px] items-center gap-1 whitespace-nowrap rounded-full px-2.5 text-sm transition sm:px-3",
                 on ? "bg-surface font-semibold text-text-primary shadow-soft" : "text-text-secondary hover:text-text-primary")}>
         {on ? tabLabel(tab) : "Daha fazla"} <ChevronDown size={14} aria-hidden className={cx("transition", open && "rotate-180")} />
       </button>
       {open && (
         <div ref={list} role="menu" aria-label="Daha fazla" onKeyDown={onListKey}
-             className={cx("absolute z-40 mt-1 w-60 rounded-xl border bg-surface p-1 text-text-primary shadow-xl", compact ? "right-0" : "left-0")}>
+             className={cx("absolute z-40 mt-1 w-[min(18rem,calc(100vw-2rem))] rounded-xl border bg-surface p-1 text-text-primary shadow-xl", compact ? "right-0" : "left-0")}>
           {MORE_VIEWS.map(([k, label, Icon]) => {
             const why = lockReason(k, readyN, processing);
             return (
@@ -116,11 +121,14 @@ function MoreMenu({ tab, onTab, readyN, processing, actions, compact }: {
           })}
           <div className="my-1 border-t" role="separator" />
           {actions.map((a) => (
-            <button key={a.key} type="button" role="menuitem" disabled={!!a.disabled} title={a.disabled || (a.cost ? costTitle(a.cost) : undefined)}
+            <button key={a.key} type="button" role="menuitem" disabled={!!a.disabled} title={a.disabled || a.hint || (a.cost ? costTitle(a.cost) : undefined)}
                     onClick={() => { setOpen(false); a.run(); }}
-                    className={cx(item, a.danger && "text-danger hover:bg-danger/10")}>
-              <a.Icon size={16} aria-hidden className={a.danger ? "" : "text-text-secondary"} />
-              <span className="flex-1">{a.label}</span>
+                    className={cx(item, a.hint && "py-1.5", a.danger && "text-danger hover:bg-danger/10")}>
+              <a.Icon size={16} aria-hidden className={cx("shrink-0", a.danger ? "" : "text-text-secondary")} />
+              <span className="min-w-0 flex-1">
+                <span className="block">{a.label}</span>
+                {a.hint && <span className="block text-xs font-normal text-text-secondary">{a.hint}</span>}
+              </span>
               {a.cost ? <Cost n={a.cost} /> : null}
             </button>
           ))}
@@ -151,7 +159,7 @@ export function TabBar({ tab, onTab, readyN, processing, compact, moreActions }:
                   onClick={() => onTab(k)}
                   onMouseEnter={() => why && setHint(why)} onMouseLeave={() => setHint(null)}
                   onFocus={() => why && setHint(why)} onBlur={() => setHint(null)}
-                  className={cx("flex min-h-[40px] items-center gap-1.5 whitespace-nowrap rounded-full px-3 text-sm transition sm:px-3.5",
+                  className={cx("flex min-h-[40px] items-center gap-1.5 whitespace-nowrap rounded-full px-2.5 text-sm transition sm:px-3.5",
                     on ? "bg-surface font-semibold text-text-primary shadow-soft" : "text-text-secondary hover:text-text-primary",
                     why && !on && "opacity-70")}>
             <Icon size={15} aria-hidden className="hidden shrink-0 sm:inline" /> {label}
@@ -169,7 +177,8 @@ export function TabBar({ tab, onTab, readyN, processing, compact, moreActions }:
   }
   return (
     <div className="border-b">
-      <div className="flex flex-wrap items-end gap-x-3 gap-y-1 pb-1">{row}</div>
+      {/* telefonda (≤400) 3 sekme + Daha fazla tek satıra sığmayabilir: şerit yatay kayar, sayfa taşmaz */}
+      <div className="-mx-1 flex items-end gap-x-3 overflow-x-auto px-1 pb-1 [-ms-overflow-style:none] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">{row}</div>
       <p aria-hidden className={cx("min-h-[1.25rem] pb-1 pt-0.5 text-xs text-text-secondary", !hint && "invisible")}>{hint || "·"}</p>
     </div>
   );

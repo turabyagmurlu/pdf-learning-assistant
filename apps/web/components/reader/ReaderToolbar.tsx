@@ -2,15 +2,17 @@
 /**
  * PDF okuyucu kontrolleri (3.0 "Derin ve Sade").
  * - Genis ekran (>=1024): ReaderToolbar, baslik satirinda tek satir, EN FAZLA 8 dugme (Geri dahil):
- *   Sol panel · ◀ sayfa ▶ · % (tek dugme; acilir −/sığdır/+) · Kalem · Odak · ⋯ · Sag panel.
+ *   Geri · Sol panel · ◀ · sayfa kutusu · ▶ · % (tek dugme; acilir −/sığdır/+) · Kalem · ⋯ · Sag panel = 8 dugme.
+ *   Odak modu "⋯" icinde (F); odaktayken panel dugmeleri gizlenir, yerine tek "Odak modundan çık" cikar.
  *   Kenar notu, silgi, alt cizgi, geri al: Kalem paletinde (PenPalette). Vurgulari disa aktarma: Çalışma notu'nda.
- * - "⋯" menusu EN FAZLA 5 madde: Kağıt · Metin/Sayfa · (dar ekranda Sayfaya sığdır) · Ses seçimi · Kısayollar.
+ * - "⋯" menusu EN FAZLA 5 madde: Metin/Sayfa · (genis: Odak modu | dar: Sayfaya sığdır) · Ses seçimi · Kısayollar (+ Kağıt secici grubu).
  * - Dar ekran: ReaderMoreMenu (baslikta "⋯") + ReaderBottomBar (altta: Icindekiler · sayfa · Kalem · panel).
  * Tum hedefler en az 40 px (dar ekranda 44 px); her dugmenin gorunen metni ya da aria-label'i var.
  */
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { PenTool, PaperChoice, PaperTone } from "@/lib/reader";
 import { PAPER_CHOICES, PAPER_LABEL, loadPaper, savePaper, resolvePaper } from "@/lib/reader";
+import { requestVoicePicker } from "@/lib/audio";
 import {
   ChevronLeft, ChevronRight, Minus, Plus, Highlighter,
   FileText, AlignLeft, Maximize2, Minimize2, PanelLeft, PanelRight,
@@ -41,9 +43,9 @@ export interface ToolbarProps {
   paper?: PaperChoice; paperTone?: PaperTone; setPaper?: (p: PaperChoice) => void;
 }
 
-/** Ses seçimi (Ajan V): ListenDock / ses ayarı bu olayı dinler ve tek listeli seçiciyi açar. */
-export const VOICE_PICKER_EVENT = "typdf:voice-picker";
-const openVoicePicker = () => window.dispatchEvent(new CustomEvent(VOICE_PICKER_EVENT));
+/** Ses seçimi (Ajan V): ListenDock bu olayı dinler ve tek listeli seçiciyi (components/audio/VoicePicker) açar. */
+export { VOICE_PICKER_EVENT } from "@/lib/audio";
+const openVoicePicker = () => requestVoicePicker();
 /** Kısayollar penceresi (components/Shortcuts "?" tuşunu dinler). */
 const openShortcuts = () => window.dispatchEvent(new KeyboardEvent("keydown", { key: "?" }));
 
@@ -181,7 +183,7 @@ function ZoomButton({ scale, setScale, btn }: { scale: number; setScale: Toolbar
   );
 }
 
-/** Genis ekran arac cubugu (baslik satirinin sagi) — 7 dugme (+ basliktaki Geri = 8). */
+/** Genis ekran arac cubugu (baslik satirinin sagi) — 7 dugme + sayfa kutusu (+ basliktaki Geri = 8 dugme). */
 export default function ReaderToolbar(p: ToolbarProps) {
   // H-9: secili arac uygulama moruyla (acik/koyu temada >= 4.5:1), hover zemini token
   const btn = "flex h-10 w-10 items-center justify-center rounded-lg hover:bg-surface-hover disabled:opacity-40";
@@ -203,8 +205,11 @@ export default function ReaderToolbar(p: ToolbarProps) {
       <button className={`${btn} ${isPenTool(p.tool) || p.tool === "note" ? active : ""}`} aria-label="Kalem: vurgula, altını çiz, kenar notu, el yazısı" aria-pressed={isPenTool(p.tool) || p.tool === "note"}
               title="Kalem: vurgula, altını çiz, kenar notu, el yazısı (H)"
               onClick={() => p.setTool(p.tool !== "none" ? "none" : "highlight")}><Highlighter size={17} /></button>
-      <button className={`${btn} ${p.focus ? active : ""}`} aria-label="Odak modu" aria-pressed={p.focus} title="Odak modu (F)"
-              onClick={() => p.setFocus(!p.focus)}>{p.focus ? <Minimize2 size={17} /> : <Maximize2 size={17} />}</button>
+      {/* Odak modu "⋯" menüsünde (F); odaktayken çıkış için tek düğme görünür */}
+      {p.focus && (
+        <button className={`${btn} ${active}`} aria-label="Odak modundan çık" aria-pressed title="Odak modundan çık (F / Esc)"
+                onClick={() => p.setFocus(false)}><Minimize2 size={17} /></button>
+      )}
       <ReaderMoreMenu {...p} variant="wide" />
       {!p.focus && (
         <>
@@ -219,7 +224,7 @@ export default function ReaderToolbar(p: ToolbarProps) {
 
 type Item = { key: string; label: string; icon: JSX.Element; onSelect: () => void; disabled?: boolean; checked?: boolean };
 
-/** "⋯" menusu (≤5 madde). wide: Metin/Sayfa · Ses seçimi · Kısayollar + Kağıt; narrow: + Sayfaya sığdır. */
+/** "⋯" menusu (≤5 madde). wide: Metin/Sayfa · Odak modu · Ses seçimi · Kısayollar (+ Kağıt); narrow: Metin/Sayfa · Sayfaya sığdır · Ses seçimi · Kısayollar (+ Kağıt). */
 export function ReaderMoreMenu(p: ToolbarProps & { variant: "wide" | "narrow" }) {
   const [open, setOpen] = useState(false);
   const wrap = useRef<HTMLDivElement>(null);
@@ -247,6 +252,10 @@ export function ReaderMoreMenu(p: ToolbarProps & { variant: "wide" | "narrow" })
   }
   if (p.variant === "narrow" && p.viewMode !== "text") {
     items.push({ key: "zfit", label: `Sayfaya sığdır (şu an %${Math.round(p.scale * 100)})`, icon: <RotateCcw size={17} />, onSelect: () => p.setScale(() => 1) });
+  }
+  if (p.variant === "wide") {
+    items.push({ key: "focus", label: p.focus ? "Odak modundan çık" : "Odak modu (paneller gizlenir)", icon: p.focus ? <Minimize2 size={17} /> : <Maximize2 size={17} />,
+                 checked: p.focus, onSelect: () => p.setFocus(!p.focus) });
   }
   items.push(
     { key: "voice", label: "Ses seçimi", icon: <Volume2 size={17} />, onSelect: openVoicePicker },
@@ -333,7 +342,7 @@ export function ReaderBottomBar({ page, numPages, setPage, onLeft, onRight, left
       )}
       <button type="button" className={`${lab} relative ${rightOpen ? "text-accent-purple" : ""}`} onClick={onRight} aria-expanded={rightOpen} aria-haspopup="dialog"
               aria-label={`${rightLabel} paneli${rightFresh > 0 ? `, çalışma notuna ${rightFresh} yeni vurgu eklendi` : ""}`}>
-        {rightIcon || <MessageSquare size={18} aria-hidden />}<span>{rightLabel}</span>
+        {rightIcon || <MessageSquare size={18} aria-hidden />}<span className="max-w-[84px] truncate">{rightLabel}</span>
         {rightFresh > 0 && <span aria-hidden className="absolute right-1.5 top-1.5 h-2 w-2 rounded-full" style={{ background: "var(--gold, #A57A2C)" }} />}
       </button>
     </div>

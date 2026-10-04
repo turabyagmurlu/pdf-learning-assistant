@@ -5,8 +5,9 @@ Akis (collections._ask_core ve chat.send ortak):
      Hafif model, ~200 cikti token'i, kullanim turu "hafif" (kisinin ⚡ sayacina eklenmez).
      Model yoksa / JSON bozuksa / zaman asimi: soru oldugu gibi kullanilir (hic bir sey kirilmaz).
   2. Arama rewritten_question ile yapilir ("devam et", "peki ya X" gibi takipler onceki soruya baglanir).
-  3. Cevap sonunda model FOLLOWUP_MARKER ile 3 devam sorusu yazar; split_followups() bunlari
-     govdeden ayirir, TailGuard akista isaretin ekrana sizmasini engeller.
+  3. Cevabin sonunda model FOLLOWUP_HEADING ("## Devam soruları") basligi altina 3 devam sorusu yazar;
+     split_followups() bunlari govdeden ayirir (eski <<<DEVAM>>> ve bozuk bicimler de yakalanir),
+     TailGuard akista isaretin ekrana sizmasini engeller, clean_answer_payload() kayitli cevabi temizler.
 
 Bu dosya saf fonksiyonlardan olusur; `understand` disinda ag/DB yoktur (testlenebilir).
 """
@@ -21,8 +22,11 @@ DEFAULT_DEPTH = "ayrintili"
 HISTORY_TURNS = 3          # 3 tur = 6 mesaj (soru + cevap)
 HISTORY_ANSWER_CHARS = 1500
 
-# Devam sorulari cevabin icine gomulmez: model bu isaretten sonra yazar, govde ayri kalir.
-FOLLOWUP_MARKER = "<<<DEVAM>>>"
+# Devam sorulari cevabin icine gomulmez: model govdenin sonunda sabit bir baslik yazar, sorular onun altinda.
+# Istemde FOLLOWUP_HEADING istenir; ayristirma toleranslidir (bkz. FOLLOWUP_LINE_RE): "<<<DEVAM>>>", "<<<DEVAM",
+# "<<< devam >>>", "DEVAM:", "## Devam soruları", "**Devam Soruları:**", "### DEVAM SORULARI" ... hepsi yakalanir.
+FOLLOWUP_HEADING = "## Devam soruları"
+FOLLOWUP_MARKER = "<<<DEVAM>>>"          # eski isaret (eski kayitlar ve modelin alistigi bicim icin kabul edilir)
 
 # Kullanici "takip" yaziyorsa (onceki soruya bagli kisa mesaj) niyet adimi SART.
 _FOLLOW_CUES = re.compile(
@@ -200,65 +204,169 @@ def understand(llm, question: str, turns: list[tuple[str, str]], model: str | No
 
 # ------------------------------------------------------------------ cevap sonrasi ayristirma
 
-_LEGACY_SPLIT = re.compile(r"\n[\s#*_]*devam\s+soru(?:lar[ıi])?[\s*_:]*\n", re.I)
 _CITE_IN_Q = re.compile(r"\s*\[K\s*\d+(?:\s*s\.\s*\d+)?(?:\s*[,;]\s*K?\s*\d+(?:\s*s\.\s*\d+)?)*\]")
 
+# "Devam soruları" basliginin satir ici bicimleri (buyuk/kucuk harf, Turkce I/İ/ı, eksik '>>>', iki nokta, Markdown).
+_SORULARI = r"sorular[ıiIİ]?"
+_DEVAM_WORD = r"[Dd][Ee][Vv][Aa][Mm]"
+_MARK_CORE = (
+    r"(?:"
+    r"<{2,}\s*" + _DEVAM_WORD + r"(?:\s+" + _SORULARI + r")?\s*:?\s*>{0,3}"          # <<<DEVAM>>>, <<<DEVAM, <<< devam >>>
+    r"|#{1,6}\s*" + _DEVAM_WORD + r"\s+" + _SORULARI + r"\s*:?\s*>{0,3}"             # ## Devam soruları
+    r"|\*{1,2}\s*" + _DEVAM_WORD + r"\s+" + _SORULARI + r"\s*:?\s*\*{0,2}"            # **Devam soruları:**
+    r"|" + _DEVAM_WORD + r"\s+" + _SORULARI + r"\s*:"                                 # Devam soruları:
+    r"|" + _DEVAM_WORD + r"\s*:"                                                       # DEVAM:
+    r")"
+)
+_LINE_PREFIX = r"^[ \t]*[*_>]*[ \t]*"
+_LINE_SUFFIX = r"[ \t*_:>]*"
+# Tam satir: yalniz isaret (tek basina "Devam soruları" da sayilir). Akista (TailGuard) ve temizlikte kullanilir.
+FOLLOWUP_LINE_RE = re.compile(_LINE_PREFIX + r"(?:" + _MARK_CORE + r"|" + _DEVAM_WORD + r"\s+" + _SORULARI + r")"
+                              + _LINE_SUFFIX + r"\r?\n?$", re.I)
+# Govdeyi bolme: satir basinda isaret (ayni satirda soru da yazilmis olabilir, o yuzden '$' yok).
+FOLLOWUP_SPLIT_RE = re.compile(_LINE_PREFIX + _MARK_CORE + _LINE_SUFFIX, re.M | re.I)
+# Yedek: isaret bozuksa bile sondaki "devam" gecen kisa satir (ve altindaki birkac madde) kirpilir.
+_LOOSE_DEVAM_LINE = re.compile(r"^[^\n]{0,8}" + _DEVAM_WORD + r"[^\n]{0,40}$", re.M)
+_TRAILING_RULE = re.compile(r"(?:\n[ \t]*(?:-{3,}|\*{3,}|_{3,})[ \t]*)+\s*$")
 
-def split_followups(text: str, limit: int = 3) -> tuple[str, list[str]]:
-    """Govde + devam sorulari. Once FOLLOWUP_MARKER, yoksa eski '### Devam soruları' basligi aranir."""
-    t = text or ""
-    idx = t.find(FOLLOWUP_MARKER)
-    if idx != -1:
-        body, tail = t[:idx], t[idx + len(FOLLOWUP_MARKER):]
-    else:
-        m = _LEGACY_SPLIT.search(t)
-        if not m:
-            return t.strip(), []
-        body, tail = t[:m.start()], t[m.end():]
-    body = re.sub(r"\n[\s#*_]*devam\s+soru(?:lar[ıi])?[\s*_:]*$", "", body.rstrip(), flags=re.I).rstrip()
+
+def _clean_question(line: str) -> str:
+    s = re.sub(r"^\s*(?:[-*•–]|\d+[.)])\s*", "", line).strip().strip("*_").strip()
+    s = _CITE_IN_Q.sub("", s).strip()
+    s = s.strip("\"'«»“”").strip()
+    return s
+
+
+def _parse_questions(tail: str, limit: int) -> list[str]:
     qs: list[str] = []
     for line in tail.splitlines():
-        s = re.sub(r"^\s*(?:[-*•]|\d+[.)])\s*", "", line).strip().strip("*").strip()
-        s = _CITE_IN_Q.sub("", s).strip()
-        if s.lower().startswith(("devam sorular", "###")):
+        if FOLLOWUP_LINE_RE.match(line + "\n"):
+            continue
+        s = _clean_question(line)
+        if not s or re.match(_MARK_CORE, s, re.I) or s.startswith(("#", "<")):
             continue
         if len(s) >= 8 and s not in qs:
             qs.append(s)
         if len(qs) >= limit:
             break
-    return body, qs
+    return qs
+
+
+def _trim_body(body: str) -> str:
+    b = body.rstrip()
+    # Sondaki yatay cizgi / artik isaret satirlari
+    for _ in range(3):
+        b2 = _TRAILING_RULE.sub("", b).rstrip()
+        b2 = re.sub(r"\n" + _LINE_PREFIX.lstrip("^") + _MARK_CORE + _LINE_SUFFIX + r"\s*$", "", b2, flags=re.I).rstrip()
+        if b2 == b:
+            break
+        b = b2
+    return b
+
+
+def split_followups(text: str, limit: int = 3) -> tuple[str, list[str]]:
+    """Govde + devam sorulari. Isaret satiri toleransli aranir (<<<DEVAM>>>, <<<DEVAM, DEVAM:, ## Devam soruları...).
+    Hic eslesme yoksa yedek: metnin SONUNDAKI 'devam' gecen kisa satir ve altindaki birkac satir kirpilir.
+    Govdede isaretten iz kalmaz."""
+    t = (text or "").replace("\r\n", "\n")
+    if not t.strip():
+        return "", []
+    matches = list(FOLLOWUP_SPLIT_RE.finditer(t))
+    m = None
+    if matches:
+        # Isaret cevabin sonlarinda beklenir: metnin ilk %30'undaki (yanlis pozitif olabilecek) eslesmeyi atla
+        late = [x for x in matches if x.start() >= len(t) * 0.3]
+        m = (late or matches)[0]
+    if m is not None:
+        body, tail = t[:m.start()], t[m.end():]
+        return _trim_body(body), _parse_questions(tail, limit)
+    # Yedek: sondaki "devam" satiri (son 1200 karakter icinde, altinda en fazla 6 dolu satir)
+    window_start = max(0, len(t) - 1200)
+    loose = [x for x in _LOOSE_DEVAM_LINE.finditer(t) if x.start() >= window_start]
+    if loose:
+        x = loose[-1]
+        tail = t[x.end():]
+        after = [ln for ln in tail.splitlines() if ln.strip()]
+        head = x.group(0).strip()
+        looks_label = len(head) <= 40 and (head.lower().endswith((":", "soruları", "sorulari", ">")) or head.startswith("<"))
+        if looks_label and len(after) <= 6 and all(len(ln) <= 220 for ln in after):
+            return _trim_body(t[:x.start()]), _parse_questions(tail, limit)
+    return _trim_body(t), []
+
+
+def clean_answer_payload(payload: dict) -> dict:
+    """Kayitli/kaydedilecek cevaptan isareti ve devam blogunu ayirir; followups bos ise ayrilanlari koyar.
+    Eski kayitlar (govdeye gomulu <<<DEVAM) okunurken de kullanilir; dict degilse oldugu gibi doner."""
+    if not isinstance(payload, dict):
+        return payload
+    ans = payload.get("answer")
+    if not isinstance(ans, str) or not ans:
+        return payload
+    body, qs = split_followups(ans)
+    if body == ans:
+        return payload
+    out = dict(payload)
+    out["answer"] = body
+    if qs and not out.get("followups"):
+        out["followups"] = qs
+    return out
+
+
+def strip_followups(text: str) -> str:
+    """Yalniz govde (okuyucu sohbeti mesajlari icin)."""
+    return split_followups(text)[0]
+
+
+# Akista geride tutulan satir basi: bu kadar karakterden sonra isaret olamaz, satir serbest birakilir
+_HOLD_MAX = 40
 
 
 class TailGuard:
-    """Akista FOLLOWUP_MARKER ekrana sizmasin: isaretin olasi bir on eki kadar metni geride tutar.
-    feed(tok) -> ekrana gidebilecek metin; isaret gorulduyse sonrasi yutulur (full metin ayrica tutulur)."""
+    """Akista devam-sorulari isareti ekrana sizmasin.
+    Satir satir calisir: tamamlanan satir isaretse (FOLLOWUP_LINE_RE) akis durur, sonrasi yutulur (tam metin
+    cagiranin elinde). Henuz bitmemis satir, isaretin baslangici olabilecek bir on ekle ("<", "#", "*", "devam"...)
+    basliyorsa en fazla _HOLD_MAX karaktere kadar geride tutulur; sonra serbest kalir.
+    feed(tok) -> ekrana gidebilecek metin; flush() -> kalan (isaret degilse)."""
 
-    def __init__(self, marker: str = FOLLOWUP_MARKER):
-        self.marker = marker
+    def __init__(self, marker: str | None = None):
         self.buf = ""
         self.stopped = False
+
+    @staticmethod
+    def _suspicious(partial: str) -> bool:
+        s = partial.lstrip(" \t*_>#")
+        if len(partial) > _HOLD_MAX:
+            return False
+        if not s:
+            return True                        # yalniz bosluk/isaret karakterleri: bekle
+        if s[0] == "<":
+            return True
+        low = s.lower().replace("ı", "i")
+        return low.startswith("devam") or "devam".startswith(low)
 
     def feed(self, tok: str) -> str:
         if self.stopped:
             return ""
         self.buf += tok
-        i = self.buf.find(self.marker)
-        if i != -1:
-            out, self.buf, self.stopped = self.buf[:i], "", True
-            return out
-        # isaretin baslangici olabilecek son kismi tut
-        keep = 0
-        for n in range(min(len(self.marker) - 1, len(self.buf)), 0, -1):
-            if self.marker.startswith(self.buf[-n:]):
-                keep = n
+        out = ""
+        while True:
+            nl = self.buf.find("\n")
+            if nl == -1:
                 break
-        if keep:
-            out, self.buf = self.buf[:-keep], self.buf[-keep:]
-        else:
-            out, self.buf = self.buf, ""
+            line, self.buf = self.buf[:nl + 1], self.buf[nl + 1:]
+            if FOLLOWUP_LINE_RE.match(line) or FOLLOWUP_SPLIT_RE.match(line):
+                self.stopped, self.buf = True, ""
+                return out
+            out += line
+        if self.buf and not self._suspicious(self.buf):
+            out, self.buf = out + self.buf, ""
         return out
 
     def flush(self) -> str:
-        out = "" if self.stopped else self.buf
-        self.buf = ""
+        if self.stopped:
+            self.buf = ""
+            return ""
+        out, self.buf = self.buf, ""
+        if FOLLOWUP_LINE_RE.match(out) or FOLLOWUP_SPLIT_RE.match(out):
+            return ""
         return out

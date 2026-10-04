@@ -110,11 +110,14 @@ async def tts_voices(user=Depends(current_user)):
 
     `state`: {"state": aktif|yogun|doldu, "retry_min": int|None} — dolu iken istemci
     "Sesli oku" yerine dogrudan cihaz sesini onerir.
-    `sample_text`: ornek cumle (her ses icin bir kez uretilir, sonra ucretsiz)."""
-    return {"voices": [{"id": k, "label": v} for k, v in FEMALE_VOICES.items()],
+    `sample_text`: ornek cumle (her ses icin bir kez uretilir, sonra ucretsiz).
+    `sample_ready`: ornegi sabit onbellekte hazir olan sesler (dinlemek ucretsiz); digerlerinde ilk dinleme 1 kullanim."""
+    ready = await samples_ready()
+    return {"voices": [{"id": k, "label": v, "sample_ready": k in ready} for k, v in FEMALE_VOICES.items()],
             "default": DEFAULT_VOICE,
-            "male_voices": [{"id": k, "label": v} for k, v in MALE_VOICES.items()],
+            "male_voices": [{"id": k, "label": v, "sample_ready": k in ready} for k, v in MALE_VOICES.items()],
             "default_male": DEFAULT_MALE_VOICE,
+            "sample_ready": sorted(ready),
             "state": usage.tts_state(), "sample_text": SAMPLE_TEXT,
             "sec_per_100_chars": 1.0}
 
@@ -223,6 +226,19 @@ def _tts_cleanup():
         asyncio.get_running_loop().create_task(trim_tts_cache())
     except RuntimeError:
         pass
+
+
+async def samples_ready() -> set[str]:
+    """Ornegi (herhangi bir formatta) sabit onbellekte bulunan sesler. Hata olursa bos kume (yalniz rozet etkilenir)."""
+    names = list(FEMALE_VOICES) + list(MALE_VOICES)
+    keys = [sample_key(v, f) for v in names for f in FORMATS]
+    try:
+        pool = await get_pool()
+        async with pool.acquire() as conn:
+            rows = await conn.fetch("SELECT key FROM tts_cache WHERE key = ANY($1::text[])", keys)
+        return {str(r["key"]).split(":")[1] for r in rows}
+    except Exception:  # noqa
+        return set()
 
 
 async def _cache_get(key: str) -> bytes | None:
