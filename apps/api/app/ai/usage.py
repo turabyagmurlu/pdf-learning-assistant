@@ -171,7 +171,10 @@ def pop_dirty():
 import contextvars
 
 CURRENT_USER: contextvars.ContextVar = contextvars.ContextVar("ai_user", default=None)  # (uid, is_owner)
+# Kisinin gunluk hakkindan dusen turler. "hafif" (Sor'daki niyet anlama on adimi, ~200 token, lite model)
+# ve "dizin" burada DEGIL: model sayacinda gorunur, kullanicinin ⚡ sayacina eklenmez.
 USER_KINDS = {"metin", "arama", "ses"}
+LIGHT_KIND = "hafif"
 _USER: dict[tuple[str, str], int] = {}
 _UDIRTY: set[tuple[str, str]] = set()
 

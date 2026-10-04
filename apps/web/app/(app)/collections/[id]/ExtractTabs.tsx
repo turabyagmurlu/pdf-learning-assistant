@@ -1,23 +1,18 @@
 "use client";
 /**
- * Araçlar: Sözlük, Harita, Zaman çizelgesi.
- * Her kaynagin cikarimi kaynaga kaydedilir; "Yenile" yalniz yeni kaynaklari isler (maliyet: yeni kaynak sayisi).
+ * Sözlük ("Daha fazla ▾" altında). Harita ve Zaman çizelgesi 3.0'da kaldırıldı.
+ * Her kaynağın çıkarımı kaynağa kaydedilir; "Yenile" yalnız yeni kaynakları işler (maliyet: yeni kaynak sayısı).
  */
 import { ReactNode, useEffect, useState } from "react";
-import dynamic from "next/dynamic";
 import { useRouter } from "next/navigation";
-import { Loader2, Sparkles, RefreshCw, Search, BookMarked, Share2, Clock } from "lucide-react";
+import { Loader2, Sparkles, RefreshCw, Search, BookMarked } from "lucide-react";
 import { api } from "@/lib/api";
 import { docHref } from "@/lib/links";
-import { Skeleton } from "@/components/Skeleton";
 import { Cost, costTitle, ErrNote, Err, toErr } from "@/components/CostBadge";
-import type { CMNode, CMEdge } from "@/components/ConceptMap";
 import type { ConfirmOptions } from "@/components/Confirm";
 
-const ConceptMap = dynamic(() => import("@/components/ConceptMap"), { ssr: false, loading: () => <Skeleton className="h-[480px] w-full rounded-2xl" /> });
-
 type Confirm = (o: ConfirmOptions) => Promise<boolean>;
-type ExtKind = "glossary" | "relations" | "timeline";
+type ExtKind = "glossary";
 type Stat = { cached: number; pending: number } | null;
 
 const cx = (...a: (string | false | null | undefined)[]) => a.filter(Boolean).join(" ");
@@ -225,156 +220,6 @@ export function GlossaryTab({ id, readyN, confirm }: { id: string; readyN: numbe
           ))}
         </div>
       )}
-    </>
-  );
-}
-
-/* ---------------- Kavram haritası ---------------- */
-export function MapTab({ id, readyN, confirm }: { id: string; readyN: number; confirm: Confirm }) {
-  const b = useBudget(id, "relations", confirm);
-  const [cm, setCm] = useState<{ nodes: CMNode[]; edges: CMEdge[] } | null>(null);
-  const [at, setAt] = useState<string | null>(null);
-  const [busy, setBusy] = useState(false);
-  const [err, setErr] = useState<Err>(null);
-  useEffect(() => {
-    (async () => {
-      try { const r = await api(`/collections/${id}/concept-map`); setCm({ nodes: r?.nodes || [], edges: r?.edges || [] }); setAt(r?.generated_at || null); }
-      catch { setCm({ nodes: [], edges: [] }); }
-    })();
-  }, [id]);
-  async function build() {
-    setBusy(true); setErr(null);
-    try {
-      const r = await b.run((force) => api(`/collections/${id}/concept-map${force ? "?force=1" : ""}`, { method: "POST" }, 1));
-      if (!r) return;
-      setCm({ nodes: r?.nodes || [], edges: r?.edges || [] }); setAt(r?.generated_at || null);
-      if (!(r?.nodes || []).length) setErr({ text: "Harita için madde bulunamadı.", limit: false });
-    } catch (e) { setErr(toErr(e, "Harita oluşturulamadı; birazdan tekrar dene.")); if (cm === null) setCm({ nodes: [], edges: [] }); }
-    finally { setBusy(false); }
-  }
-  if (cm === null) return <Skeleton className="h-[480px] w-full rounded-2xl" />;
-  if (!cm.nodes.length) {
-    return (
-      <EmptyTool Icon={Share2} action={build} busy={busy} busyText="Haritalanıyor… (kaynak başına ~20 sn)" cost={b.buildCost(readyN)} err={err}>
-        Kaynaklardaki <b>kişi, olay ve kurumları</b> metindeki ilişkilerle birbirine bağlayan bir kavram haritası çizer; maddeye dokununca sayfası,
-        çizgiye dokununca kaynak cümlesi açılır. Kaynak başına 1 yapay zekâ kullanımı harcar; sonuç saklanır.
-      </EmptyTool>
-    );
-  }
-  return (
-    <>
-      <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
-        <p className="text-sm text-text-secondary">{cm.nodes.length} madde · {cm.edges.length} ilişki</p>
-        <RefreshBtn stat={b.stat} note={b.note} busy={busy} onClick={build} small />
-      </div>
-      <ErrNote err={err} className="mb-2" />
-      <ConceptMap nodes={cm.nodes} edges={cm.edges} height={Math.max(420, Math.min(720, 300 + cm.nodes.length * 8))} />
-      {at && <p className="mt-1 text-xs text-text-secondary">Oluşturma: {new Date(at).toLocaleDateString("tr-TR")}</p>}
-    </>
-  );
-}
-
-/* ---------------- Zaman çizelgesi ---------------- */
-type TEvent = { date: string; year: number; month: number; day: number; title: string; detail: string;
-  kind: string; page: number | null; document_id: string; document_title: string };
-const TKIND_LABEL: Record<string, string> = { savas: "Savaş", antlasma: "Antlaşma", siyasi: "Siyasi", kisisel: "Kişisel", diger: "Diğer" };
-const TKIND_DOT: Record<string, string> = { savas: "bg-red-500", antlasma: "bg-amber-500", siyasi: "bg-accent-purple", kisisel: "bg-sky-500", diger: "bg-text-secondary" };
-
-export function TimelineTab({ id, readyN, confirm }: { id: string; readyN: number; confirm: Confirm }) {
-  const router = useRouter();
-  const b = useBudget(id, "timeline", confirm);
-  const [events, setEvents] = useState<TEvent[] | null>(null);
-  const [at, setAt] = useState<string | null>(null);
-  const [busy, setBusy] = useState(false);
-  const [err, setErr] = useState<Err>(null);
-  const [kind, setKind] = useState("");
-  const [doc, setDoc] = useState("");
-  useEffect(() => {
-    (async () => {
-      try { const r = await api(`/collections/${id}/timeline`); setEvents(r?.events || []); setAt(r?.generated_at || null); }
-      catch { setEvents([]); }
-    })();
-  }, [id]);
-  async function build() {
-    setBusy(true); setErr(null);
-    try {
-      const r = await b.run((force) => api(`/collections/${id}/timeline${force ? "?force=1" : ""}`, { method: "POST" }, 1));
-      if (!r) return;
-      setEvents(r?.events || []); setAt(r?.generated_at || null);
-      if (!(r?.events || []).length) setErr({ text: "Kaynaklarda tarihli olay bulunamadı.", limit: false });
-    } catch (e) { setErr(toErr(e, "Zaman çizelgesi oluşturulamadı; birazdan tekrar dene.")); if (events === null) setEvents([]); }
-    finally { setBusy(false); }
-  }
-  if (events === null) return <p className="text-sm text-text-secondary">Yükleniyor…</p>;
-  if (!events.length) {
-    return (
-      <EmptyTool Icon={Clock} action={build} busy={busy} busyText="Çıkarılıyor… (kaynak başına ~15 sn)" cost={b.buildCost(readyN)} err={err}>
-        Bu defterdeki tüm kaynaklardan <b>tarihli olayları</b> çıkarıp tek bir kronolojik çizgiye dizer; her olaydan kaynak sayfasına gidersin.
-        Kaynak başına 1 yapay zekâ kullanımı harcar; tarih içermeyen kaynaklarda sonuç az olabilir.
-      </EmptyTool>
-    );
-  }
-  const evs = events.filter((e) => !kind || e.kind === kind).filter((e) => !doc || e.document_id === doc);
-  const docsIn = Array.from(new Map(events.map((e) => [e.document_id, e.document_title])).entries());
-  const byYear: Record<string, TEvent[]> = {};
-  for (const e of evs) (byYear[e.year] ||= []).push(e);
-  const years = Object.keys(byYear).map(Number).sort((a, c) => a - c);
-  return (
-    <>
-      <div className="flex flex-wrap items-center gap-2">
-        <div className="flex flex-wrap gap-1.5">
-          {([["", "Tümü"], ["savas", "Savaş"], ["antlasma", "Antlaşma"], ["siyasi", "Siyasi"], ["kisisel", "Kişisel"], ["diger", "Diğer"]] as const).map(([k, label]) => {
-            const n = k ? events.filter((e) => e.kind === k).length : events.length;
-            if (k && n === 0) return null;
-            return (
-              <button key={k} onClick={() => setKind(k)} aria-pressed={kind === k}
-                      className={cx("flex min-h-[36px] items-center gap-1.5 rounded-full px-2.5 py-1 text-xs",
-                        kind === k ? "border border-text-primary/60 bg-surface-muted font-semibold text-text-primary" : "border bg-surface text-text-secondary hover:border-border-strong hover:text-text-primary")}>
-                {k && <span className={cx("h-2 w-2 rounded-full", TKIND_DOT[k])} />}{label} <span className="opacity-80">{n}</span>
-              </button>
-            );
-          })}
-        </div>
-        {docsIn.length > 1 && (
-          <select value={doc} onChange={(e) => setDoc(e.target.value)} aria-label="Kaynağa göre süz" className="min-h-[36px] rounded-lg border bg-surface px-2.5 py-1.5 text-xs">
-            <option value="">Tüm kaynaklar</option>
-            {docsIn.map(([did, t]) => <option key={did} value={did}>{t}</option>)}
-          </select>
-        )}
-        <span className="ml-auto"><RefreshBtn stat={b.stat} note={b.note} busy={busy} onClick={build} small /></span>
-      </div>
-      <ErrNote err={err} className="mt-2" />
-      <div className="relative mt-6 pl-6">
-        <div className="absolute bottom-0 left-[9px] top-0 w-px bg-black/15 dark:bg-white/15" />
-        {years.map((y) => (
-          <div key={y} className="relative mb-7">
-            <div className="absolute -left-6 top-0 flex h-5 w-5 items-center justify-center rounded-full border-2 border-accent-purple bg-surface" />
-            <div className="mb-2 font-heading text-2xl text-accent-purple">{y}</div>
-            <div className="space-y-2">
-              {byYear[y].map((e, i) => (
-                <div key={i} className="rounded-xl border bg-surface p-3">
-                  <div className="flex items-start gap-2.5">
-                    <span className={cx("mt-1.5 h-2.5 w-2.5 shrink-0 rounded-full", TKIND_DOT[e.kind] || TKIND_DOT.diger)} title={TKIND_LABEL[e.kind] || e.kind} />
-                    <div className="min-w-0 flex-1">
-                      <div className="flex flex-wrap items-baseline gap-x-2">
-                        <span className="text-xs text-text-secondary">{e.date}</span>
-                        <h4 className="font-medium">{e.title}</h4>
-                      </div>
-                      {e.detail && <p className="mt-1 text-sm leading-relaxed text-text-secondary">{e.detail}</p>}
-                      <button onClick={() => router.push(docHref(e.document_id, { page: e.page, from: id }))}
-                              className="mt-2 min-h-[32px] max-w-full truncate rounded-full border bg-surface px-2 py-0.5 text-xs text-text-secondary hover:border-accent-purple/50 hover:text-accent-purple">
-                        {e.document_title}{e.page ? " · s." + e.page : ""}
-                      </button>
-                    </div>
-                  </div>
-                </div>
-              ))}
-            </div>
-          </div>
-        ))}
-        {evs.length === 0 && <p className="text-sm text-text-secondary">Filtreyle eşleşen olay yok.</p>}
-      </div>
-      {at && <p className="mt-2 text-xs text-text-secondary">Oluşturma: {new Date(at).toLocaleDateString("tr-TR")}</p>}
     </>
   );
 }

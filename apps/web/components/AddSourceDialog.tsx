@@ -1,17 +1,16 @@
 "use client";
 /**
- * Tek "Kaynak ekle" penceresi (segmentli): Dosya · Link/YouTube · Metin yapıştır · Web'de bul · Kütüphaneden seç.
+ * Tek "Kaynak ekle" penceresi (segmentli): Dosya · Link/YouTube · Metin yapıştır · Kütüphaneden seç. (3.0: "Web'de bul" kaldırıldı.)
  * - Bos durum kartlari ilgili segmenti dogrudan acar (`segment` prop'u).
  * - Hangi yoldan eklenirse eklensin davranis ayni: pencere kapanir, bildirim cikar, liste tazelenir.
  * - Kaynaklar ortak: Kutuphaneden secmek kaynagi baska defterden CIKARMAZ, yalniz bu deftere baglar.
  */
 import { DragEvent, KeyboardEvent, useEffect, useRef, useState } from "react";
 import Link from "next/link";
-import { Plus, Loader2, Link2, StickyNote, Globe, Library, Square, CheckSquare, Upload, X } from "lucide-react";
+import { Plus, Loader2, Link2, StickyNote, Library, Square, CheckSquare, Upload, X } from "lucide-react";
 import Modal from "@/components/Modal";
 import YoutubeAdd, { linkedExistingText } from "@/components/YoutubeAdd";
 import TextAdd from "@/components/TextAdd";
-import DiscoverPanel from "@/components/DiscoverPanel";
 import SourceIcon from "@/components/SourceIcon";
 import MobileAddExtras from "@/components/MobileAddExtras";
 import Button from "@/components/ui/Button";
@@ -20,13 +19,12 @@ import { toast } from "@/components/Toast";
 import { api } from "@/lib/api";
 import { ACCEPT, TYPES_HINT, LIMIT_HINT } from "@/lib/sources";
 
-export type AddSegment = "dosya" | "link" | "metin" | "web" | "kutuphane";
+export type AddSegment = "dosya" | "link" | "metin" | "kutuphane";
 
 const SEGMENTS: [AddSegment, string, typeof Plus][] = [
   ["dosya", "Dosya", Upload],
   ["link", "Link / YouTube", Link2],
   ["metin", "Metin yapıştır", StickyNote],
-  ["web", "Web'de bul", Globe],
   ["kutuphane", "Kütüphaneden seç", Library],
 ];
 
@@ -41,13 +39,13 @@ const cx = (...a: (string | false | null | undefined)[]) => a.filter(Boolean).jo
 export default function AddSourceDialog({ open, onClose, collectionId, segment, onSegment, existingIds, onAdded, onUpload, upBusy }: {
   open: boolean;
   onClose: () => void;
-  /** Defter kimligi; Kütüphane'den (defter yokken) acilinca bos: "Web'de bul" ve "Kütüphaneden seç" gizlenir */
+  /** Defter kimligi; Kütüphane'den (defter yokken) acilinca bos: "Kütüphaneden seç" gizlenir */
   collectionId?: string;
   segment: AddSegment;
   onSegment: (s: AddSegment) => void;
   /** Bu defterde zaten olan kaynaklar (kutuphane listesinde gosterilmez) */
   existingIds: string[];
-  /** Link / metin / web / kutuphane eklemesinden sonra (liste tazelensin) */
+  /** Link / metin / kutuphane eklemesinden sonra (liste tazelensin) */
   onAdded: () => Promise<void> | void;
   /** Dosya yukleme (sayfadaki yukleyici; pencere kapansa da surer) */
   onUpload: (files: FileList | File[]) => Promise<number>;
@@ -55,7 +53,7 @@ export default function AddSourceDialog({ open, onClose, collectionId, segment, 
 }) {
   const fileRef = useRef<HTMLInputElement>(null);
   const [drag, setDrag] = useState(false);
-  const segments = collectionId ? SEGMENTS : SEGMENTS.filter(([k]) => k !== "web" && k !== "kutuphane");
+  const segments = collectionId ? SEGMENTS : SEGMENTS.filter(([k]) => k !== "kutuphane");
 
   async function afterAdd(msg: string, info = false) {
     onClose();
@@ -146,12 +144,6 @@ export default function AddSourceDialog({ open, onClose, collectionId, segment, 
           {segment === "metin" && (
             <TextAdd collectionId={collectionId} startOpen quiet
                      onAdded={(r) => afterAdd(r?.linked_existing ? linkedExistingText(true) : `“${r?.title || "Metin"}” kaynak olarak eklendi.`, !!r?.linked_existing)} />
-          )}
-
-          {segment === "web" && collectionId && (
-            <DiscoverPanel collectionId={collectionId} autoFocus
-                           onAdded={(n, linked) => afterAdd(
-                             [n ? `${n} kaynak deftere eklendi; hazırlanıyor.` : "", linked ? `${linked} kaynak zaten kütüphanende vardı, deftere bağlandı.` : ""].filter(Boolean).join(" "))} />
           )}
 
           {segment === "kutuphane" && collectionId && (

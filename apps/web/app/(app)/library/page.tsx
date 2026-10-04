@@ -1,8 +1,8 @@
 "use client";
 /**
  * Kutuphane (T-1 telefon ilk ekrani):
- * - Telefonda hero yok: duz baslik + "+ Kaynak ekle"; satirda yalniz arama + "Süz (N)" + "Seç".
- *   Siralama, favoriler, tur, kategori ve etiket suzgecleri alttan acilan "Süz" tabakasinda.
+ * - 3.0 sade üst satır (her ekranda): arama + tür çipleri (sm+) + "Daha fazla" (sıralama, favoriler,
+ *   kategori ve etiket süzgeçleri — tabaka) + "⋯" (ızgara/liste, sık/ferah, Seç).
  * - Defter suzgeci lg altinda listenin USTUNDE yatay cip seridi (TB-5); lg'de sag panel.
  * - Yukleme alanlari yerine tek "+ Kaynak ekle" -> components/AddSourceDialog (TK-6).
  *   Bir defter suzgeci acikken eklenen kaynak o deftere baglanir.
@@ -10,7 +10,7 @@
  * - Okuma yuzdesi: GET /documents `progress_pct` varsa o (TO-1, cihazlar arasi), yoksa localStorage.
  */
 import { toast } from "@/components/Toast";
-import { useCallback, useEffect, useId, useMemo, useState } from "react";
+import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { api, errorMessage } from "@/lib/api";
 import { CardSkeleton } from "@/components/Skeleton";
@@ -27,9 +27,56 @@ import { useConfirm } from "@/components/Confirm";
 import { usePoll } from "@/hooks/usePoll";
 import Link from "next/link";
 import {
-  UploadCloud, Search, Star, Trash2, Pencil, LayoutGrid, List, MoreVertical, Notebook, BookMarked, Plus, Check,
+  UploadCloud, Search, Star, Trash2, Pencil, LayoutGrid, List, MoreVertical, MoreHorizontal, Notebook, BookMarked, Plus, Check,
   BookOpen, RefreshCw, CheckSquare, Square, X, Loader2, SlidersHorizontal,
 } from "lucide-react";
+
+/** "⋯" menüsü: görünüm (ızgara/liste), yoğunluk (sık/ferah), Seç — tek düğme. */
+function ViewMenu({ view, setView, density, setDensity, selecting, onSelect, canSelect }: {
+  view: "grid" | "list"; setView: (v: "grid" | "list") => void;
+  density: "comfortable" | "compact"; setDensity: (d: "comfortable" | "compact") => void;
+  selecting: boolean; onSelect: () => void; canSelect: boolean;
+}) {
+  const [open, setOpen] = useState(false);
+  const wrap = useRef<HTMLDivElement>(null);
+  const btn = useRef<HTMLButtonElement>(null);
+  useEffect(() => {
+    if (!open) return;
+    const onDown = (e: PointerEvent) => { if (!wrap.current?.contains(e.target as Node)) setOpen(false); };
+    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") { e.stopPropagation(); setOpen(false); btn.current?.focus(); } };
+    document.addEventListener("pointerdown", onDown);
+    document.addEventListener("keydown", onKey, true);
+    return () => { document.removeEventListener("pointerdown", onDown); document.removeEventListener("keydown", onKey, true); };
+  }, [open]);
+  const item = "flex min-h-[44px] w-full items-center gap-3 rounded-lg px-3 text-left text-sm hover:bg-surface-muted disabled:opacity-50";
+  return (
+    <div ref={wrap} className="relative shrink-0">
+      <button ref={btn} type="button" aria-haspopup="menu" aria-expanded={open} aria-label="Görünüm ve seçim" title="Görünüm ve seçim"
+              onClick={() => setOpen((v) => !v)} className="flex h-10 w-10 items-center justify-center rounded-xl border bg-surface text-text-secondary hover:text-text-primary">
+        <MoreHorizontal size={18} aria-hidden="true" />
+      </button>
+      {open && (
+        <div role="menu" aria-label="Görünüm ve seçim" className="absolute right-0 top-full z-40 mt-1 w-60 rounded-xl border bg-surface p-1 shadow-xl">
+          <button type="button" role="menuitemradio" aria-checked={view === "grid"} className={item} onClick={() => { setView("grid"); setOpen(false); }}>
+            <LayoutGrid size={16} aria-hidden="true" className="text-text-secondary" /> <span className="flex-1">Izgara</span>{view === "grid" && <Check size={15} className="text-accent-purple" aria-hidden="true" />}
+          </button>
+          <button type="button" role="menuitemradio" aria-checked={view === "list"} className={item} onClick={() => { setView("list"); setOpen(false); }}>
+            <List size={16} aria-hidden="true" className="text-text-secondary" /> <span className="flex-1">Liste</span>{view === "list" && <Check size={15} className="text-accent-purple" aria-hidden="true" />}
+          </button>
+          <div className="my-1 border-t" role="separator" />
+          <button type="button" role="menuitemcheckbox" aria-checked={density === "compact"} className={item}
+                  onClick={() => { setDensity(density === "comfortable" ? "compact" : "comfortable"); setOpen(false); }}>
+            <SlidersHorizontal size={16} aria-hidden="true" className="text-text-secondary" /> <span className="flex-1">Sık görünüm</span>{density === "compact" && <Check size={15} className="text-accent-purple" aria-hidden="true" />}
+          </button>
+          <div className="my-1 border-t" role="separator" />
+          <button type="button" role="menuitem" className={item} disabled={!canSelect} onClick={() => { onSelect(); setOpen(false); }}>
+            <CheckSquare size={16} aria-hidden="true" className="text-text-secondary" /> <span className="flex-1">{selecting ? "Seçimi bitir" : "Seç (toplu işlem)"}</span>
+          </button>
+        </div>
+      )}
+    </div>
+  );
+}
 
 type Doc = {
   id: string; title: string; status: string; processing_stage?: string | null; source_type?: string | null;
@@ -322,7 +369,7 @@ export default function LibraryPage() {
     const ok = await confirm({
       title: `“${title}” defteri çöp kutusuna taşınsın mı?`,
       description: "Çöp kutusuna taşınır; 30 gün içinde geri alabilirsin. Sonra kendiliğinden kalıcı silinir.",
-      losses: ["Defterin sohbeti, taslağı, sözlüğü, haritası ve zaman çizelgesi defterle birlikte çöpe gider"],
+      losses: ["Defterin sohbeti, çalışma notu, sözlüğü ve sesli özeti defterle birlikte çöpe gider"],
       keeps: [
         ...(n > 0 ? [`İçindeki ${n} kaynak silinmez; Kütüphane'de ve bağlı olduğu diğer defterlerde kalır (geri getirince deftere döner)`] : []),
         "Çöp kutusundan geri getirebilirsin (sol menü › Çöp kutusu)",
@@ -426,7 +473,7 @@ export default function LibraryPage() {
       <div className="mt-3 flex flex-col gap-6 md:mt-5 lg:flex-row">
       <div className="min-w-0 flex-1">
 
-      {/* arama + (telefon) Süz + Seç | (sm+) siralama, favoriler, gorunum, yogunluk, Seç */}
+      {/* arama + "Daha fazla" (süz/sırala tabakası) + "⋯" (görünüm, yoğunluk, Seç) — her ekranda aynı 3 öğe */}
       <div className="flex flex-wrap items-center gap-2">
         <div className="flex min-w-0 flex-1 items-center gap-2 rounded-xl border border-border-strong bg-surface px-3 sm:min-w-[220px]">
           <Search size={16} className="shrink-0 text-text-secondary" aria-hidden="true" />
@@ -435,36 +482,18 @@ export default function LibraryPage() {
                  className="w-full min-w-0 border-0 bg-transparent py-2 text-[16px] outline-none md:text-sm [&::-webkit-search-cancel-button]:appearance-none" />
         </div>
         <button type="button" onClick={() => setFilterOpen(true)} aria-haspopup="dialog" aria-expanded={filterOpen}
-                className={cx(ctl, "sm:hidden", activeFilters ? "border-text-primary/60 bg-surface-muted font-medium text-text-primary" : "bg-surface text-text-secondary")}>
-          <SlidersHorizontal size={15} aria-hidden="true" /> Süz{activeFilters ? ` (${activeFilters})` : ""}
+                title="Sıralama, favoriler, kategori ve etiket süzgeçleri"
+                className={cx(ctl, activeFilters ? "border-text-primary/60 bg-surface-muted font-medium text-text-primary" : "bg-surface text-text-secondary")}>
+          <SlidersHorizontal size={15} aria-hidden="true" /> Daha fazla{activeFilters ? ` (${activeFilters})` : ""}
         </button>
-        {docs.length > 0 && (
-          <button type="button" onClick={() => (selecting ? endSelect() : setSelecting(true))} aria-pressed={selecting}
-                  className={cx(ctl, "sm:order-last", selecting ? "border-text-primary/60 bg-surface-muted font-medium text-text-primary" : "bg-surface text-text-secondary")}>
-            <CheckSquare size={15} aria-hidden="true" /> <span className="hidden sm:inline">{selecting ? "Seçimi bitir" : "Seç"}</span><span className="sm:hidden">{selecting ? "Bitir" : "Seç"}</span>
-          </button>
-        )}
-        <select value={sort} onChange={(e) => setSort(e.target.value as Sort)} aria-label="Sırala" className="hidden min-h-[40px] rounded-xl border bg-surface px-3 text-sm sm:block">
-          {(Object.keys(SORT_LABEL) as Sort[]).map((s) => <option key={s} value={s}>{SORT_LABEL[s]}</option>)}
-        </select>
-        <button type="button" onClick={() => setFavOnly((v) => !v)} aria-pressed={favOnly} className={cx(ctl, "hidden sm:flex", favOnly ? "border-text-primary/60 bg-surface-muted font-medium text-text-primary" : "bg-surface text-text-secondary")}>
-          <Star size={15} className={favOnly ? "fill-current" : ""} aria-hidden="true" /> Favoriler
-        </button>
-        <div className="hidden items-center rounded-xl border bg-surface sm:flex" role="group" aria-label="Görünüm">
-          <button type="button" onClick={() => setView("grid")} aria-label="Izgara görünümü" aria-pressed={view === "grid"} className={cx("flex h-10 w-10 items-center justify-center rounded-l-xl", view === "grid" ? "bg-surface-muted text-text-primary" : "text-text-secondary")}><LayoutGrid size={16} /></button>
-          <button type="button" onClick={() => setView("list")} aria-label="Liste görünümü" aria-pressed={view === "list"} className={cx("flex h-10 w-10 items-center justify-center rounded-r-xl", view === "list" ? "bg-surface-muted text-text-primary" : "text-text-secondary")}><List size={16} /></button>
-        </div>
-        <button type="button" onClick={() => setDensity((d) => (d === "comfortable" ? "compact" : "comfortable"))}
-                aria-label={density === "comfortable" ? "Sık görünüme geç" : "Ferah görünüme geç"}
-                className="hidden min-h-[40px] rounded-xl border bg-surface px-3 text-sm text-text-secondary sm:block">
-          {density === "comfortable" ? "Sık" : "Ferah"}
-        </button>
+        <ViewMenu view={view} setView={setView} density={density} setDensity={setDensity}
+                  selecting={selecting} canSelect={docs.length > 0} onSelect={() => (selecting ? endSelect() : setSelecting(true))} />
       </div>
 
-      {/* telefon: yalniz etkin suzgecler (kaldirilabilir) */}
+      {/* etkin süzgeçler (kaldırılabilir); tür çipi sm+'da zaten şeritte */}
       {activeFilters > 0 && (
-        <div className="mt-2 flex gap-1.5 overflow-x-auto pb-0.5 sm:hidden [scrollbar-width:none] [&::-webkit-scrollbar]:hidden" aria-label="Etkin süzgeçler">
-          {kind && <button type="button" onClick={() => setKind("")} aria-label={`Tür süzgecini kaldır: ${kind}`} className={chip(true)}>{kind} ✕</button>}
+        <div className="mt-2 flex gap-1.5 overflow-x-auto pb-0.5 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden" aria-label="Etkin süzgeçler">
+          {kind && <button type="button" onClick={() => setKind("")} aria-label={`Tür süzgecini kaldır: ${kind}`} className={cx(chip(true), "sm:hidden")}>{kind} ✕</button>}
           {favOnly && <button type="button" onClick={() => setFavOnly(false)} aria-label="Favoriler süzgecini kaldır" className={chip(true)}>Favoriler ✕</button>}
           {cat && <button type="button" onClick={() => setCat("")} aria-label={`Kategori süzgecini kaldır: ${cat}`} className={chip(true)}>{cat} ✕</button>}
           {tag && <button type="button" onClick={() => setTag("")} aria-label={`Etiket süzgecini kaldır: ${tag}`} className={chip(true)}>#{tag} ✕</button>}
@@ -482,20 +511,6 @@ export default function LibraryPage() {
             <button type="button" key={k} onClick={() => setKind(kind === k ? "" : k)} aria-pressed={kind === k} className={chip(kind === k)}>
               {k} <span className="opacity-80">{kindCounts[k]}</span>
             </button>
-          ))}
-        </div>
-      )}
-
-      {/* sm+: kategori ve etiket cipleri */}
-      {(categories.length > 0 || allTags.length > 0) && (
-        <div className="mt-3 hidden flex-wrap items-center gap-1.5 sm:flex">
-          {cat && <button type="button" onClick={() => setCat("")} aria-label={`Kategori süzgecini kaldır: ${cat}`} className="min-h-[32px] rounded-full border border-text-primary/60 bg-surface-muted px-2.5 text-xs font-medium text-text-primary">kategori: {cat} ✕</button>}
-          {!cat && categories.map((c) => (
-            <button type="button" key={c} onClick={() => setCat(c)} className="min-h-[32px] rounded-full border bg-surface px-2.5 text-xs text-text-secondary hover:border-accent-purple/50">{c}</button>
-          ))}
-          {tag && <button type="button" onClick={() => setTag("")} aria-label={`Etiket süzgecini kaldır: ${tag}`} className="min-h-[32px] rounded-full border border-text-primary/60 bg-surface-muted px-2.5 text-xs font-medium text-text-primary">#{tag} ✕</button>}
-          {!tag && allTags.slice(0, 12).map((t) => (
-            <button type="button" key={t} onClick={() => setTag(t)} className="min-h-[32px] rounded-full border bg-surface px-2.5 text-xs text-text-secondary hover:border-accent-purple/50">#{t}</button>
           ))}
         </div>
       )}
@@ -782,7 +797,7 @@ export default function LibraryPage() {
         {nbCreateForm}
       </Modal>
 
-      {/* telefon: "Süz" tabakasi */}
+      {/* "Daha fazla" tabakası: sıralama, favoriler, tür, kategori, etiket */}
       <Modal open={filterOpen} onClose={() => setFilterOpen(false)} title="Süz ve sırala" size="md">
         <div className="space-y-4">
           <div>

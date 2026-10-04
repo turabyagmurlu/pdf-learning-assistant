@@ -10,24 +10,24 @@ Farklari (study.py'deki eski is kuyruguna gore):
   cagrida iki ses; parcalama replik ortasindan bolmez.
 - Ayni parca ayni anda iki isten istenirse (on parca + tam is) tek Gemini cagrisi
   yapilir; digeri sonucu bekler (kota bosa gitmez).
+- V3: metin `tts_prepare`'den gecer; parcalar paragraf hizali; her parcanin sonunda 500 ms
+  sessizlik; yonerge Ingilizce/ayrik/parca baglamli (tekli ve sohbet ortak sablon); bolumler
+  (`chapters`) paragraf bazli, kota 0.
 """
 import asyncio
-import base64
 import json
 import logging
 import re
 import time
 import uuid
 
-import httpx
-
 from app.ai import usage
-from app.config import settings
 from app.core.errors import AiUnavailable
 from app.db.session import get_pool
 from app.services import tts_service as T
-from app.services.tts_service import (TtsBusy, TtsQuota, DEFAULT_VOICE, FEMALE_VOICES,
-                                      cache_key, split_for_tts, wav_from_pcm)
+from app.services.tts_service import (TtsBusy, TtsQuota, DEFAULT_VOICE, FEMALE_VOICES, MALE_VOICES,  # noqa: F401
+                                      DEFAULT_MALE_VOICE, cache_key, split_for_tts, wav_from_pcm,
+                                      tts_prepare, normalize_voice, with_tail_silence, build_prompt)
 
 log = logging.getLogger(__name__)
 
@@ -41,20 +41,7 @@ except Exception:  # noqa
 SPEAKER_A = "Ayşe"        # ogretmen / anlatici (kadin sesi; kullanicinin sectigi)
 SPEAKER_B = "Kerem"       # merakli ogrenci (erkek sesi)
 
-# Gemini TTS erkek sesleri (etiket: dokumandaki karakter tanimi)
-MALE_VOICES = {
-    "Puck": "Neşeli",
-    "Charon": "Bilgili",
-    "Fenrir": "Heyecanlı",
-    "Orus": "Kararlı",
-    "Enceladus": "Yumuşak",
-    "Iapetus": "Net",
-    "Algenib": "Tok",
-    "Schedar": "Dengeli",
-    "Achird": "Samimi",
-    "Sadaltager": "Bilge",
-}
-DEFAULT_MALE_VOICE = "Puck"
+# Erkek sesleri (3 ses) ve varsayilan: tts_service.MALE_VOICES / DEFAULT_MALE_VOICE (buradan yeniden disa verilir)
 
 _LINE_RE = re.compile(r"^\s*(Ayşe|Ayse|Kerem)\s*:\s*(.*)$", re.IGNORECASE)
 
@@ -114,6 +101,36 @@ def split_any(text: str, dialog: bool, max_chars: int = 2600) -> list[str]:
     return split_dialog_for_tts(text, max_chars) if dialog else split_for_tts(text, max_chars)
 
 
+def _title_of(text: str, words: int = 6) -> str:
+    first = re.split(r"(?<=[.!?])\s+", text.strip(), maxsplit=1)[0]
+    ws = first.split()
+    t = " ".join(ws[:words])
+    return (t + "…") if len(ws) > words else t.rstrip(".!?")
+
+
+def chapters_for(chunks: list[str], dialog: bool = False) -> list[dict]:
+    """Bolum isaretleri (kota 0): tekli anlatimda her paragraf bir bolum, sohbette Ayşe'nin her 3. repligi.
+    Donus: [{chunk, offset (karakter, parca icinde), title}]. Istemci karakter orantisiyla saniyeye cevirir."""
+    out: list[dict] = []
+    for ci, text in enumerate(chunks):
+        if dialog:
+            pos, k = 0, 0
+            for ln in text.split("\n"):
+                if ln.lower().startswith("ay") and ":" in ln:
+                    if k % 3 == 0:
+                        body = ln.split(":", 1)[1].strip()
+                        out.append({"chunk": ci, "offset": pos, "title": _title_of(body)})
+                    k += 1
+                pos += len(ln) + 1
+        else:
+            pos = 0
+            for para in re.split(r"(\n\s*\n)", text):
+                if para.strip() and not para.isspace():
+                    out.append({"chunk": ci, "offset": pos, "title": _title_of(para)})
+                pos += len(para)
+    return out[:200]
+
+
 def strip_head(text: str, head: str) -> str | None:
     """`head` metnin basiysa (bosluk/satir farklari onemsiz) kalan kismi dondurur; degilse None.
     Istemci akan metinden on parcayi paragraflari birlestirerek secer; bosluklar birebir tutmayabilir."""
@@ -132,70 +149,14 @@ def strip_head(text: str, head: str) -> str | None:
     return text[i:]
 
 
-# ---- Gemini cagrisi -------------------------------------------------------------
-def _gemini_audio(payload: dict, chars: int) -> bytes:
-    """Ses modeli havuzu uzerinden tek cagri; ham PCM dondurur (tts_service.synthesize_pcm ile ayni kurallar)."""
-    key = (settings.gemini_api_key or "").strip()
-    if not key:
-        raise AiUnavailable("Seslendirme şu an kullanılamıyor. Cihaz sesiyle dinleyebilirsin.",
-                            detail="GEMINI_API_KEY tanimli degil")
-    try:
-        r = None
-        quota_err = None
-        model = ""
-        usage.check_user()
-        for model in T._tts_models():
-            if not usage.available(model):
-                continue
-            url = f"{T.BASE}/models/{model}:generateContent?key={key}"
-            r = httpx.post(url, json=payload, timeout=httpx.Timeout(connect=10, read=170, write=30, pool=10))
-            if r.status_code == 404:
-                usage.mark_dead(model); r = None; continue
-            if r.status_code == 429:
-                quota_err = T._quota_from_response(r)
-                usage.mark_limited(model, getattr(quota_err, "daily", False), getattr(quota_err, "retry_after", None))
-                r = None; continue
-            break
-        if r is None:
-            if quota_err is None and any(usage.status(m) == "gunluk_doldu" for m in T._tts_models()):
-                quota_err = TtsQuota("Seslendirme bugünlük doldu, yarın yeniden açılır. "
-                                     "Şimdilik cihaz sesiyle dinleyebilirsin.", daily=True)
-            raise quota_err or TtsQuota("Seslendirme şu an yoğun; biraz sonra tekrar dene ya da cihaz sesiyle dinle.")
-        if r.status_code in (500, 502, 503, 504):
-            raise TtsBusy("Seslendirme şu an yoğun; birkaç saniye içinde yeniden denenecek.")
-        if r.status_code >= 400:
-            detail = ""
-            try:
-                detail = (r.json().get("error") or {}).get("message", "")[:160]
-            except Exception:
-                pass
-            raise AiUnavailable("Seslendirme şu an yapılamadı; biraz sonra tekrar dene ya da cihaz sesiyle dinle.",
-                                detail=f"tts {r.status_code}: {detail}")
-        usage.record(model, "ses", chars // 4)
-        data = r.json()
-        for p in data["candidates"][0]["content"]["parts"]:
-            inline = p.get("inlineData") or p.get("inline_data")
-            if inline and inline.get("data"):
-                return base64.b64decode(inline["data"])
-        raise AiUnavailable("Seslendirme şu an yapılamadı; biraz sonra tekrar dene ya da cihaz sesiyle dinle.",
-                            detail="tts: bos ses verisi")
-    except AiUnavailable:
-        raise
-    except httpx.TimeoutException:
-        raise AiUnavailable("Seslendirme çok uzun sürdü. Metni kısaltıp tekrar dene.")
-    except Exception:  # noqa
-        raise AiUnavailable("Seslendirme şu an yapılamadı; biraz sonra tekrar dene ya da cihaz sesiyle dinle.")
-
-
-def synthesize_pcm_dialog(text: str, voice_a: str = DEFAULT_VOICE, voice_b: str = DEFAULT_MALE_VOICE) -> bytes:
-    """Iki konusmacili parca: Ayse (voice_a) + Kerem (voice_b) tek Gemini cagrisinda."""
-    if voice_a not in FEMALE_VOICES:
-        voice_a = DEFAULT_VOICE
-    if voice_b not in MALE_VOICES:
-        voice_b = DEFAULT_MALE_VOICE
-    prompt = ("TTS the following Turkish conversation. "
-              f"{SPEAKER_A} is a warm, calm teacher; {SPEAKER_B} is a curious student. "
-              "Natural pace, lively but clear:\n\n" + text[:8000])
+# ---- Gemini cagrisi: tts_service.gemini_audio (ortak havuz, karakter bazli kullanim kaydi) ------------
+def synthesize_pcm_dialog(text: str, voice_a: str = DEFAULT_VOICE, voice_b: str = DEFAULT_MALE_VOICE,
+                          part: int | None = None, total: int | None = None) -> bytes:
+    """Iki konusmacili parca: Ayse (voice_a) + Kerem (voice_b) tek Gemini cagrisinda.
+    Yonerge tekli anlatimla ortak sablondan (Ingilizce, ayrik, parca baglamli); sonuna 500 ms sessizlik."""
+    voice_a = normalize_voice(voice_a)
+    voice_b = normalize_voice(voice_b, male=True)
+    prompt = build_prompt(text, "", part, total, dialog=True)
     payload = {
         "contents": [{"parts": [{"text": prompt}]}],
         "generationConfig": {
@@ -210,7 +171,7 @@ def synthesize_pcm_dialog(text: str, voice_a: str = DEFAULT_VOICE, voice_b: str 
             },
         },
     }
-    return _gemini_audio(payload, len(text))
+    return with_tail_silence(T.gemini_audio(payload, len(text)))
 
 
 def _encode(pcm: bytes) -> tuple[bytes, str]:
@@ -286,6 +247,7 @@ def _public(job: dict) -> dict:
         "note": job.get("note", ""), "waiting": job.get("waiting", 0),
         "mime": job.get("mime") or "audio/wav",
         "cached": job.get("cached", False), "resumed": job.get("resumed", False),
+        "chapters": chapters_for(job["chunks"], job["dialog"]),
     }
 
 
@@ -362,7 +324,7 @@ async def _synth_chunk(job: dict, i: int) -> bytes:
     ck = _chunk_key(text, job)
     hit = await _pcm_get(ck)
     if hit is not None:
-        return hit
+        return with_tail_silence(hit)
     fut = _INFLIGHT.get(ck)
     if fut is not None:
         return await asyncio.shield(fut)
@@ -370,10 +332,13 @@ async def _synth_chunk(job: dict, i: int) -> bytes:
     fut = loop.create_future()
     _INFLIGHT[ck] = fut
     try:
+        # Parca baglami: on parca isi (head_only) tek parcadir ama dersin basidir -> "part 1 of 2" gibi davran
+        total = job["total"] if not job.get("head_only") else max(2, job["total"])
+        part = i + 1
         if job["dialog"]:
-            pcm = await asyncio.to_thread(synthesize_pcm_dialog, text, job["voice"], job["voice2"])
+            pcm = await asyncio.to_thread(synthesize_pcm_dialog, text, job["voice"], job["voice2"], part, total)
         else:
-            pcm = await asyncio.to_thread(T.synthesize_pcm, text, job["voice"], "")
+            pcm = await asyncio.to_thread(T.synthesize_pcm, text, job["voice"], "", part, total)
         await _pcm_put(ck, pcm, len(text))
         if not fut.done():
             fut.set_result(pcm)
@@ -438,7 +403,7 @@ async def _run(job: dict):
                 if p is None:
                     parts = []
                     break
-                parts.append(p)
+                parts.append(with_tail_silence(p))
             if parts:
                 await _full_put(job["full_key"], b"".join(parts), sum(len(c) for c in job["chunks"]))
         except Exception:  # noqa
@@ -461,19 +426,26 @@ async def _run(job: dict):
 async def create_job(user_id: str, is_owner: bool, text: str, voice: str | None, voice2: str | None,
                      dialog: bool | None = None, head: str | None = None) -> dict:
     """Yeni parcali is. `head`: metnin basindaki, daha once on-uretilmis bolum;
-    verilirse 1. parca tam olarak o olur (onbellekten aninda gelir)."""
+    verilirse 1. parca tam olarak o olur (onbellekten aninda gelir).
+
+    Metin ve on parca `tts_prepare`'den gecer (tire, atif, kisaltma, sayi, noktalama); `texts` alani
+    islenmis metindir, cumle vurgusu da ayni metni gosterir. Parcalar paragraf sonuna hizalidir."""
     await _cleanup()
-    txt = (text or "").strip()[:12000]
-    if len(txt) < 2:
+    raw = (text or "").strip()[:12000]
+    if len(raw) < 2:
         raise AiUnavailable("Seslendirilecek metin boş.")
     if dialog is None:
-        dialog = is_dialog(txt)
-    voice = voice if voice in FEMALE_VOICES else DEFAULT_VOICE
-    voice2 = voice2 if voice2 in MALE_VOICES else DEFAULT_MALE_VOICE
+        dialog = is_dialog(raw)
+    txt = tts_prepare(raw, dialog=dialog)
+    if len(txt) < 2:
+        raise AiUnavailable("Seslendirilecek metin boş.")
+    voice = normalize_voice(voice)
+    voice2 = normalize_voice(voice2, male=True)
     style = f"sohbet|{voice2}" if dialog else ""
     chunks: list[str] = []
-    head = (head or "").strip()
+    head = tts_prepare((head or "").strip(), dialog=dialog)
     rest = strip_head(txt, head) if head and len(head) <= 2600 else None
+    head_only = bool(head) and rest is not None and not rest.strip()
     if rest is not None:
         # 1. parca tam olarak on parca: onbellek anahtari ayni -> on-uretilmis ses aninda kullanilir
         chunks = ([head] if not dialog else split_dialog_for_tts(head)) + (split_any(rest.strip(), dialog) if rest.strip() else [])
@@ -486,6 +458,7 @@ async def create_job(user_id: str, is_owner: bool, text: str, voice: str | None,
         "id": str(uuid.uuid4()), "user": str(user_id), "owner": bool(is_owner),
         "status": "running", "done": 0, "total": len(chunks), "ready": [], "durations": {},
         "chunks": chunks, "voice": voice, "voice2": voice2, "dialog": dialog, "style": style,
+        "head_only": head_only,
         "full_key": cache_key(txt, voice, style),
         "error": None, "quota": False, "daily": False, "note": "", "waiting": 0,
         "at": time.time(), "mime": None, "cached": False, "resumed": False, "audio": {},
@@ -497,7 +470,7 @@ async def create_job(user_id: str, is_owner: bool, text: str, voice: str | None,
         if p is None:
             all_hit = False
             break
-        job["durations"][str(i)] = len(p) / 48000.0
+        job["durations"][str(i)] = len(with_tail_silence(p)) / 48000.0
         job["ready"].append(i)
     if all_hit:
         job["status"], job["done"], job["cached"] = "ready", len(chunks), True
@@ -550,6 +523,7 @@ async def chunk_audio(job: dict, n: int) -> tuple[bytes, str] | None:
     pcm = await _pcm_get(_chunk_key(job["chunks"][n], job))
     if pcm is None:
         return None
+    pcm = with_tail_silence(pcm)        # eski parcalar da sunumda 500 ms nefes alir
     out = await asyncio.to_thread(_encode, pcm)     # MP3 kodlama CPU isi; dongusu kilitlemesin
     job["mime"] = out[1]
     # Bellekte en fazla birkac parca tut (25 MB WAV riski)

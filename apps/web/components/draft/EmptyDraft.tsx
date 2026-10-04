@@ -1,5 +1,5 @@
 "use client";
-/** Boş taslak: açık defter çizimi + kısa açıklama + (vurgu varsa) "Mevcut vurgularını getir". */
+/** Boş "Biriktirdiklerin": açık defter çizimi + kısa açıklama + (vurgu varsa) "Mevcut vurgularını getir". */
 import { Loader2, Download } from "lucide-react";
 import { CodexSketch } from "@/components/art";
 
@@ -9,12 +9,14 @@ export default function EmptyDraft({ kind, canImport, importing, onImport, compa
   return (
     <div className="flex flex-col items-center px-4 py-8 text-center sfumato-in">
       <CodexSketch size={compact ? 120 : 176} className="text-text-secondary" />
-      <p className="eyebrow mt-4">{kind === "collection" ? "Defterin taslağı" : "Bu kaynağın taslağı"}</p>
+      <p className="eyebrow mt-4">{kind === "collection" ? "Bu defterde biriktirdiklerin" : "Bu kaynakta biriktirdiklerin"}</p>
       <p className="mt-2 max-w-sm font-reading text-[17px] italic leading-relaxed text-text-primary">
-        Okurken yaptığın her vurgu buraya kendiliğinden düşer.
+        Okurken yaptığın her vurgu, alt çizgi ve kenar notu buraya kendiliğinden düşer.
       </p>
       <p className="mt-1 max-w-sm text-sm text-text-secondary">
-        Aralarına kendi cümlelerini yazabilir, sonra Atölye’de bu alıntılarla çalışabilirsin.
+        {kind === "collection"
+          ? "Defterdeki kaynakları okurken vurgula; aralarına kendi cümlelerini yaz, bir alıntıyı “Sor” ile soruya çevir."
+          : "Metni seçip bir renk seç ya da Kalem ile sayfaya yaz; aralarına kendi cümlelerini ekleyebilirsin."}
       </p>
       {canImport && (
         <button type="button" onClick={onImport} disabled={importing}

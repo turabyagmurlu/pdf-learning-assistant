@@ -17,6 +17,10 @@ class Settings(BaseSettings):
     # (429) ya da bu anahtarda yoksa (404) otomatik siradakine gecilir.
     gemini_model_pool: str = ("gemini-flash-lite-latest,gemini-3.5-flash-lite,gemini-3.1-flash-lite,"
                               "gemini-2.5-flash-lite,gemini-flash-latest,gemini-2.5-flash")
+    # Sor — ayrintili/derin cevaplar: havuzdaki tam "flash" once denenir (lite modeller kisa ve yuzeysel
+    # yazar); dolu/yoksa havuz sirasiyla devam eder. Lite yalniz kisa cevap ve niyet anlama adiminda.
+    gemini_model_strong: str = "gemini-flash-latest"
+    gemini_model_light: str = "gemini-flash-lite-latest"
 
     # OpenAI (opsiyonel alternatif)
     openai_api_key: str = "sk-REPLACE_ME"
@@ -68,6 +72,16 @@ class Settings(BaseSettings):
     @property
     def active_llm_model_advanced(self) -> str:
         return self.gemini_model_advanced if self.ai_provider == "gemini" else self.llm_model_advanced
+
+    @property
+    def active_llm_model_strong(self) -> str:
+        """Uzun, yapili anlatim (Sor: ayrintili/derin)."""
+        return self.gemini_model_strong if self.ai_provider == "gemini" else self.llm_model_advanced
+
+    @property
+    def active_llm_model_light(self) -> str:
+        """Kucuk ve ucuz adimlar (niyet anlama, kisa cevap)."""
+        return self.gemini_model_light if self.ai_provider == "gemini" else self.llm_model
 
 
 settings = Settings()

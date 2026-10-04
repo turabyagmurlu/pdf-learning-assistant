@@ -1,18 +1,17 @@
 "use client";
 /**
  * Hızlı geçiş (Ctrl+K / Cmd+K): defterlere, kaynaklara ve sayfalara adıyla git.
- * İçerikte (metnin içinde) arama burada yapılmaz; "İçerikte ara →" satırı Araştır sayfasına
+ * İçerikte (metnin içinde) arama burada yapılmaz; "İçerikte ara →" satırı Ara sayfasına
  * yazılan sözcükle (?q=) gider. Veriler ilk açılışta bir kez çekilir; yapay zekâ kullanmaz (ücretsiz).
  */
 import { useEffect, useId, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
-import { Search, Notebook, Library, Moon, Keyboard, CornerDownLeft, TextSearch, Plus, Sun, Palette } from "lucide-react";
+import { Search, Notebook, Library, Moon, Keyboard, CornerDownLeft, TextSearch, Plus, Sun, PenLine } from "lucide-react";
 import { api } from "@/lib/api";
 import SourceIcon from "@/components/SourceIcon";
 import { CoverBadge } from "@/components/CoverPicker";
 import { useTheme } from "@/components/ThemeToggle";
 import Modal from "@/components/Modal";
-import { atelierHref } from "@/hooks/useAtelier";
 
 type Item = { id: string; group: string; label: string; hint?: string; icon: React.ReactNode; run: () => void };
 type Col = { id: string; title?: string; name?: string; doc_count?: number; cover_color?: string | null; cover_icon?: string | null };
@@ -67,7 +66,7 @@ export default function CommandPalette() {
     const hit = (s: string) => !nq || norm(s).includes(nq);
     const out: Item[] = [];
     if (raw) {
-      out.push({ id: "q", group: "Ara", label: `İçerikte ara: “${raw}” →`, hint: "Araştır",
+      out.push({ id: "q", group: "Ara", label: `İçerikte ara: “${raw}” →`, hint: "Ara",
                  icon: <TextSearch size={16} className="text-accent-purple" />, run: () => { go("/search?q=" + encodeURIComponent(raw)); window.dispatchEvent(new CustomEvent("typdf:search", { detail: raw })); } });
     }
     (cols || []).filter((c) => hit(c.title || c.name || "")).slice(0, nq ? 6 : 4).forEach((c) =>
@@ -76,21 +75,21 @@ export default function CommandPalette() {
     (docs || []).filter((d) => hit(d.title || "")).slice(0, nq ? 8 : 4).forEach((d) =>
       out.push({ id: "d" + d.id, group: "Kaynaklar", label: d.title, hint: d.status !== "ready" ? "hazırlanıyor" : undefined,
                  icon: <SourceIcon kind={d.source_type} size={16} />, run: () => go("/documents/" + d.id) }));
-    // Atolye: yalniz yazilinca defter bazinda ("Atölye: <defter>"); bos aramada ilk 2 defter
+    // Çalışma notu: "not <defter>" / "çalışma notu <defter>" yazılınca defter bazında; boş aramada ilk 2 defter
     if (cols && cols.length) {
-      const inAtelier = nq.length >= 3 && ("atolye".startsWith(nq) || nq.startsWith("atolye"));
-      const rest = inAtelier ? norm(raw.replace(/^\s*at[oö]lye\s*:?\s*/i, "")) : nq;
-      const pick = (cols || []).filter((c) => inAtelier ? (!rest || norm(c.title || c.name || "").includes(rest)) : hit(c.title || c.name || ""));
+      const m = /^\s*(calisma\s*notu|not)\s*:?\s*/.exec(nq);
+      const inNote = !!m;
+      const rest = inNote ? nq.slice(m![0].length) : nq;
+      const pick = (cols || []).filter((c) => inNote ? (!rest || norm(c.title || c.name || "").includes(rest)) : hit(c.title || c.name || ""));
       pick.slice(0, nq ? 4 : 2).forEach((c) =>
-        out.push({ id: "w" + c.id, group: "Atölye", label: `Atölye: ${c.title || c.name || "Adsız defter"}`, hint: "Hatırla",
-                   icon: <Palette size={16} className="text-gold" />, run: () => go(atelierHref("collection:" + c.id, "recall")) }));
+        out.push({ id: "w" + c.id, group: "Çalışma notu", label: `Çalışma notu: ${c.title || c.name || "Adsız defter"}`, hint: "Ders notu · biriktirdiklerin",
+                   icon: <PenLine size={16} className="text-gold" />, run: () => go(`/collections/${c.id}?tab=not`) }));
     }
     const acts: Item[] = [
       { id: "a6", group: "Git", label: "Bugün", icon: <Sun size={16} />, run: () => go("/today") },
-      { id: "a7", group: "Git", label: "Atölye", hint: "Oku · Hatırla · Dinle", icon: <Palette size={16} />, run: () => go("/atelier") },
       { id: "a1", group: "Git", label: "Defterler", icon: <Notebook size={16} />, run: () => go("/notebooks") },
       { id: "a2", group: "Git", label: "Kütüphane", icon: <Library size={16} />, run: () => go("/library") },
-      { id: "a3", group: "Git", label: "Araştır (tüm kaynakların içinde ara)", icon: <Search size={16} />, run: () => go("/search") },
+      { id: "a3", group: "Git", label: "Ara (tüm kaynakların içinde ara)", icon: <Search size={16} />, run: () => go("/search") },
       { id: "a0", group: "Eylemler", label: "Yeni defter", icon: <Plus size={16} />, run: () => { go("/notebooks?new=1"); window.dispatchEvent(new Event("typdf:new-notebook")); } },
       { id: "a4", group: "Eylemler", label: dark ? "Açık temaya geç" : "Koyu temaya geç", icon: <Moon size={16} />, run: () => { setOpen(false); setTheme(dark ? "light" : "dark"); } },
       { id: "a5", group: "Eylemler", label: "Klavye kısayolları", icon: <Keyboard size={16} />, run: () => {

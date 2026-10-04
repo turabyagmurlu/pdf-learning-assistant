@@ -94,7 +94,7 @@ export default function SearchPage() {
 
   return (
     <div className="mx-auto w-full max-w-4xl px-4 py-5 md:px-6 md:py-8">
-      <PageHeader eyebrow="Tüm kaynaklar" title="Araştır"
+      <PageHeader eyebrow="Tüm kaynaklar" title="Ara"
                   subtitle="Bütün defterlerinin ve kaynaklarının içinde anlamca ara; pasajı kaynağı ve sayfasıyla bul. Ücretsiz." />
 
       <form onSubmit={submit} role="search" className="flex items-center gap-2 rounded-xl border border-border-strong bg-surface px-3">

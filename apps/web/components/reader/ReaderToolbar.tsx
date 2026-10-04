@@ -1,18 +1,20 @@
 "use client";
 /**
- * PDF okuyucu kontrolleri.
- * - Genis ekran (>=1024): ReaderToolbar, baslik satirinda tek satir; birincil kontroller
- *   gorunur, ikinciller (tema, cift sayfa, geri al/yinele, disa aktar) "⋯" menusunde.
- * - Dar ekran: ReaderMoreMenu (baslikta "⋯") + ReaderBottomBar (altta: Icindekiler · sayfa · Sohbet).
+ * PDF okuyucu kontrolleri (3.0 "Derin ve Sade").
+ * - Genis ekran (>=1024): ReaderToolbar, baslik satirinda tek satir, EN FAZLA 8 dugme (Geri dahil):
+ *   Sol panel · ◀ sayfa ▶ · % (tek dugme; acilir −/sığdır/+) · Kalem · Odak · ⋯ · Sag panel.
+ *   Kenar notu, silgi, alt cizgi, geri al: Kalem paletinde (PenPalette). Vurgulari disa aktarma: Çalışma notu'nda.
+ * - "⋯" menusu EN FAZLA 5 madde: Kağıt · Metin/Sayfa · (dar ekranda Sayfaya sığdır) · Ses seçimi · Kısayollar.
+ * - Dar ekran: ReaderMoreMenu (baslikta "⋯") + ReaderBottomBar (altta: Icindekiler · sayfa · Kalem · panel).
  * Tum hedefler en az 40 px (dar ekranda 44 px); her dugmenin gorunen metni ya da aria-label'i var.
  */
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { PenTool, PaperChoice, PaperTone } from "@/lib/reader";
 import { PAPER_CHOICES, PAPER_LABEL, loadPaper, savePaper, resolvePaper } from "@/lib/reader";
 import {
-  ChevronLeft, ChevronRight, Minus, Plus, Highlighter, StickyNote,
-  BookOpen, FileText, Maximize2, Minimize2, Sun, Contrast, Moon, PanelLeft, PanelRight, Download,
-  Undo2, Redo2, MoreHorizontal, RotateCcw, Check, ListTree, MessageSquare,
+  ChevronLeft, ChevronRight, Minus, Plus, Highlighter,
+  FileText, AlignLeft, Maximize2, Minimize2, PanelLeft, PanelRight,
+  MoreHorizontal, RotateCcw, Check, ListTree, MessageSquare, Volume2, Keyboard,
 } from "lucide-react";
 
 export type Theme = "light" | "sepia" | "dark";
@@ -25,20 +27,25 @@ export const THEME_LABEL: Record<Theme, string> = { light: "Açık", sepia: "Sep
 const THEME_ORDER: Theme[] = ["light", "sepia", "dark"];
 export const nextTheme = (t: Theme): Theme => THEME_ORDER[(THEME_ORDER.indexOf(t) + 1) % 3];
 
+export type ViewMode = "page" | "text";
 export interface ToolbarProps {
   page: number; numPages: number; setPage: (n: number) => void;
   scale: number; setScale: (f: (s: number) => number) => void;
-  spread: boolean; setSpread: (b: boolean) => void;
   tool: Tool; setTool: (t: Tool) => void;
-  theme: Theme; setTheme: (t: Theme) => void;
   focus: boolean; setFocus: (b: boolean) => void;
   leftOpen: boolean; setLeftOpen: (b: boolean) => void;
   rightOpen: boolean; setRightOpen: (b: boolean) => void;
-  onExport: () => void;
-  onUndo?: () => void; onRedo?: () => void; canUndo?: boolean; canRedo?: boolean;
+  /** "Sayfa | Metin" görünümü ("⋯" menüsünde) */
+  viewMode?: ViewMode; setViewMode?: (m: ViewMode) => void;
   /** Okuma kagidi (Ajan V2): secim + o an uygulanan ton. setPaper verilirse "⋯" menusunde secici cikar. */
   paper?: PaperChoice; paperTone?: PaperTone; setPaper?: (p: PaperChoice) => void;
 }
+
+/** Ses seçimi (Ajan V): ListenDock / ses ayarı bu olayı dinler ve tek listeli seçiciyi açar. */
+export const VOICE_PICKER_EVENT = "typdf:voice-picker";
+const openVoicePicker = () => window.dispatchEvent(new CustomEvent(VOICE_PICKER_EVENT));
+/** Kısayollar penceresi (components/Shortcuts "?" tuşunu dinler). */
+const openShortcuts = () => window.dispatchEvent(new KeyboardEvent("keydown", { key: "?" }));
 
 /* ===== Okuma kagidi (Ajan V2) ===== */
 
@@ -142,7 +149,39 @@ function PageInput({ page, numPages, setPage, tall }: { page: number; numPages: 
   );
 }
 
-/** Genis ekran arac cubugu (baslik satirinin sagi). */
+/** Yakınlaştırma: tek düğme (%); açılınca −  Sığdır  + (klavye: − / + / 0). */
+function ZoomButton({ scale, setScale, btn }: { scale: number; setScale: ToolbarProps["setScale"]; btn: string }) {
+  const [open, setOpen] = useState(false);
+  const wrap = useRef<HTMLDivElement>(null);
+  const btnRef = useRef<HTMLButtonElement>(null);
+  useEffect(() => {
+    if (!open) return;
+    const onDown = (e: PointerEvent) => { if (!wrap.current?.contains(e.target as Node)) setOpen(false); };
+    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") { e.stopPropagation(); setOpen(false); btnRef.current?.focus(); } };
+    document.addEventListener("pointerdown", onDown);
+    document.addEventListener("keydown", onKey, true);
+    return () => { document.removeEventListener("pointerdown", onDown); document.removeEventListener("keydown", onKey, true); };
+  }, [open]);
+  const pct = Math.round(scale * 100);
+  return (
+    <div ref={wrap} className="relative">
+      <button ref={btnRef} type="button" aria-haspopup="true" aria-expanded={open}
+              className="h-10 min-w-[52px] rounded-lg px-1 text-xs hover:bg-surface-hover"
+              aria-label={`Yakınlaştırma yüzde ${pct}; büyütme seçenekleri`} title="Yakınlaştırma"
+              onClick={() => setOpen((v) => !v)}>{pct}%</button>
+      {open && (
+        <div role="group" aria-label="Yakınlaştırma" className="absolute left-1/2 top-full z-50 mt-1 flex -translate-x-1/2 items-center gap-0.5 rounded-xl border bg-surface p-1 shadow-xl">
+          <button type="button" className={btn} aria-label="Uzaklaştır" title="Uzaklaştır (−)" onClick={() => setScale(zoomOut)}><Minus size={17} /></button>
+          <button type="button" className="h-10 rounded-lg px-2 text-xs hover:bg-surface-hover" aria-label="Sayfaya sığdır" title="Sayfaya sığdır (0)"
+                  onClick={() => { setScale(() => 1); setOpen(false); }}>Sığdır</button>
+          <button type="button" className={btn} aria-label="Yakınlaştır" title="Yakınlaştır (+)" onClick={() => setScale(zoomIn)}><Plus size={17} /></button>
+        </div>
+      )}
+    </div>
+  );
+}
+
+/** Genis ekran arac cubugu (baslik satirinin sagi) — 7 dugme (+ basliktaki Geri = 8). */
 export default function ReaderToolbar(p: ToolbarProps) {
   // H-9: secili arac uygulama moruyla (acik/koyu temada >= 4.5:1), hover zemini token
   const btn = "flex h-10 w-10 items-center justify-center rounded-lg hover:bg-surface-hover disabled:opacity-40";
@@ -160,26 +199,18 @@ export default function ReaderToolbar(p: ToolbarProps) {
       <button className={btn} aria-label="Sonraki sayfa" title="Sonraki sayfa (→)" disabled={p.page >= p.numPages}
               onClick={() => p.setPage(Math.min(p.numPages, p.page + 1))}><ChevronRight size={17} /></button>
       <Sep />
-      <button className={btn} aria-label="Uzaklaştır" title="Uzaklaştır" onClick={() => p.setScale(zoomOut)}><Minus size={17} /></button>
-      <button className="h-10 min-w-[52px] rounded-lg px-1 text-xs hover:bg-surface-hover"
-              aria-label={`Yakınlaştırma yüzde ${Math.round(p.scale * 100)}. Sayfaya sığdırmak için bas`}
-              title="Yakınlaştırmayı sıfırla (sayfaya sığdır)"
-              onClick={() => p.setScale(() => 1)}>{Math.round(p.scale * 100)}%</button>
-      <button className={btn} aria-label="Yakınlaştır" title="Yakınlaştır" onClick={() => p.setScale(zoomIn)}><Plus size={17} /></button>
-      <Sep />
-      <button className={`${btn} ${isPenTool(p.tool) ? active : ""}`} aria-label="Kalem: vurgula, altını çiz, el yazısıyla not al" aria-pressed={isPenTool(p.tool)}
-              title="Kalem: vurgula, altını çiz, el yazısıyla not al (H)"
-              onClick={() => p.setTool(isPenTool(p.tool) ? "none" : "highlight")}><Highlighter size={17} /></button>
-      <button className={`${btn} ${p.tool === "note" ? active : ""}`} aria-label="Kenar notu aracı" aria-pressed={p.tool === "note"}
-              title="Kenar notu: sayfada bir yere tıkla" onClick={() => p.setTool(p.tool === "note" ? "none" : "note")}><StickyNote size={17} /></button>
+      <ZoomButton scale={p.scale} setScale={p.setScale} btn={btn} />
+      <button className={`${btn} ${isPenTool(p.tool) || p.tool === "note" ? active : ""}`} aria-label="Kalem: vurgula, altını çiz, kenar notu, el yazısı" aria-pressed={isPenTool(p.tool) || p.tool === "note"}
+              title="Kalem: vurgula, altını çiz, kenar notu, el yazısı (H)"
+              onClick={() => p.setTool(p.tool !== "none" ? "none" : "highlight")}><Highlighter size={17} /></button>
       <button className={`${btn} ${p.focus ? active : ""}`} aria-label="Odak modu" aria-pressed={p.focus} title="Odak modu (F)"
               onClick={() => p.setFocus(!p.focus)}>{p.focus ? <Minimize2 size={17} /> : <Maximize2 size={17} />}</button>
       <ReaderMoreMenu {...p} variant="wide" />
       {!p.focus && (
         <>
           <Sep />
-          <button className={`${btn} ${p.rightOpen ? active : ""}`} aria-label="Taslak, vurgular ve sohbet paneli" aria-pressed={p.rightOpen}
-                  title="Taslak · Vurgular · Anlat · Sor" onClick={() => p.setRightOpen(!p.rightOpen)}><PanelRight size={17} /></button>
+          <button className={`${btn} ${p.rightOpen ? active : ""}`} aria-label="Çalışma notu, Sor ve Bağlantılar paneli" aria-pressed={p.rightOpen}
+                  title="Çalışma notu · Sor · Bağlantılar" onClick={() => p.setRightOpen(!p.rightOpen)}><PanelRight size={17} /></button>
         </>
       )}
     </div>
@@ -188,7 +219,7 @@ export default function ReaderToolbar(p: ToolbarProps) {
 
 type Item = { key: string; label: string; icon: JSX.Element; onSelect: () => void; disabled?: boolean; checked?: boolean };
 
-/** "⋯" menusu. wide: yalniz ikincil araclar; narrow: dar ekranda tum araclar. */
+/** "⋯" menusu (≤5 madde). wide: Metin/Sayfa · Ses seçimi · Kısayollar + Kağıt; narrow: + Sayfaya sığdır. */
 export function ReaderMoreMenu(p: ToolbarProps & { variant: "wide" | "narrow" }) {
   const [open, setOpen] = useState(false);
   const wrap = useRef<HTMLDivElement>(null);
@@ -207,28 +238,19 @@ export function ReaderMoreMenu(p: ToolbarProps & { variant: "wide" | "narrow" })
     return () => { clearTimeout(t); document.removeEventListener("pointerdown", onDown); document.removeEventListener("keydown", onKey, true); };
   }, [open]);
 
-  const themeIcon = p.theme === "light" ? <Sun size={17} /> : p.theme === "sepia" ? <Contrast size={17} /> : <Moon size={17} />;
   const items: Item[] = [];
-  if (p.variant === "narrow") {
-    items.push(
-      { key: "zin", label: "Yakınlaştır", icon: <Plus size={17} />, onSelect: () => p.setScale(zoomIn) },
-      { key: "zout", label: "Uzaklaştır", icon: <Minus size={17} />, onSelect: () => p.setScale(zoomOut) },
-      { key: "zfit", label: `Sayfaya sığdır (şu an %${Math.round(p.scale * 100)})`, icon: <RotateCcw size={17} />, onSelect: () => p.setScale(() => 1) },
-      { key: "hl", label: "Kalem: vurgula, altını çiz, el yazısıyla not al", icon: <Highlighter size={17} />, checked: isPenTool(p.tool),
-        onSelect: () => p.setTool(isPenTool(p.tool) ? "none" : "highlight") },
-      { key: "note", label: "Kenar notu aracı", icon: <StickyNote size={17} />, checked: p.tool === "note",
-        onSelect: () => p.setTool(p.tool === "note" ? "none" : "note") },
-    );
+  if (p.setViewMode) {
+    const text = p.viewMode === "text";
+    items.push({ key: "view", label: text ? "Sayfa görünümüne geç" : "Metin görünümü (yeniden akan yazı)",
+                 icon: text ? <FileText size={17} /> : <AlignLeft size={17} />, checked: text,
+                 onSelect: () => p.setViewMode?.(text ? "page" : "text") });
   }
-  items.push({ key: "theme", label: `Okuma teması: ${THEME_LABEL[p.theme]}`, icon: themeIcon, onSelect: () => p.setTheme(nextTheme(p.theme)) });
-  if (p.variant === "wide") {
-    items.push({ key: "spread", label: p.spread ? "Tek sayfa görünümü" : "Çift sayfa görünümü", icon: p.spread ? <FileText size={17} /> : <BookOpen size={17} />,
-                 onSelect: () => p.setSpread(!p.spread) });
+  if (p.variant === "narrow" && p.viewMode !== "text") {
+    items.push({ key: "zfit", label: `Sayfaya sığdır (şu an %${Math.round(p.scale * 100)})`, icon: <RotateCcw size={17} />, onSelect: () => p.setScale(() => 1) });
   }
   items.push(
-    { key: "undo", label: "Geri al (Ctrl+Z)", icon: <Undo2 size={17} />, disabled: !p.canUndo, onSelect: () => p.onUndo?.() },
-    { key: "redo", label: "Yinele (Ctrl+Shift+Z)", icon: <Redo2 size={17} />, disabled: !p.canRedo, onSelect: () => p.onRedo?.() },
-    { key: "export", label: "Vurguları dışa aktar (Markdown)", icon: <Download size={17} />, onSelect: p.onExport },
+    { key: "voice", label: "Ses seçimi", icon: <Volume2 size={17} />, onSelect: openVoicePicker },
+    { key: "keys", label: "Kısayollar", icon: <Keyboard size={17} />, onSelect: openShortcuts },
   );
 
   function onListKey(e: React.KeyboardEvent) {
@@ -257,7 +279,7 @@ export function ReaderMoreMenu(p: ToolbarProps & { variant: "wide" | "narrow" })
             <button key={it.key} type="button" disabled={it.disabled}
                     role={it.checked !== undefined ? "menuitemcheckbox" : "menuitem"}
                     aria-checked={it.checked !== undefined ? it.checked : undefined}
-                    onClick={() => { it.onSelect(); if (it.key !== "zin" && it.key !== "zout") setOpen(false); }}
+                    onClick={() => { it.onSelect(); setOpen(false); }}
                     className="flex min-h-[44px] w-full items-center gap-3 rounded-lg px-3 text-left text-sm hover:bg-surface-muted disabled:opacity-40">
               <span className="text-text-secondary">{it.icon}</span>
               <span className="flex-1">{it.label}</span>
@@ -277,13 +299,16 @@ export function ReaderMoreMenu(p: ToolbarProps & { variant: "wide" | "narrow" })
   );
 }
 
-/** Dar ekran alt cubugu: panelleri acan etiketli dugmeler + sayfa gezinme.
- *  rightLabel: sag panelin o anki sekmesi (varsayilan "Sohbet"); rightFresh: Taslak'a yeni biriken sayi (altin nokta). */
-export function ReaderBottomBar({ page, numPages, setPage, onLeft, onRight, leftOpen, rightOpen, rightLabel = "Sohbet", rightIcon, rightFresh = 0 }: {
+/** Dar ekran alt cubugu: İçindekiler · ◀ sayfa ▶ · Kalem · sag panel (4 oge).
+ *  rightLabel: sag panelin o anki sekmesi; rightFresh: Çalışma notu'na yeni biriken sayi (altin nokta).
+ *  tool/setTool verilirse Kalem dugmesi cikar (palet PenPalette ile acilir). */
+export function ReaderBottomBar({ page, numPages, setPage, onLeft, onRight, leftOpen, rightOpen, rightLabel = "Sor", rightIcon, rightFresh = 0, tool, setTool }: {
   page: number; numPages: number; setPage: (n: number) => void;
   onLeft: () => void; onRight: () => void; leftOpen: boolean; rightOpen: boolean;
   rightLabel?: string; rightIcon?: JSX.Element; rightFresh?: number;
+  tool?: Tool; setTool?: (t: Tool) => void;
 }) {
+  const penOn = !!tool && tool !== "none";
   const nav = "flex h-11 w-11 items-center justify-center rounded-lg hover:bg-surface-hover disabled:opacity-40";
   // ikon ustte, metin altta: 375 px'e iki etiket + sayfa gezinme sigsin
   const lab = "flex h-12 min-w-[56px] flex-col items-center justify-center gap-0.5 rounded-lg px-1.5 text-xs hover:bg-surface-hover";
@@ -300,8 +325,14 @@ export function ReaderBottomBar({ page, numPages, setPage, onLeft, onRight, left
         <button type="button" className={nav} aria-label="Sonraki sayfa" disabled={page >= numPages}
                 onClick={() => setPage(Math.min(numPages, page + 1))}><ChevronRight size={18} /></button>
       </div>
+      {setTool && (
+        <button type="button" className={`${lab} ${penOn ? "text-accent-purple" : ""}`} aria-pressed={penOn}
+                aria-label="Kalem: vurgula, altını çiz, kenar notu, el yazısı" onClick={() => setTool(penOn ? "none" : "highlight")}>
+          <Highlighter size={18} aria-hidden /><span>Kalem</span>
+        </button>
+      )}
       <button type="button" className={`${lab} relative ${rightOpen ? "text-accent-purple" : ""}`} onClick={onRight} aria-expanded={rightOpen} aria-haspopup="dialog"
-              aria-label={`${rightLabel} paneli${rightFresh > 0 ? `, taslağa ${rightFresh} yeni vurgu eklendi` : ""}`}>
+              aria-label={`${rightLabel} paneli${rightFresh > 0 ? `, çalışma notuna ${rightFresh} yeni vurgu eklendi` : ""}`}>
         {rightIcon || <MessageSquare size={18} aria-hidden />}<span>{rightLabel}</span>
         {rightFresh > 0 && <span aria-hidden className="absolute right-1.5 top-1.5 h-2 w-2 rounded-full" style={{ background: "var(--gold, #A57A2C)" }} />}
       </button>

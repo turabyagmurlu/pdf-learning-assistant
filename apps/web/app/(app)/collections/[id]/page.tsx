@@ -1,16 +1,18 @@
 "use client";
 /**
  * Defter sayfasi. Sekme ve acik sohbet adreste tutulur (?tab=, &chat=); geri tusu sekmeler arasinda calisir.
- * Parcalar: tabs.tsx (sekme seridi + kilitler), ChatTab, ExtractTabs (Sözlük/Harita/Zaman), LectureTab (Sesli özet),
- * useUploader (dosya yukleme), components/AddSourceDialog (tek "Kaynak ekle" penceresi).
+ * 3 sekme: Kaynaklar · Sor · Çalışma notu; "Daha fazla ▾": Sözlük, Sesli özet, Dışa aktar, Kapağı düzenle, Defteri sil.
+ * Parcalar: tabs.tsx (sekme seridi + kilitler + Daha fazla), ChatTab (Ajan S), components/studynote/StudyNote (Ajan N),
+ * ExtractTabs (Sözlük), LectureTab (Sesli özet, Ajan V), useUploader, components/AddSourceDialog.
  */
-import { ReactNode, Suspense, useEffect, useRef, useState } from "react";
+import { Suspense, useEffect, useRef, useState } from "react";
 import dynamic from "next/dynamic";
+import type { StudyNoteProps } from "@/components/studynote/StudyNote";
 import Link from "next/link";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import {
-  BookOpen, Sparkles, PenLine, Loader2, Pencil, Check, Plus, X, Trash2,
-  RefreshCw, Tags, Link2, Globe, MessageSquare, StickyNote, Library,
+  BookOpen, Loader2, Pencil, Check, Plus, X, Trash2, Download, Palette,
+  RefreshCw, Tags, Link2, MessageSquare, StickyNote, Library,
 } from "lucide-react";
 import { api, errorMessage } from "@/lib/api";
 import { docHref } from "@/lib/links";
@@ -25,18 +27,18 @@ import NotebookSearch from "@/components/NotebookSearch";
 import CoverPicker, { CoverBadge } from "@/components/CoverPicker";
 import { Skeleton, CardSkeleton } from "@/components/Skeleton";
 import AddSourceDialog, { AddSegment, PRIVACY_NOTE } from "@/components/AddSourceDialog";
-import { Cost, costTitle, ErrNote, Err, toErr } from "@/components/CostBadge";
+import { ErrNote, Err, toErr } from "@/components/CostBadge";
 import { usePoll } from "@/hooks/usePoll";
-import { TabBar, LockedPanel, TabKey, parseTab, groupOf, lockReason } from "./tabs";
+import { TabBar, LockedPanel, TabKey, MoreAction, parseTab, lockReason } from "./tabs";
 import ChatTab, { Sugg, Turn } from "./ChatTab";
-import { GlossaryTab, MapTab, TimelineTab } from "./ExtractTabs";
+import { GlossaryTab } from "./ExtractTabs";
 import LectureTab from "./LectureTab";
 import { useUploader } from "./useUploader";
 import { waitInfo } from "./stage";
 
 const Loading = () => <Skeleton className="h-64 w-full rounded-2xl" />;
-const DraftEditor = dynamic(() => import("@/components/DraftEditor"), { ssr: false, loading: Loading });
-const ComparePanel = dynamic(() => import("@/components/ComparePanel"), { ssr: false, loading: Loading });
+// Çalışma notu (Ajan N): <StudyNote scope={{kind:"collection", id}} />
+const StudyNote = dynamic<StudyNoteProps>(() => import("@/components/studynote/StudyNote"), { ssr: false, loading: Loading });
 
 type Doc = {
   id: string; title: string; status: string; page_count?: number | null;
@@ -47,7 +49,6 @@ type Doc = {
 type Prog = { page: number; numPages: number; pct: number };
 
 // Konu rengi lib/palette.ts'den (TS-6): topicColor(i) → { bar, tint }. Tur rengi yalniz ikon/etikette (SourceIcon).
-const GENERIC_FIRST_Q = "Bu kaynakların ana fikri ne? Kısaca özetle.";
 
 function cx(...a: (string | false | null | undefined)[]) { return a.filter(Boolean).join(" "); }
 const isProc = (d: Doc) => d.status !== "ready" && d.status !== "failed";
@@ -77,7 +78,7 @@ function CollectionPage({ id }: { id: string }) {
   const sp = useSearchParams();
   const tab: TabKey = parseTab(sp?.get("tab"));
   const chatId = sp?.get("chat") || null;
-  // Okuyucudan "Tüm deftere sor" (?tab=sohbet&q=...): soru kutusuna on-dolgu; adresten hemen silinir
+  // Okuyucudan "Tüm deftere sor" (?tab=sor&q=...): soru kutusuna on-dolgu; adresten hemen silinir
   const [prefillQ, setPrefillQ] = useState<string | null>(() => sp?.get("q") || null);
 
   const [data, setData] = useState<any>(null);
@@ -85,8 +86,6 @@ function CollectionPage({ id }: { id: string }) {
   const { confirm, dialog: confirmDialog, wasChecked } = useConfirm();
 
   /* ---------- adres: sekme + sohbet ---------- */
-  const lastInGroup = useRef<Partial<Record<ReturnType<typeof groupOf>, TabKey>>>({});
-  lastInGroup.current[groupOf(tab)] = tab;
   function urlWith(mut: (p: URLSearchParams) => void) {
     const p = new URLSearchParams(sp?.toString() || "");
     mut(p);
@@ -124,7 +123,7 @@ function CollectionPage({ id }: { id: string }) {
         const was = prev?.[x.id];
         if (prev && was && was !== "ready" && was !== "failed") {
           const t = (x.title || "Kaynak").slice(0, 50);
-          if (x.status === "ready") toast(`“${t}” hazır — soru sorabilirsin`, { action: { label: "Soru sor", run: () => setTabRef.current("sohbet") } });
+          if (x.status === "ready") toast(`“${t}” hazır — soru sorabilirsin`, { action: { label: "Soru sor", run: () => setTabRef.current("sor") } });
           else if (x.status === "failed") toast.error(`“${t}” hazırlanamadı; kartındaki “Yeniden işle” ile tekrar dene.`);
         }
       }
@@ -185,7 +184,7 @@ function CollectionPage({ id }: { id: string }) {
     } catch (e: any) { toast.error(e?.message || "Kaynak defterden çıkarılamadı; tekrar dene."); }
   }
 
-  /* ---------- sohbet onerileri (Sor + Karşılaştır + Sıradaki adım) ---------- */
+  /* ---------- sohbet onerileri (Sor) ---------- */
   const [sugg, setSugg] = useState<Sugg | null>(null);
   const [suggBusy, setSuggBusy] = useState(false);
   const suggKey = useRef("");
@@ -203,26 +202,26 @@ function CollectionPage({ id }: { id: string }) {
   }
   useEffect(() => {
     if (readyN === 0 || suggBusy) return;
-    if (tab !== "sohbet" && tab !== "karsilastir") return;
+    if (tab !== "sor") return;
     if (sugg === null || suggKey.current !== readyKey) loadSuggestions();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [tab, readyKey]);
   const [pendingAsk, setPendingAsk] = useState<string | null>(null);
-  const [askedLocal, setAskedLocal] = useState(false);
 
-  /* ---------- taslak ---------- */
-  // Sohbet cevabı → taslağın sonuna (sunucuda atomik); Taslak sekmesi açılınca editör güncel taslağı çeker.
+  /* ---------- çalışma notu ---------- */
+  // Sohbet cevabı → çalışma notunun sonuna (sunucuda atomik); sekme açılınca StudyNote güncel notu çeker.
   async function answerToDraft(t: Turn) {
     try {
       await api(`/collections/${id}/draft/blocks`, { method: "POST", body: JSON.stringify({ blocks: [{ type: "answer", q: t.q, text: t.answer.trim(),
         sources: (t.sources || []).map((s: any) => ({ title: s.title, page: s.page ?? null, document_id: s.document_id })) }] }) }, 1);
-      setTab("taslak");
-      toast("Sohbet cevabı taslağın sonuna eklendi");
+      setTab("not");
+      toast("Cevap çalışma notunun sonuna eklendi");
     } catch (e) {
-      toast.error(errorMessage(e, "Taslağa eklenemedi. Birkaç saniye sonra tekrar dene."));
+      toast.error(errorMessage(e, "Çalışma notuna eklenemedi. Birkaç saniye sonra tekrar dene."));
     }
   }
-  const [compareTopic, setCompareTopic] = useState("");
+  // "Karşılaştır" artık ayrı sekme değil: Sor'da hazır soru olarak sorulur.
+  const compareAsk = (q: string) => { setPendingAsk(`Kaynaklarım şu konuda ne diyor; nerede uyuşuyor, nerede çelişiyor? ${q}`.trim()); setTab("sor"); scrollTop(); };
 
   /* ---------- konu gruplari ---------- */
   type TopicGroup = { label: string; description: string; docs: string[] };
@@ -293,20 +292,13 @@ function CollectionPage({ id }: { id: string }) {
 
   const col = data.collection;
   const st = data.stats || {};
-  const studio = data.studio || {};
-  const chatCount = (Number(st.chat_count) || 0) + (askedLocal ? 1 : 0);
   const overall = docs.length ? Math.round(docs.reduce((s, d) => s + (prog[d.id]?.pct || 0), 0) / docs.length) : 0;
-  const remainingPages = docs.reduce((s, d) => { const total = d.page_count || 0; return s + Math.max(0, total - Math.round((total * (prog[d.id]?.pct || 0)) / 100)); }, 0);
-  const mins = Math.round(remainingPages * 1.5);
-  const etaRead = mins >= 60 ? `${Math.round(mins / 60)} saat` : `${mins} dk`;
-  const firstQ = sugg?.groups?.[0]?.questions?.[0]?.q || GENERIC_FIRST_Q;
-  const askFirst = (question: string) => { setPendingAsk(question); setTab("sohbet"); };
   const why = lockReason(tab, readyN, processingN);
 
   async function deleteNotebook() {
     const n = docs.length;
-    const losses = ["Defter; sohbetleri, sözlüğü, haritası ve zaman çizelgesiyle çöp kutusuna gider"];
-    if (st.draft_words) losses.unshift(`Taslağındaki ${st.draft_words} kelime de defterle birlikte taşınır`);
+    const losses = ["Defter; sohbetleri, sözlüğü ve sesli özetiyle çöp kutusuna gider"];
+    if (st.draft_words) losses.unshift(`Çalışma notundaki ${st.draft_words} kelime de defterle birlikte taşınır`);
     const ok = await confirm({
       title: `“${col.title}” defteri silinsin mi?`,
       description: "Çöp kutusuna taşınır; 30 gün içinde geri alabilirsin. Sonra kalıcı olarak silinir.",
@@ -321,42 +313,16 @@ function CollectionPage({ id }: { id: string }) {
     catch (e: any) { toast.error(e?.message || "Defter silinemedi; tekrar dene."); }
   }
 
-  /* ---------- Sıradaki adım ---------- */
-  type Next = { text: ReactNode; label?: string; go?: () => void; cost?: number; extra?: ReactNode };
-  function nextStep(): Next {
-    const failed = docs.filter((d) => d.status === "failed").length;
-    const proc = docs.filter(isProc);
-    const reading = docs.filter((d) => { const q = prog[d.id]?.pct || 0; return q > 0 && q < 95; })
-      .sort((x, y) => (prog[y.id]?.pct || 0) - (prog[x.id]?.pct || 0))[0];
-    if (failed) return { text: `${failed} kaynak hazırlanamadı; kartındaki “Yeniden işle” ile tekrar dene.`, label: "Göster", go: () => setTab("kaynaklar") };
-    if (proc.length) {
-      const w = waitInfo(proc[0]);
-      const t0 = proc[0].title.length > 40 ? proc[0].title.slice(0, 37) + "…" : proc[0].title;
-      return {
-        text: <>{proc.length > 1 ? `${proc.length} kaynak hazırlanıyor. ` : ""}“{t0}”: <b className="font-medium">{w.label}</b>{w.eta ? ` · ${w.eta}` : ""}. Hazır olunca haber vereceğim.</>,
-        extra: (
-          <div className="mt-2 flex flex-wrap items-center gap-1.5 text-xs">
-            <span className="text-text-secondary">Beklerken:</span>
-            {readyN > 0 && chatCount === 0 && (
-              <button onClick={() => askFirst(firstQ)} title={costTitle(1)} className="min-h-[36px] rounded-full border bg-surface px-3 hover:border-accent-purple/50">
-                Hazır kaynağa şimdiden soru sor <Cost n={1} />
-              </button>
-            )}
-            <button onClick={() => openAdd("dosya")} className="min-h-[36px] rounded-full border bg-surface px-3 hover:border-accent-purple/50">Başka kaynak ekle</button>
-            <button onClick={() => setTab("taslak")} className="min-h-[36px] rounded-full border bg-surface px-3 hover:border-accent-purple/50">Taslağına başlığını ve ana sorunu yaz</button>
-          </div>
-        ),
-      };
-    }
-    if (readyN > 0 && chatCount === 0) {
-      return { text: <>İlk sorunu sor: <span className="italic">“{firstQ}”</span></>, label: "Sor", cost: 1, go: () => askFirst(firstQ) };
-    }
-    if (reading) return { text: `“${reading.title.length > 60 ? reading.title.slice(0, 57) + "…" : reading.title}” okumaya devam et (%${prog[reading.id]?.pct || 0}).`, label: "Aç", go: () => router.push(docHref(reading.id, { from: id })) };
-    if (!st.draft_words) return { text: "Beğendiğin sohbet cevaplarını tek dokunuşla taslağa ekleyip yazmaya başla.", label: "Sohbet", go: () => setTab("sohbet") };
-    if (readyN >= 2) return { text: "Kaynakların aynı konuda ne dediğini yan yana gör.", label: "Karşılaştır", go: () => setTab("karsilastir") };
-    if (readyN >= 3 && !studio.glossary) return { text: "Kaynaklardaki kavramları tek yerde topla: sözlüğü oluştur.", label: "Sözlük", go: () => setTab("sozluk") };
-    return { text: "Kaynaklarına yeni bir soru sor.", label: "Sohbet", go: () => setTab("sohbet") };
-  }
+  /* ---------- "Daha fazla ▾" eylemleri ---------- */
+  const toggleGroup = () => { const v = !grouped; setGrouped(v); try { localStorage.setItem("typdf-group", v ? "1" : "0"); } catch {} if (v && !topics) loadTopics(); };
+  const moreActions: MoreAction[] = [
+    { key: "group", label: grouped ? "Konu gruplarını gizle" : "Konuya göre grupla", Icon: Tags, cost: !topics && !grouped ? 1 : undefined,
+      disabled: readyN >= 3 ? null : "En az 3 hazır kaynak gerekir", run: toggleGroup },
+    { key: "export", label: "Dışa aktar", Icon: Download, disabled: st.draft_words || st.notes ? null : "Çalışma notu henüz boş",
+      run: () => { setTab("not"); setTimeout(() => window.dispatchEvent(new CustomEvent("typdf:studynote-export")), 350); } },
+    { key: "cover", label: "Kapağı düzenle", Icon: Palette, run: () => setCoverOpen(true) },
+    { key: "delete", label: "Defteri sil", Icon: Trash2, danger: true, run: deleteNotebook },
+  ];
 
   /* ---------- kaynak karti ---------- */
   const topicOf: Record<string, { label: string; i: number }> = {};
@@ -421,13 +387,6 @@ function CollectionPage({ id }: { id: string }) {
   };
   const grid = (list: Doc[]) => <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">{list.map(renderCard)}</div>;
 
-  const next = docs.length ? nextStep() : null;
-  const segs = topics?.groups?.length
-    ? topics.groups.map((g, i) => ({ key: g.label, n: g.docs.length, cls: topicColor(i).bar, title: `${g.label} · ${g.docs.length} kaynak` }))
-    // Konu yokken serit tur dagilimini gosterir; tur rengi yerine notr tonlar (TS-6: renk yalniz konu icin)
-    : Object.entries(docs.reduce((m: Record<string, number>, d) => { const k = d.source_type || "pdf"; m[k] = (m[k] || 0) + 1; return m; }, {}))
-        .map(([k, n], i) => ({ key: k, n, cls: i % 2 ? "bg-border" : "bg-border-strong", title: `${sourceLabel(k)} · ${n}` }));
-
   return (
     <div className="mx-auto w-full max-w-6xl px-4 py-5 md:px-6 md:py-8">
       {/* Tek "Geri": ust cubuk/menudeki BackButton (layout). Sayfa ici ikinci "← Defterler" kaldirildi (T-3). */}
@@ -436,11 +395,7 @@ function CollectionPage({ id }: { id: string }) {
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0">
           <div className="flex items-center gap-2">
-            <button type="button" onClick={() => setCoverOpen(true)} aria-label="Kapağı düzenle" title="Kapağı düzenle"
-                    className="shrink-0 rounded-xl focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent-purple">
-              <CoverBadge id={col.id} color={col.cover_color} icon={col.cover_icon} size={40}
-                          className="transition-transform hover:scale-105 md:h-12 md:w-12" />
-            </button>
+            <CoverBadge id={col.id} color={col.cover_color} icon={col.cover_icon} size={40} className="shrink-0 md:h-12 md:w-12" />
             {renaming ? (
               <div className="flex items-center gap-1.5">
                 <input value={newTitle} onChange={(e) => setNewTitle(e.target.value)} aria-label="Defter adı"
@@ -457,73 +412,34 @@ function CollectionPage({ id }: { id: string }) {
                       className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg text-text-secondary hover:bg-black/5"><Pencil size={15} /></button>
             )}
           </div>
+          {/* Tek satır bilgi (şerit, istatistik kartları ve "Sıradaki adım" 3.0'da kalktı) */}
           <p className="mt-1 text-sm text-text-secondary">
             {st.documents ?? docs.length} kaynak{topics?.groups?.length ? ` · ${topics.groups.length} konu` : ""} · {st.pages || 0} sayfa
+            {docs.length > 0 ? ` · %${overall} okundu` : ""}{st.notes ? ` · ${st.notes} vurgu` : ""}
+            {processingN > 0 ? ` · ${processingN} kaynak hazırlanıyor` : ""}
           </p>
         </div>
         <CoverPicker open={coverOpen} onClose={() => setCoverOpen(false)} id={String(col.id)} title={col.title || ""}
                      color={col.cover_color} icon={col.cover_icon}
                      onSaved={(c, i) => setData((d: any) => d ? { ...d, collection: { ...d.collection, cover_color: c, cover_icon: i } } : d)} />
-        <button onClick={deleteNotebook} title="Defteri sil" aria-label="Defteri sil"
-                className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg border text-text-secondary hover:border-danger/50 hover:text-danger">
-          <Trash2 size={15} />
-        </button>
       </div>
-
-      {/* ŞERİT: dağılım + durum + sıradaki adım */}
-      {next && (
-        <div className="mt-4 rounded-2xl border bg-surface p-4 md:p-5">
-          <div className="flex h-1.5 w-full gap-1" aria-hidden>
-            {segs.map((g) => <div key={g.key} title={g.title} className={cx("h-full rounded-full", g.cls)} style={{ flexGrow: g.n }} />)}
-          </div>
-          {topics?.groups?.length ? (
-            <div className="mt-2 flex flex-wrap gap-x-3 gap-y-1 text-xs text-text-secondary">
-              {topics.groups.map((g, i) => (
-                <span key={g.label} className="flex items-center gap-1"><span className={cx("h-2 w-2 rounded-full", topicColor(i).bar)} />{g.label}</span>
-              ))}
-            </div>
-          ) : null}
-          <div className="mt-3 flex flex-wrap items-center gap-x-5 gap-y-1.5 text-sm text-text-secondary">
-            <span className="flex items-center gap-1.5"><BookOpen size={15} aria-hidden /> %{overall} okundu{remainingPages > 0 ? <span className="hidden sm:inline"> · ~{etaRead} kaldı</span> : null}</span>
-            <button onClick={() => setTab("taslak")} className="flex min-h-[36px] items-center gap-1.5 hover:text-accent-purple">
-              <PenLine size={15} aria-hidden /> {st.draft_words > 0 ? `Taslak ${st.draft_words} kelime` : "Taslak henüz boş"}
-            </button>
-            <span className="flex items-center gap-1.5"><MessageSquare size={15} aria-hidden /> {st.notes || 0} not</span>
-          </div>
-          <div className="mt-3.5 rounded-xl bg-accent-purple/10 px-3 py-2.5">
-            <div className="flex items-center gap-3">
-              <Sparkles size={17} className="shrink-0 text-accent-purple" aria-hidden />
-              <p className="min-w-0 flex-1 text-sm text-text-primary">
-                <span className="font-semibold">Sıradaki adım: </span>{next.text}
-              </p>
-              {next.go && (
-                <button onClick={next.go} title={next.cost ? costTitle(next.cost) : undefined}
-                        className="flex min-h-[40px] shrink-0 items-center rounded-lg border border-accent-purple/40 bg-surface px-3 text-sm font-medium text-text-primary hover:bg-surface-hover">
-                  {next.label}{next.cost ? <Cost n={next.cost} /> : null}
-                </button>
-              )}
-            </div>
-            {next.extra}
-          </div>
-        </div>
-      )}
 
       {/* sekmeler; kaydirinca ustte sabit ince serit */}
       <div ref={tabBarRef} className="mt-6">
-        <TabBar tab={tab} onTab={setTab} readyN={readyN} processing={processingN} lastInGroup={lastInGroup.current} />
+        <TabBar tab={tab} onTab={setTab} readyN={readyN} processing={processingN} moreActions={moreActions} />
       </div>
       {stuck && (
         <div className="fixed inset-x-0 top-[calc(max(env(safe-area-inset-top),8px)+53px)] z-20 border-b bg-surface/95 backdrop-blur md:left-[var(--sidebar-w,224px)] md:top-0">
           <div className="mx-auto flex w-full max-w-6xl items-center gap-3 px-4 md:px-6">
             <button onClick={scrollTop} className="hidden shrink-0 truncate font-heading text-lg md:block md:max-w-[220px]" title="Başa dön">{col.title}</button>
             <div className="min-w-0 flex-1">
-              <TabBar compact tab={tab} onTab={setTab} readyN={readyN} processing={processingN} lastInGroup={lastInGroup.current} />
+              <TabBar compact tab={tab} onTab={setTab} readyN={readyN} processing={processingN} moreActions={moreActions} />
             </div>
           </div>
         </div>
       )}
 
-      <div role="tabpanel" id={`panel-${tab}`} aria-labelledby={tab === "kaynaklar" ? "grp-kaynaklar" : `tab-${tab}`} className="mt-4">
+      <div role="tabpanel" id={`panel-${tab}`} aria-labelledby={`tab-${tab}`} className="mt-4">
         {why ? (
           <LockedPanel reason={why} onAdd={() => openAdd("dosya")}>
             {processingN > 0 && (
@@ -549,16 +465,15 @@ function CollectionPage({ id }: { id: string }) {
                 </div>
                 <h3 className="mt-3 font-heading text-xl" aria-live="polite">{uploader.busy ? `Yükleniyor… ${uploader.busy.done}/${uploader.busy.total}` : "İlk kaynağını ekle"}</h3>
                 <p className="mx-auto mt-1 max-w-sm text-sm text-text-secondary">
-                  Dosyayı buraya bırak, bir link yapıştır ya da konuyu yaz, senin için kaynak bulayım. Hazır olunca ona soru sorabilirsin.
+                  Dosyayı buraya bırak ya da bir link yapıştır. Hazır olunca ona soru sorabilirsin.
                 </p>
                 <input ref={emptyUpRef} type="file" accept={ACCEPT} multiple hidden
                        onChange={(e) => { uploader.upload(e.target.files); if (emptyUpRef.current) emptyUpRef.current.value = ""; }} />
-                <div className="mx-auto mt-5 grid max-w-lg grid-cols-2 gap-2.5 sm:grid-cols-4">
+                <div className="mx-auto mt-5 grid max-w-md grid-cols-3 gap-2.5">
                   {([
                     ["Dosya", "PDF, Word, Excel…", Plus, () => emptyUpRef.current?.click()],
                     ["Link", "Web sayfası, PDF linki", Link2, () => openAdd("link")],
                     ["YouTube", "Video dökümü", YoutubeIcon, () => openAdd("link")],
-                    ["Web'de bul", "Konuyu yaz", Globe, () => openAdd("web")],
                   ] as const).map(([t, d, Icon, fn]) => (
                     <button key={t} onClick={fn} disabled={!!uploader.busy && t === "Dosya"}
                             className="lift flex min-h-[88px] flex-col items-center gap-1 rounded-xl border bg-surface px-2 py-3.5 hover:border-accent-purple/50 disabled:opacity-60">
@@ -608,22 +523,11 @@ function CollectionPage({ id }: { id: string }) {
                     <button onClick={uploader.clearError} aria-label="Hata mesajını kapat" className="flex h-9 w-9 items-center justify-center rounded-lg text-text-secondary hover:bg-surface-muted"><X size={15} /></button>
                   </div>
                 )}
-                {readyN >= 3 && (
-                  <div className="mb-3 flex flex-wrap items-center gap-2">
-                    <button onClick={() => { const v = !grouped; setGrouped(v); try { localStorage.setItem("typdf-group", v ? "1" : "0"); } catch {} if (v && !topics) loadTopics(); }}
-                            aria-pressed={grouped} title={topics ? "Kayıtlı gruplar · ücretsiz" : costTitle(1)}
-                            className={cx("inline-flex min-h-[36px] items-center gap-1.5 rounded-lg border px-2.5 text-xs",
-                              grouped ? "border-text-primary/60 bg-surface-muted font-medium text-text-primary" : "bg-surface text-text-secondary hover:border-border-strong")}>
-                      <Tags size={13} /> Konuya göre grupla {!topics && <Cost n={1} />}
-                    </button>
-                    {grouped && (
-                      <button onClick={() => loadTopics(true)} disabled={topicsBusy} title={"Grupları yeniden oluştur · " + costTitle(1)}
-                              className="inline-flex min-h-[36px] items-center gap-1 rounded-lg border bg-surface px-2 text-xs text-text-secondary hover:border-accent-purple/40 disabled:opacity-50">
-                        <RefreshCw size={12} className={topicsBusy ? "animate-spin" : ""} /> {topicsBusy ? "Gruplanıyor…" : <>Yenile <Cost n={1} /></>}
-                      </button>
-                    )}
-                    {!grouped && <span className="text-xs text-text-secondary">Kaynaklarını ortak konularına göre kümeler; sonuç saklanır.</span>}
-                    <ErrNote err={grouped ? topicsErr : null} className="w-full text-xs" />
+                {/* Konu gruplama (⚡ yalnız ilk kez): düğme "Daha fazla ▾" menüsünde; burada yalnız durum/hata */}
+                {readyN >= 3 && grouped && (topicsBusy || topicsErr) && (
+                  <div className="mb-3 flex flex-wrap items-center gap-2 text-xs text-text-secondary">
+                    {topicsBusy && <span className="inline-flex items-center gap-1"><Loader2 size={12} className="animate-spin" aria-hidden /> Kaynaklar konulara ayrılıyor…</span>}
+                    <ErrNote err={topicsErr} className="w-full text-xs" />
                   </div>
                 )}
                 {(() => {
@@ -658,34 +562,28 @@ function CollectionPage({ id }: { id: string }) {
           </div>
         )}
 
-        {/* SOHBET: bir kez acildiktan sonra bagli kalir (gecmis, yazilan soru korunur) */}
-        {visited.has("sohbet") && readyN > 0 && (
-          <div hidden={tab !== "sohbet"}>
-            <ChatTab id={id} colTitle={col.title} readyN={readyN} active={tab === "sohbet"}
+        {/* SOR: bir kez acildiktan sonra bagli kalir (gecmis, yazilan soru korunur). Icerik Ajan S'nin (ChatTab). */}
+        {visited.has("sor") && readyN > 0 && (
+          <div hidden={tab !== "sor"}>
+            <ChatTab id={id} colTitle={col.title} readyN={readyN} active={tab === "sor"}
                      chatId={chatId} setChatUrl={setChatUrl}
                      sugg={sugg} suggBusy={suggBusy} loadSuggestions={loadSuggestions}
                      pendingAsk={pendingAsk} onPendingDone={() => setPendingAsk(null)}
                      prefill={prefillQ} onPrefillDone={() => setPrefillQ(null)}
-                     onToDraft={answerToDraft} onAsked={() => setAskedLocal(true)}
-                     onCompare={(q) => { setCompareTopic(q); setTab("karsilastir"); scrollTop(); }} />
+                     onToDraft={answerToDraft} onAsked={() => {}}
+                     onCompare={compareAsk} />
           </div>
         )}
 
-        {tab === "karsilastir" && !why && (
-          <ComparePanel notebookId={id} key={compareTopic} initialTopic={compareTopic}
-                        hints={(sugg?.groups || []).filter((g) => g.kind === "karsilastir" || g.kind === "elestir")
-                          .flatMap((g) => g.questions.map((x) => x.q)).slice(0, 6)} />
+        {/* ÇALIŞMA NOTU (Ajan N): ders notu + biriktirilenler; defter kapsamı */}
+        {tab === "not" && (
+          <StudyNote scope={{ kind: "collection", id }} onOpenPage={(docId: string, page?: number | null) => router.push(docHref(docId, { page: page ?? null, from: id }))} />
         )}
 
-        {tab === "taslak" && (
-          <DraftEditor scope={{ kind: "collection", id }} title={col.title} />
-        )}
-
+        {/* Daha fazla ▾ → Sözlük */}
         {tab === "sozluk" && !why && <GlossaryTab id={id} readyN={readyN} confirm={confirm} />}
-        {tab === "harita" && !why && <MapTab id={id} readyN={readyN} confirm={confirm} />}
-        {tab === "zaman" && !why && <TimelineTab id={id} readyN={readyN} confirm={confirm} />}
 
-        {/* SESLİ ÖZET: bir kez acildiktan sonra bagli kalir (ses baska sekmede de calmaya devam eder) */}
+        {/* Daha fazla ▾ → SESLİ ÖZET (Ajan V): bir kez acildiktan sonra bagli kalir (ses baska sekmede de calmaya devam eder) */}
         {visited.has("sesli") && readyN > 0 && (
           <div hidden={tab !== "sesli"}>
             <LectureTab id={id} title={col.title} readyN={readyN} confirm={confirm} />
@@ -694,8 +592,8 @@ function CollectionPage({ id }: { id: string }) {
       </div>
 
       {/* Mobil: yuzen "Sor" dugmesi (alt menunun ustunde; bildirimler bunun da ustunde) */}
-      {tab !== "sohbet" && readyN > 0 && (
-        <button onClick={() => { setTab("sohbet"); scrollTop(); }} aria-label="Kaynaklarına sor"
+      {tab !== "sor" && readyN > 0 && (
+        <button onClick={() => { setTab("sor"); scrollTop(); }} aria-label="Kaynaklarına sor"
                 className="fixed right-4 z-30 flex h-14 w-14 items-center justify-center rounded-full bg-accent-purple text-white shadow-medium active:scale-95 md:hidden"
                 style={{ bottom: "calc(var(--bottom-nav, 64px) + var(--mini-player-h, 0px) + 12px)" }}>
           <MessageSquare size={22} />

@@ -5,8 +5,10 @@
  * el yazısı hissinde küçük bir kenar notu. style: "underline" → pigment alt çizgi, "sticky" → not kâğıdı.
  * Yeni biriken (auto) alıntılar ilk görünüşte `.gilded` (altın parıltı) ile belirir.
  * style "ink" (el yazısı notu): metin yerine kutuya ölçekli çizim + "El yazısı notu · s. N".
+ * onAsk verilirse altyazının yanında "Sor" düğmesi: alıntı Sor paneline/sekmesine soru olarak gider.
  */
 import type { CSSProperties } from "react";
+import { MessageCircleQuestion } from "lucide-react";
 import { HIGHLIGHT_COLORS, pigmentOf } from "@/lib/reader";
 import InkPreview from "@/components/reader/InkPreview";
 import type { Block } from "@/components/DraftEditor";
@@ -26,8 +28,8 @@ export function quotePigment(b: { color?: string | null }) {
   return pigmentOf(b.color || HIGHLIGHT_COLORS[0].value);
 }
 
-export default function QuoteCard({ b, onOpen, gilded, compact }: {
-  b: QuoteBlock; onOpen: () => void; gilded?: boolean; compact?: boolean;
+export default function QuoteCard({ b, onOpen, onAsk, gilded, compact }: {
+  b: QuoteBlock; onOpen: () => void; onAsk?: () => void; gilded?: boolean; compact?: boolean;
 }) {
   const style = b.style || "highlight";
   const ink = style === "ink" && b.ink?.strokes?.length ? b.ink : null;
@@ -75,12 +77,19 @@ export default function QuoteCard({ b, onOpen, gilded, compact }: {
         )}
       </div>
 
-      <figcaption className="mt-1.5">
+      <figcaption className="mt-1.5 flex flex-wrap items-center gap-1">
         <button type="button" onClick={(e) => { e.stopPropagation(); onOpen(); }}
                 title="Kaynakta bu sayfayı aç"
                 className="inline-flex min-h-[40px] items-center rounded-md px-1 text-xs tracking-wide text-text-secondary underline-offset-4 hover:text-accent-purple hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-purple/40">
           {cite}
         </button>
+        {onAsk && (text || note) && (
+          <button type="button" onClick={(e) => { e.stopPropagation(); onAsk(); }}
+                  title="Bu alıntıyı soruya ekle (Sor)" aria-label="Bu alıntı hakkında sor"
+                  className="inline-flex min-h-[40px] items-center gap-1 rounded-md px-1.5 text-xs text-text-secondary hover:text-accent-purple focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-purple/40">
+            <MessageCircleQuestion size={13} aria-hidden /> Sor
+          </button>
+        )}
       </figcaption>
     </figure>
   );

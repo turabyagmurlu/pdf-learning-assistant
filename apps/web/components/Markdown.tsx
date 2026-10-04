@@ -55,8 +55,26 @@ function renderBlock(b: Block, i: number, cite?: (n: number) => ReactNode): Reac
     case "blockquote": return (
       <blockquote key={k} className="my-1.5 border-l-2 border-amber-400 pl-3 text-text-secondary">{renderInline(b.inline, cite, k)}</blockquote>
     );
-    default: return <p key={k} className="whitespace-pre-wrap">{renderInline(b.inline, cite, k)}</p>;
+    default: {
+      // Sor v3: kaynak dışı bilgi "Genel bilgi:" etiketiyle ayrı paragrafta gelir → gri şeritle görünür ayrım
+      const general = isGeneralNote(b.inline);
+      return (
+        <p key={k} className={general
+          ? "whitespace-pre-wrap rounded-r-lg border-l-2 border-text-secondary/40 bg-surface-muted/60 py-1 pl-3 text-text-secondary"
+          : "whitespace-pre-wrap"}>
+          {renderInline(b.inline, cite, k)}
+        </p>
+      );
+    }
   }
+}
+
+/** Paragraf **Genel bilgi:** (ya da "Genel bilgi:") ile mi başlıyor? */
+function isGeneralNote(inl: Inline[]): boolean {
+  const first = inl[0];
+  if (!first) return false;
+  const text = first.t === "bold" ? (first.c[0]?.t === "text" ? first.c[0].v : "") : first.t === "text" ? first.v : "";
+  return /^\s*(\(?genel bilgi\)?\s*:)/i.test(text);
 }
 
 export default function Markdown({ text, cite, className, inline }: MarkdownProps) {

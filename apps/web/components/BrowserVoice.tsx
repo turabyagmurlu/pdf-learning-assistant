@@ -4,26 +4,18 @@
  * Seslendirme yogun ya da gunluk kullanim dolu oldugunda yedek yol: ucretsiz, sinirsiz, aninda baslar.
  * Uzun metin tek seferde verilince Chrome susuyor; bu yuzden cumlelere bolup
  * sirayla okutuyoruz ve boylece ilerleme de gosterebiliyoruz.
+ * V3 (T5-ses): metin `ttsPrepareClient` ile hazirlanir (kisaltma, sayi, atif, tire); cumle bolme kisaltma
+ * guvenli; hiz tek kaynaktan (lib/audio); Web Speech Turkcede biraz hizli -> temel hiz 0.95; en iyi ses
+ * secimi (Android Google Turkce, Edge "Online/Natural"); "robotik" ifadesi yok.
  */
 import { useEffect, useRef, useState } from "react";
 import { Play, Pause, Square, Volume2, SkipBack, SkipForward } from "lucide-react";
+import { SPEEDS, loadSpeed, saveSpeed, ttsPrepareClient, splitSentencesSafe } from "@/lib/audio";
 
-const SPEEDS = [0.9, 1, 1.15, 1.3, 1.5];
+const BASE_RATE = 0.95;      // Turkce'de Web Speech 1.0 biraz hizli
 
 function splitSentences(text: string): string[] {
-  const out: string[] = [];
-  for (const raw of (text || "").split(/(?<=[.!?…])\s+/)) {
-    let s = raw.trim();
-    if (!s) continue;
-    while (s.length > 220) {                 // cok uzun cumleyi de bol
-      let cut = s.lastIndexOf(" ", 220);
-      if (cut < 110) cut = 220;
-      out.push(s.slice(0, cut).trim());
-      s = s.slice(cut).trim();
-    }
-    if (s) out.push(s);
-  }
-  return out;
+  return splitSentencesSafe(ttsPrepareClient(text, /^\s*(Ayşe|Ayse|Kerem)\s*:/im.test(text)), 220);
 }
 
 export function browserVoiceSupported() {
@@ -31,20 +23,21 @@ export function browserVoiceSupported() {
 }
 
 /** Bilinen kadin Turkce ses adlari (Edge/Windows dogal sesleri dahil). */
-const FEMALE_HINTS = /emel|filiz|seda|aylin|zeynep|ayse|ayşe|female|kadın|kadin/i;
+const FEMALE_HINTS = /emel|filiz|seda|aylin|zeynep|ayse|ayşe|yelda|female|kadın|kadin/i;
 const NATURAL_HINTS = /natural|neural|online|google/i;
 
+/** Siralama: once dogal (Edge Online/Natural, Android Google Turkce), sonra kadin; Windows SAPI en sona. */
 function voiceQuality(v: SpeechSynthesisVoice) {
   const female = FEMALE_HINTS.test(v.name);
   const natural = NATURAL_HINTS.test(v.name) || !v.localService;
-  return { female, natural, score: (female ? 2 : 0) + (natural ? 1 : 0) };
+  const google = /google/i.test(v.name) || /tr-tr-x-/i.test(v.name) || /tr-tr-x-/i.test((v as any).voiceURI || "");
+  return { female, natural, score: (natural ? 4 : 0) + (google ? 2 : 0) + (female ? 1 : 0) };
 }
 
 function describe(v: SpeechSynthesisVoice) {
   const q = voiceQuality(v);
   const bits = [q.female ? "kadın" : "erkek"];
   if (q.natural) bits.push("doğal");
-  else bits.push("robotik");
   return `${v.name} — ${bits.join(", ")}`;
 }
 
@@ -60,6 +53,7 @@ export default function BrowserVoice({ text, onClose, autoPlay = false }: { text
   const [state, setState] = useState<"idle" | "playing" | "paused">("idle");
   const [pos, setPos] = useState(0);
   const [rate, setRate] = useState(1);
+  useEffect(() => { setRate(loadSpeed()); }, []);
   const [voiceName, setVoiceName] = useState("");
   const [voices, setVoices] = useState<SpeechSynthesisVoice[]>([]);
   // Okuma sirasinda hiz/ses degisince eski deger okunmasin diye ref tutuyoruz.
@@ -118,7 +112,8 @@ export default function BrowserVoice({ text, onClose, autoPlay = false }: { text
       setPos(Math.round(((k + 1) / parts.current.length) * 100));
       const u = new SpeechSynthesisUtterance(parts.current[k]);
       u.lang = "tr-TR";
-      u.rate = rateRef.current;
+      u.rate = Math.max(0.5, Math.min(2, rateRef.current * BASE_RATE));
+      u.pitch = 1;
       const v = voicesRef.current.find((x) => x.name === voiceRef.current);
       if (v) u.voice = v;
       u.onend = () => next(k + 1);
@@ -175,15 +170,15 @@ export default function BrowserVoice({ text, onClose, autoPlay = false }: { text
       <div className="flex items-center gap-2 text-sm">
         <Volume2 size={15} className="text-accent-purple" />
         <span className="font-medium">Cihaz sesi (yedek)</span>
-        <span className="text-xs text-text-secondary">· ücretsiz, ama anlatıcı sesi kadar doğal değil</span>
+        <span className="text-xs text-text-secondary">· cihazının kendi sesi, ücretsiz</span>
       </div>
-      {voices.length > 0 && !voiceQuality(voices.find((v) => v.name === voiceName) || voices[0]).female && (
+      {voices.length > 0 && !voiceQuality(voices.find((v) => v.name === voiceName) || voices[0]).natural && (
         <p className="mt-2 rounded-lg bg-warning/10 px-3 py-2 text-xs text-text-secondary">
           {IS_MOBILE
-            ? "Bu cihazda yüklü Türkçe ses erkek ve biraz robotik; cihaz ayarlarından başka bir Türkçe ses yükleyebilirsin. "
-            : <>Bu cihazda yüklü tek Türkçe ses erkek ve robotik. Doğal bir kadın sesi istersen uygulamayı
-              <b> Microsoft Edge</b>&apos;de aç — Edge&apos;in çevrimiçi Türkçe kadın sesi burada listeye düşer. </>}
-          Asıl anlatıcı sesi için kullanım hakkın yenilenince <b>Sesli oku</b>&apos;ya dön.
+            ? "Bu cihazdaki Türkçe ses temel düzeyde; cihaz ayarlarından başka bir Türkçe ses (ör. Google Türkçe) yükleyebilirsin. "
+            : <>Bu cihazdaki Türkçe ses temel düzeyde. Daha doğal bir ses istersen uygulamayı
+              <b> Microsoft Edge</b>&apos;de aç — Edge&apos;in çevrimiçi Türkçe sesi burada listeye düşer. </>}
+          Anlatıcı sesi için kullanım hakkın yenilenince <b>Dinle</b>&apos;ye dön.
         </p>
       )}
 
@@ -205,9 +200,9 @@ export default function BrowserVoice({ text, onClose, autoPlay = false }: { text
           <Square size={13} /> Durdur
         </button>
 
-        <div className="flex items-center gap-1 rounded-xl border px-1.5 py-1">
+        <div className="flex items-center gap-1 rounded-xl border px-1.5 py-1" role="radiogroup" aria-label="Hız">
           {SPEEDS.map((s) => (
-            <button key={s} onClick={() => { setRate(s); if (state !== "idle") setTimeout(() => speakFrom(idx.current), 0); }}
+            <button key={s} onClick={() => { setRate(s); saveSpeed(s); if (state !== "idle") setTimeout(() => speakFrom(idx.current), 0); }}
                     aria-label={`Hız ${s}×`} aria-pressed={rate === s}
                     className={"min-h-[40px] min-w-[40px] rounded-lg px-2 py-1 text-xs " + (rate === s ? "bg-surface-muted font-semibold text-text-primary ring-1 ring-text-primary/60" : "text-text-secondary")}>
               {s}×

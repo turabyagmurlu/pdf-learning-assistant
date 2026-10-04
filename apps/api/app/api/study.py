@@ -12,6 +12,8 @@ Ses akisi (S1):
   gecerli kalir (MP3 istenirse WAV'dan cevrilip `mp3:` olarak da yazilir).
 - `tts_cache` toplam bayt butcesiyle sinirlanir (en eski `used_at` silinir); ses ornekleri
   (`sample:<ses>:<format>`) sabitlenir, silinmez.
+- V3: TTS'e giden her metin `tts_prepare`'den gecer (kisaltma, sayi, atif, tire, noktalama);
+  POST /tts/jobs/chunked: koleksiyonsuz parcali is (Sor cevabi "Sesli dinle" -> ListenDock).
 """
 import asyncio
 import hashlib
@@ -25,8 +27,9 @@ from app.core.errors import NotFound, AppError
 from app.services.analysis_service import explain_page
 from app.services.tts_service import (synthesize_pcm, synthesize_pcm_retry, encode_audio, pcm_from_wav,
                                       mp3_to_pcm, normalize_format, split_for_tts, cache_key, sample_key,
-                                      estimate_seconds, TtsQuota, TtsBusy, FEMALE_VOICES, DEFAULT_VOICE,
-                                      SAMPLE_TEXT, FORMATS)
+                                      estimate_seconds, TtsQuota, TtsBusy, FEMALE_VOICES, MALE_VOICES,
+                                      DEFAULT_VOICE, DEFAULT_MALE_VOICE, SAMPLE_TEXT, FORMATS, tts_prepare,
+                                      normalize_voice, with_tail_silence)
 from app.db.session import get_pool
 from app.ai import usage
 
@@ -103,13 +106,16 @@ class TtsIn(BaseModel):
 
 @router.get("/tts/voices")
 async def tts_voices(user=Depends(current_user)):
-    """Kullanilabilir Turkce kadin sesleri + seslendirme durumu.
+    """Kullanilabilir Turkce sesler (4 kadin + 3 erkek) + seslendirme durumu.
 
     `state`: {"state": aktif|yogun|doldu, "retry_min": int|None} — dolu iken istemci
     "Sesli oku" yerine dogrudan cihaz sesini onerir.
     `sample_text`: ornek cumle (her ses icin bir kez uretilir, sonra ucretsiz)."""
     return {"voices": [{"id": k, "label": v} for k, v in FEMALE_VOICES.items()],
-            "default": DEFAULT_VOICE, "state": usage.tts_state(), "sample_text": SAMPLE_TEXT,
+            "default": DEFAULT_VOICE,
+            "male_voices": [{"id": k, "label": v} for k, v in MALE_VOICES.items()],
+            "default_male": DEFAULT_MALE_VOICE,
+            "state": usage.tts_state(), "sample_text": SAMPLE_TEXT,
             "sec_per_100_chars": 1.0}
 
 
@@ -157,12 +163,13 @@ async def tts(body: TtsIn, request: Request, user=Depends(current_user), fmt: st
         # Istemci uzun metni zaten is kuyruguna gonderir; bu yalniz savunma amacli.
         raise AppError("Bu metin tek seferde seslendirilemeyecek kadar uzun. "
                        "Sayfayı yenileyip tekrar dene ya da cihaz sesiyle dinle.")
-    voice, style = body.voice or DEFAULT_VOICE, body.style or ""
-    if voice not in FEMALE_VOICES:
-        voice = DEFAULT_VOICE
+    voice, style = normalize_voice(body.voice), body.style or ""
     want = normalize_format(fmt or body.fmt, request.headers.get("accept"))
     if txt == SAMPLE_TEXT and not style:
         return await _voice_sample(voice, want)
+    txt = tts_prepare(txt)                      # dinleme icin on isleme (kota 0)
+    if len(txt) < 2:
+        raise AppError("Seslendirilecek metin boş.")
     ck = cache_key(txt, voice, style)
     hit = await _get_cached_audio(ck, want)
     if hit is not None:
@@ -195,8 +202,8 @@ async def _voice_sample(voice: str, fmt: str) -> Response:
 
 @router.get("/tts/voices/{voice}/sample")
 async def tts_voice_sample(voice: str, request: Request, user=Depends(current_user), fmt: str | None = None):
-    """Secilen sesin ornek cumlesi; ilk dinleme 1 kullanim, sonrasi herkese ucretsiz."""
-    if voice not in FEMALE_VOICES:
+    """Secilen sesin ornek cumlesi; ilk dinleme 1 kullanim, sonrasi herkese ucretsiz (sabit onbellek)."""
+    if voice not in FEMALE_VOICES and voice not in MALE_VOICES:
         raise NotFound("Bu ses bulunamadı.")
     return await _voice_sample(voice, normalize_format(fmt, request.headers.get("accept")))
 
@@ -295,13 +302,13 @@ async def _run_tts_job(job_id: str, chunks: list[str], voice: str, style: str, k
             ck = cache_key(text, voice, style)
             hit = await _cache_get("pcm:" + ck)
             if hit is not None:
-                parts.append(hit)
+                parts.append(with_tail_silence(hit))
                 job["done"] = i + 1
                 continue
             for attempt in range(5):
                 try:
                     t0 = time.monotonic()
-                    pcm = await asyncio.to_thread(synthesize_pcm, text, voice, style)
+                    pcm = await asyncio.to_thread(synthesize_pcm, text, voice, style, i + 1, len(chunks))
                     log.info("tts job %s parca %d/%d: %d kr, %.1f sn, %d bayt", job_id[:8], i + 1,
                              len(chunks), len(text), time.monotonic() - t0, len(pcm))
                     parts.append(pcm)
@@ -360,12 +367,10 @@ async def tts_job_create(body: TtsIn, user=Depends(current_user)):
     txt = (body.text or "").strip()
     if len(txt) < 2:
         raise AppError("Seslendirilecek metin boş.")
-    txt = txt[:12000]
-    voice = body.voice or DEFAULT_VOICE
-    if voice not in FEMALE_VOICES:
-        voice = DEFAULT_VOICE
+    txt = tts_prepare(txt[:12000])          # dinleme icin on isleme (kota 0)
+    voice = normalize_voice(body.voice)
     style = body.style or ""
-    chunks = split_for_tts(txt)
+    chunks = split_for_tts(txt)             # paragraf hizali
     if not chunks:
         raise AppError("Seslendirilecek metin boş.")
     job_id = str(uuid.uuid4())
@@ -438,6 +443,21 @@ async def tts_job_audio(job_id: str, request: Request, user=Depends(current_user
 # ---- Parcali isler (S2): parca hazir oldukca sunulur; durum kalici (tts_jobs tablosu) ----
 # Is olusturma: POST /collections/{cid}/lecture/tts (api/lecture.py). Kayit: services/tts_jobs.py
 JOB_LOST = "Ses hazırlığı yarıda kaldı (sunucu yenilenmiş olabilir); seslendirmeyi yeniden başlat."
+
+
+@router.post("/tts/jobs/chunked")
+async def tts_job_chunked(body: TtsIn, user=Depends(current_user)):
+    """Koleksiyonsuz parcali is (Sor cevabindaki "Sesli dinle" -> ListenDock).
+
+    Metin `tts_prepare`'den gecer, paragraf hizali parcalanir; yanit tts_jobs.public biciminde
+    (`texts` islenmis metin, `chapters` paragraf bazli). Parcalar GET /tts/jobs/{id}/chunks/{n} ile alinir;
+    tamami onbellekteyse aninda hazir (ucretsiz)."""
+    from app.services import tts_jobs
+    txt = (body.text or "").strip()
+    if len(txt) < 2:
+        raise AppError("Seslendirilecek metin boş.")
+    return await tts_jobs.create_job(str(user["id"]), bool(user.get("is_owner")), txt,
+                                     body.voice, None, dialog=False)
 
 
 @router.get("/tts/jobs/{job_id}/chunks")

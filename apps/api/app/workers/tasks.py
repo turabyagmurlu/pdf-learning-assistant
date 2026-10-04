@@ -288,22 +288,28 @@ async def _run_ingest(document_id: str):
             pass
         # Kota tasarrufu 3: ayni metin daha once ozetlendiyse (ayni dosya tekrar yuklendi,
         # yeniden islendi, baska hesapta var) ozeti kopyala, yapay zekaya gitme
+        # Ogrenme hedefleri sutunu (Calisma notu L1); idempotent, ilk calismada eklenir
+        try:
+            await conn.execute("ALTER TABLE documents ADD COLUMN IF NOT EXISTS learn_goals jsonb")
+        except Exception:  # noqa
+            pass
         prev = None
         try:
             prev = await conn.fetchrow(
                 """SELECT short_summary, detailed_summary, purpose, difficulty_level, outline,
-                          key_concepts, difficult_concepts FROM documents
+                          key_concepts, difficult_concepts, learn_goals FROM documents
                    WHERE text_md5=$1 AND id<>$2 AND short_summary IS NOT NULL LIMIT 1""", tmd5, document_id)
         except Exception:  # noqa
             prev = None
         try:
-            a = dict(prev) if prev else analyze_document(full_text)
+            # Girdi: bas-orta-son dengeli ~40K karakter, sayfa etiketli (T5-ozet §3.2)
+            a = dict(prev) if prev else analyze_document(full_text, pages)
             await conn.execute(
                 """UPDATE documents SET short_summary=$2, detailed_summary=$3, purpose=$4,
-                   difficulty_level=$5, outline=$6, key_concepts=$7, difficult_concepts=$8 WHERE id=$1""",
+                   difficulty_level=$5, outline=$6, key_concepts=$7, difficult_concepts=$8, learn_goals=$9 WHERE id=$1""",
                 document_id, a["short_summary"], a["detailed_summary"], a["purpose"],
                 a["difficulty_level"], a["outline"], a["key_concepts"],
-                a["difficult_concepts"])
+                a["difficult_concepts"], a.get("learn_goals") or [])
         except Exception:  # analiz başarısız olsa da belge yine de sohbete hazır
             pass
 

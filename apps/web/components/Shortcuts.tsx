@@ -70,7 +70,7 @@ export default function Shortcuts() {
   //  Sesli ders: PodcastPlayer.tsx (ok tuslari 10 sn, bosluk)
   const groups: [string, [string, string][]][] = [
     ["Genel", [
-      ["Ctrl K", "Hızlı geçiş ve arama"], ["G  D", "Defterler"], ["G  K", "Kütüphane"], ["G  A", "Araştır"],
+      ["Ctrl K", "Hızlı geçiş ve arama"], ["G  D", "Defterler"], ["G  K", "Kütüphane"], ["G  A", "Ara"],
       ["/", "Aramaya odaklan"], ["T", "Tema (açık / koyu / sistem)"], ["?", "Bu pencere"], ["Esc", "Pencereyi kapat"],
     ]],
     ["Okuyucu (PDF)", [

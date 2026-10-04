@@ -1,3 +1,13 @@
+"""Okuyucu sohbeti ("Bu kaynağa sor") — SSE.
+
+Sor v3 akisi (SPEC-v3 "Sor" 1–7):
+  niyet anlama (hafif model, ucretsiz sayilir) -> arama rewritten_question ile (k derinlige gore + komsu
+  parcalar + belge L1 ozeti) -> Turkce ogretmen istemi (kisa/ayrintili/derin) -> gecmis (son 6 mesaj) modele
+  gider -> akis. Derin: once taslak (1 istek), sonra genisletme (1 istek) = ⚡2.
+SSE olaylari: meta {intent, rewritten_question, depth, cost} · token {text} · citation {...} ·
+followups {items} · done {cached?} · error {code, message}.
+Onbellek anahtari: mode|depth|prompt_version (doc_answer_cache.mode kolonunda; sema degismez).
+"""
 import json
 import uuid
 from fastapi import APIRouter, Depends
@@ -6,14 +16,17 @@ from pydantic import BaseModel
 from app.deps import db, current_user, user_id_from_token
 from app.db.session import get_pool
 from app.core.errors import NotFound, AppError
-from app.services import rag_service
+from app.services import rag_service, intent as intent_svc
 from app.ai.factory import get_embeddings, get_llm
-from app.ai.prompts.system import build_system_prompt
+from app.ai.prompts.system import teacher_prompt, outline_prompt, PROMPT_VERSION
 from app.config import settings
 
 router = APIRouter(prefix="/chat", tags=["chat"])
 
 ADVANCED_MODES = {"academic", "critical", "socratic", "concept_map"}
+MAX_OUT_TOKENS = 8192
+TEMPERATURE = 0.5
+COST = {"kisa": 1, "ayrintili": 1, "derin": 2}
 
 
 class SessionIn(BaseModel):
@@ -25,9 +38,18 @@ class SessionIn(BaseModel):
 class MessageIn(BaseModel):
     content: str
     fresh: bool = False          # True: kayitli cevabi kullanma, yeniden uret
+    depth: str = "ayrintili"     # kisa | ayrintili | derin
+    page: int | None = None      # "Bu sayfayı anlat": acik sayfa
+    page_text: str | None = None  # acik sayfanin metni (en fazla ~8000 kr), baglama eklenir
 
 
 DOC_ANSWER_SIM = 0.95
+MIN_CACHE_CHARS = 300
+
+
+def cache_mode(mode: str, depth: str) -> str:
+    """doc_answer_cache.mode = 'mode|depth|vN' — derinlik ve istem surumu anahtara girer."""
+    return f"{mode or 'default'}|{depth}|{PROMPT_VERSION}"
 
 
 async def _cached_doc_answer(conn, doc_id: str, mode: str, q: str, q_emb):
@@ -48,6 +70,29 @@ async def _cached_doc_answer(conn, doc_id: str, mode: str, q: str, q_emb):
         return hit
     except Exception:  # noqa
         return None
+
+
+async def _history(conn, sid: str, turns: int = intent_svc.HISTORY_TURNS) -> list[tuple[str, str]]:
+    """Son N tur (soru, cevap) — eskiden yeniye."""
+    try:
+        rows = await conn.fetch(
+            "SELECT role, content FROM chat_messages WHERE session_id=$1 ORDER BY created_at DESC LIMIT $2",
+            sid, turns * 2 + 2)
+    except Exception:  # noqa
+        return []
+    msgs = [dict(r) for r in reversed(rows)]
+    out: list[tuple[str, str]] = []
+    q = None
+    for m in msgs:
+        if m["role"] == "user":
+            if q is not None:
+                out.append((q, ""))
+            q = m["content"] or ""
+        elif m["role"] == "assistant" and q is not None:
+            out.append((q, m["content"] or ""))
+            q = None
+    # son user mesaji (az once yazilan) gecmise girmez
+    return [t for t in out if t[1]][-turns:]
 
 
 def _sse(event: str, data: dict) -> str:
@@ -111,7 +156,9 @@ async def messages(sid: str, conn=Depends(db), user=Depends(current_user)):
 # Not: SSE için token'ı query param olarak da kabul ediyoruz (EventSource header gönderemez)
 @router.post("/sessions/{sid}/messages")
 async def send(sid: str, body: MessageIn, token: str | None = None):
+    import asyncio
     pool = await get_pool()
+    depth = intent_svc.normalize_depth(body.depth)
 
     async def gen():
         async with pool.acquire() as conn:
@@ -136,19 +183,31 @@ async def send(sid: str, body: MessageIn, token: str | None = None):
             except Exception:  # noqa
                 pass
 
+            question = (body.content or "").strip()
+            turns = await _history(conn, sid)
             await conn.execute(
                 "INSERT INTO chat_messages (session_id, role, content) VALUES ($1,'user',$2)",
-                sid, body.content)
+                sid, question)
 
+            llm = get_llm()
             embedder = get_embeddings()
             mode = s["mode"] or "default"
+            doc_id = str(s["document_id"])
+
+            # 1) Niyet anlama (hafif, ucretsiz sayilir; basarisizsa soru oldugu gibi)
+            it = await asyncio.to_thread(intent_svc.understand, llm, question, turns)
+            rq = it["rewritten_question"] or question
+            yield _sse("meta", {"intent": it["intent"], "rewritten_question": rq, "depth": depth,
+                                "cost": COST.get(depth, 1), "understood": bool(it.get("ok"))})
+
             q_emb = None
             try:
-                q_emb = await rag_service.embed_query(conn, embedder, body.content)
+                q_emb = await rag_service.embed_query(conn, embedder, rq)
             except Exception:  # noqa
                 pass
-            if not body.fresh:
-                hit = await _cached_doc_answer(conn, str(s["document_id"]), mode, body.content, q_emb)
+            ckey = cache_mode(mode, depth)
+            if not body.fresh and not body.page_text:
+                hit = await _cached_doc_answer(conn, doc_id, ckey, rq, q_emb)
                 if hit:
                     ans = hit["answer"] or ""
                     for i in range(0, len(ans), 60):
@@ -160,53 +219,90 @@ async def send(sid: str, body: MessageIn, token: str | None = None):
                         "INSERT INTO chat_messages (session_id, role, content, citations) VALUES ($1,'assistant',$2,$3)",
                         sid, ans, cits)
                     yield _sse("done", {"cached": True}); return
+
+            # 2) Baglam: k derinlige gore + komsu parcalar + belge ozeti
             try:
-                chunks = await rag_service.retrieve(conn, str(s["document_id"]), body.content, embedder)
+                chunks = await rag_service.retrieve(conn, doc_id, rq, embedder, k=rag_service.k_for(depth),
+                                                    q_emb=q_emb, neighbors=(depth != "kisa"))
             except Exception as e:  # noqa
                 yield _sse_error(e); return
 
-            if not chunks:
-                msg = "Bu bilgi kaynakta açıkça geçmiyor. İstersen genel bilgiyle açıklayayım."
+            if not chunks and depth == "kisa" and not body.page_text:
+                msg = ("Bu bilgi kaynakta açıkça geçmiyor. Derinliği \"Ayrıntılı\" yapıp tekrar sorarsan "
+                       "genel bilgiyle açıklarım.")
                 yield _sse("token", {"text": msg})
                 await conn.execute(
                     "INSERT INTO chat_messages (session_id, role, content) VALUES ($1,'assistant',$2)",
                     sid, msg)
                 yield _sse("done", {}); return
 
-            context = rag_service.build_context(chunks)
-            system = build_system_prompt(s["mode"], context)
-            model = settings.active_llm_model_advanced if s["mode"] in ADVANCED_MODES else settings.active_llm_model
-            messages = [{"role": "system", "content": system},
-                        {"role": "user", "content": body.content}]
+            summaries = await rag_service.doc_summaries(conn, [doc_id]) if depth != "kisa" else ""
+            context = rag_service.build_context(chunks, summaries)
+            page_note = None
+            if body.page_text and body.page_text.strip():
+                pg = body.page or 0
+                context = (f"AÇIK SAYFA (s.{pg}) METNİ — öğrenci şu an bu sayfaya bakıyor; atıfta [Sayfa s.{pg}] yaz:\n"
+                           f"{body.page_text.strip()[:8000]}\n\n" + context)
+                page_note = f"Öğrenci {pg}. sayfaya bakıyor; soruyu öncelikle bu sayfa üzerinden anlat."
 
-            llm = get_llm()
+            # 3) Model + gecmis
+            strong = depth != "kisa"
+            model = settings.active_llm_model_strong if strong else (
+                settings.active_llm_model_advanced if mode in ADVANCED_MODES else settings.active_llm_model_light)
+            history = intent_svc.history_messages(turns)
+            user_msg = question if rq == question else f"{question}\n\n(Anladığım soru: {rq})"
+
+            outline = None
+            if depth == "derin":
+                try:
+                    outline = await asyncio.to_thread(
+                        llm.complete, outline_prompt(context, rq), model=model,
+                        temperature=0.3, max_output_tokens=900)
+                except Exception as e:  # noqa
+                    yield _sse_error(e); return
+
+            system = teacher_prompt(context, depth=depth, intent=it["intent"], mode=mode,
+                                    scope_hint=it.get("scope_hint"), outline=outline, page_note=page_note)
+            messages = [{"role": "system", "content": system}, *history,
+                        {"role": "user", "content": user_msg}]
+
             full = ""
+            guard = intent_svc.TailGuard()
             try:
-                async for tok in llm.stream_chat(messages, model=model):
+                async for tok in llm.stream_chat(messages, model=model, temperature=TEMPERATURE,
+                                                 max_output_tokens=MAX_OUT_TOKENS):
                     full += tok
-                    yield _sse("token", {"text": tok})
+                    vis = guard.feed(tok)
+                    if vis:
+                        yield _sse("token", {"text": vis})
+                tail = guard.flush()
+                if tail:
+                    yield _sse("token", {"text": tail})
             except Exception as e:  # noqa
                 yield _sse_error(e); return
 
+            answer, followups = intent_svc.split_followups(full)
             citations = [{"n": i + 1, "chunk_id": str(c["id"]), "page": c["page_number"],
                           "section": c.get("section_title"), "snippet": c["content"][:180]}
                          for i, c in enumerate(chunks)]
             for c in citations:
                 yield _sse("citation", c)
+            if followups:
+                yield _sse("followups", {"items": followups})
 
             await conn.execute(
                 "INSERT INTO chat_messages (session_id, role, content, citations) VALUES ($1,'assistant',$2,$3)",
-                sid, full, citations)
-            if q_emb is not None and len(full) > 40:
+                sid, answer, citations)
+            if q_emb is not None and len(answer) >= MIN_CACHE_CHARS and not body.page_text:
                 try:
                     await conn.execute(
                         """INSERT INTO doc_answer_cache (document_id, mode, qnorm, question, qvec, answer, citations)
                            VALUES ($1,$2,$3,$4,$5,$6,$7)
                            ON CONFLICT (document_id, mode, qnorm) DO UPDATE
                            SET answer=EXCLUDED.answer, citations=EXCLUDED.citations, used_at=now()""",
-                        s["document_id"], mode, rag_service.norm_q(body.content), body.content, q_emb, full, citations)
+                        s["document_id"], ckey, rag_service.norm_q(rq), rq, q_emb, answer, citations)
                 except Exception:  # noqa
                     pass
-            yield _sse("done", {})
+            yield _sse("done", {"cost": COST.get(depth, 1)})
 
     return StreamingResponse(gen(), media_type="text/event-stream")

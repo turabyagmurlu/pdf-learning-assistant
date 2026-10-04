@@ -14,7 +14,6 @@ export const draftUrl = (s: DraftScope) => `${base(s)}/draft`;
 export const saveUrl = (s: DraftScope) => (s.kind === "collection" ? `/collections/${s.id}` : `/documents/${s.id}/draft`);
 export const blocksUrl = (s: DraftScope) => `${base(s)}/draft/blocks`;
 export const importUrl = (s: DraftScope) => `${base(s)}/draft/import-highlights`;
-export const atelierHref = (s: DraftScope) => `/atelier?scope=${s.kind}:${encodeURIComponent(s.id)}`;
 /** Yerel yedek anahtarları. Defterde eski anahtarlar korunur (yarım kalmış kayıtlar kaybolmasın). */
 export const backupKey = (s: DraftScope) => (s.kind === "collection" ? "draft.pending." + s.id : "draft.pending.doc." + s.id);
 export const baseKey = (s: DraftScope) => (s.kind === "collection" ? "draft.base." + s.id : "draft.base.doc." + s.id);

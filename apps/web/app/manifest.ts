@@ -37,7 +37,7 @@ export default function manifest(): MetadataRoute.Manifest {
     shortcuts: [
       { name: "Defterler", url: "/notebooks" },
       { name: "Kütüphane", url: "/library" },
-      { name: "Araştır", url: "/search" },
+      { name: "Ara", url: "/search" },
     ],
   };
 }

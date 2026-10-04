@@ -5,6 +5,7 @@
 - POST /collections/{cid}/lecture/tts        : parcali seslendirme isi baslatir (head = on parca)
 - GET  /lecture/voices                       : anlatici (kadin) + ogrenci (erkek) sesleri
 Parca durumu ve sesleri: study.py -> GET /tts/jobs/{id}/chunks, GET /tts/jobs/{id}/chunks/{n}
+V3: anlatim cagrilari sicaklik 0.8 (warm_kwargs); `done` olayinda `chapters` (paragraf bazli, kota 0).
 """
 import asyncio
 import json
@@ -20,8 +21,8 @@ from app.core.errors import AppError, NotFound
 from app.db.session import get_pool
 from app.deps import db, current_user
 from app.services import tts_jobs
-from app.services.analysis_service import lecture_prompt, lecture_script
-from app.services.tts_service import FEMALE_VOICES, DEFAULT_VOICE
+from app.services.analysis_service import lecture_prompt, lecture_script, warm_kwargs
+from app.services.tts_service import FEMALE_VOICES, DEFAULT_VOICE, MALE_VOICES, DEFAULT_MALE_VOICE
 
 router = APIRouter(tags=["lecture"])
 
@@ -66,6 +67,11 @@ async def _context(conn, cid: str, uid) -> tuple[str, int]:
     return context, len(docs)
 
 
+def _chapters(script: str, dialog: bool) -> list[dict]:
+    """Bolum isaretleri (kota 0): tekli anlatimda paragraf, sohbette Ayşe'nin her 3. repligi; baslik ilk 6 kelime."""
+    return tts_jobs.chapters_for([script], dialog)
+
+
 def _cached_matches(col: dict, dialog: bool) -> bool:
     txt = (col.get("lecture") or "").strip()
     return bool(txt) and tts_jobs.is_dialog(txt) == dialog
@@ -80,13 +86,13 @@ async def lecture(cid: str, refresh: bool = False, format: str | None = None,
     if not refresh and _cached_matches(col, dialog):
         n = await _ready_count(conn, cid, user["id"])
         return {"script": col["lecture"], "title": col["title"], "documents": n, "cached": True,
-                "format": "dialog" if dialog else "solo",
+                "format": "dialog" if dialog else "solo", "chapters": _chapters(col["lecture"], dialog),
                 "at": col["lecture_at"].isoformat() if col["lecture_at"] else None}
     context, n = await _context(conn, cid, user["id"])
     script = await asyncio.to_thread(lecture_script, context, col["title"], dialog)
     await conn.execute("UPDATE collections SET lecture=$1, lecture_at=now() WHERE id=$2", script, cid)
     return {"script": script, "title": col["title"], "documents": n, "cached": False,
-            "format": "dialog" if dialog else "solo"}
+            "format": "dialog" if dialog else "solo", "chapters": _chapters(script, dialog)}
 
 
 def _sse(event: str, data: dict) -> str:
@@ -117,7 +123,8 @@ async def lecture_stream(cid: str, refresh: bool = False, format: str | None = N
                     yield _sse("meta", {"cached": True})
                     for i in range(0, len(txt), 400):
                         yield _sse("token", {"text": txt[i:i + 400]})
-                    yield _sse("done", {"script": txt, "cached": True, "format": "dialog" if dialog else "solo"})
+                    yield _sse("done", {"script": txt, "cached": True, "format": "dialog" if dialog else "solo",
+                                        "chapters": _chapters(txt, dialog)})
                     return
                 context, _n = await _context(conn, cid, uid)
             except AppError as e:
@@ -127,7 +134,8 @@ async def lecture_stream(cid: str, refresh: bool = False, format: str | None = N
             full = ""
             try:
                 async for tok in llm.stream_chat(lecture_prompt(context, col["title"], dialog),
-                                                 model=settings.active_llm_model):
+                                                 model=settings.active_llm_model,
+                                                 **warm_kwargs(llm.stream_chat)):
                     full += tok
                     yield _sse("token", {"text": tok})
             except AppError as e:
@@ -147,7 +155,8 @@ async def lecture_stream(cid: str, refresh: bool = False, format: str | None = N
                 await conn.execute("UPDATE collections SET lecture=$1, lecture_at=now() WHERE id=$2", full, cid)
             except Exception:  # noqa
                 pass
-            yield _sse("done", {"script": full, "cached": False, "format": "dialog" if dialog else "solo"})
+            yield _sse("done", {"script": full, "cached": False, "format": "dialog" if dialog else "solo",
+                                "chapters": _chapters(full, dialog)})
 
     return StreamingResponse(gen(), media_type="text/event-stream",
                              headers={"Cache-Control": "no-store", "X-Accel-Buffering": "no"})
@@ -155,12 +164,12 @@ async def lecture_stream(cid: str, refresh: bool = False, format: str | None = N
 
 @router.get("/lecture/voices")
 async def lecture_voices(user=Depends(current_user)):
-    """Anlatici (kadin) ve ogrenci (erkek) sesleri; sohbet bicimi ikisini birlikte kullanir."""
+    """Anlatici (4 kadin) ve ogrenci (3 erkek) sesleri; sohbet bicimi ikisini birlikte kullanir."""
     return {
         "voices": [{"id": k, "label": v} for k, v in FEMALE_VOICES.items()],
         "default": DEFAULT_VOICE,
-        "student_voices": [{"id": k, "label": v} for k, v in tts_jobs.MALE_VOICES.items()],
-        "default_student": tts_jobs.DEFAULT_MALE_VOICE,
+        "student_voices": [{"id": k, "label": v} for k, v in MALE_VOICES.items()],
+        "default_student": DEFAULT_MALE_VOICE,
         "speakers": {"teacher": tts_jobs.SPEAKER_A, "student": tts_jobs.SPEAKER_B},
     }
 

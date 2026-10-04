@@ -8,16 +8,15 @@ import { useRefreshOn } from "@/components/Wake";
 import { toast } from "@/components/Toast";
 import Button from "@/components/ui/Button";
 import { coverOf } from "@/lib/covers";
-import { useAtelierCounts } from "@/hooks/useAtelier";
 import {
-  Notebook, Plus, Highlighter, PenLine, Check, BookMarked, Share2, Clock, X, Loader2, Sparkles, MessageSquare, Upload, HelpCircle,
+  Notebook, Plus, Highlighter, PenLine, Check, BookMarked, Clock, X, Loader2, Sparkles, MessageSquare, Upload, HelpCircle,
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 
 type NB = {
   id: string; title: string; description?: string | null; created_at: string; draft_at?: string | null;
   has_draft: boolean; doc_count: number; page_count: number; note_count: number;
-  has_glossary: boolean; has_timeline: boolean; has_concept_map: boolean; last_activity: string;
+  has_glossary: boolean; last_activity: string;
   topics?: { label: string; n: number }[]; types?: [string, number][];
   last_chat?: string | null; last_chat_at?: string | null; chat_count?: number;
   cover_color?: string | null; cover_icon?: string | null;
@@ -57,8 +56,6 @@ export default function NotebooksPage() {
   const [sampleBusy, setSampleBusy] = useState(false);
   const busyRef = useRef(false);
   const fid = useId();
-  // Atolye: defter basina tekrar bekleyen kart (kapak rozeti)
-  const dueBy = useAtelierCounts()?.by_collection || {};
 
   async function load() {
     setLoadErr("");
@@ -225,7 +222,7 @@ export default function NotebooksPage() {
           <ul className="mx-auto mt-2 max-w-md space-y-1 text-left text-sm text-text-secondary">
             <li>• Bir konu için kaynaklarını (dosya, link, YouTube, metin) tek yerde toplar.</li>
             <li>• Kaynaklarına soru sorarsın; cevaplar sayfa numaralı atıflarla gelir.</li>
-            <li>• Notlarını, vurgularını ve taslağını aynı yerde tutar.</li>
+            <li>• Vurgularını, notlarını ve çalışma notunu aynı yerde tutar.</li>
           </ul>
           {createForm(true)}
         </div>
@@ -233,20 +230,14 @@ export default function NotebooksPage() {
         <div className="grid grid-cols-1 gap-5 sm:grid-cols-2 lg:grid-cols-3">
           {list.map((nb) => {
             const cv = coverOf(nb);
-            const due = dueBy[nb.id] || 0;
             return (
             <button type="button" key={nb.id} onClick={() => router.push("/collections/" + nb.id)}
-                    aria-label={`${nb.title} defterini aç: ${nb.doc_count} kaynak${due ? `, ${due} tekrar bekliyor` : ""}`}
+                    aria-label={`${nb.title} defterini aç: ${nb.doc_count} kaynak`}
                     className="lift group flex flex-col overflow-hidden rounded-2xl border bg-surface text-left hover:border-border-strong">
               {/* Kapak: renkli yuzey, sol ustte simge, altta baslik + kaynak sayisi */}
               <div className={cx("flex min-h-[132px] flex-col justify-between gap-3 p-4", cv.tone.bg)}>
                 <div className="flex items-start justify-between gap-2">
                   <cv.Icon size={26} strokeWidth={1.9} className={cv.tone.fg} aria-hidden="true" />
-                  {due > 0 && (
-                    <span aria-hidden="true" className="rounded-full border border-gold bg-surface px-2 py-0.5 text-xs font-semibold text-gold-ink shadow-soft">
-                      {due > 99 ? "99+" : due} tekrar
-                    </span>
-                  )}
                 </div>
                 <div className="min-w-0">
                   <h3 className={cx("line-clamp-2 font-heading text-title leading-tight", cv.tone.fg)}>{nb.title}</h3>
@@ -266,7 +257,7 @@ export default function NotebooksPage() {
                 {(nb.note_count > 0 || nb.has_draft) && (
                   <div className="mt-1.5 flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-text-secondary">
                     {nb.note_count > 0 && <span className="flex items-center gap-1"><Highlighter size={13} aria-hidden="true" /> {nb.note_count} not</span>}
-                    {nb.has_draft && <span className="flex items-center gap-1"><PenLine size={13} aria-hidden="true" /> taslak var</span>}
+                    {nb.has_draft && <span className="flex items-center gap-1"><PenLine size={13} aria-hidden="true" /> çalışma notu var</span>}
                   </div>
                 )}
                 <div className="mt-auto flex items-center gap-1.5 pt-3 text-xs text-text-secondary">
@@ -276,13 +267,12 @@ export default function NotebooksPage() {
                     {nb.last_chat ? <> · <span className="text-text-primary">“{nb.last_chat.length > 48 ? nb.last_chat.slice(0, 46) + "…" : nb.last_chat}”</span></> : null}
                   </span>
                   <span className="ml-auto flex shrink-0 gap-1">
-                    {([["Sözlük", nb.has_glossary, BookMarked], ["Kavram haritası", nb.has_concept_map, Share2], ["Zaman çizelgesi", nb.has_timeline, Clock]] as [string, boolean, LucideIcon][]).map(([label, ok, Icon]) =>
-                      ok ? (
-                        <span key={label} title={label + " hazır"} className="rounded-full bg-success-bg p-1 text-success">
-                          <Icon size={12} aria-hidden="true" />
-                          <span className="sr-only">{label} hazır</span>
-                        </span>
-                      ) : null)}
+                    {nb.has_glossary && (
+                      <span title="Sözlük hazır" className="rounded-full bg-success-bg p-1 text-success">
+                        <BookMarked size={12} aria-hidden="true" />
+                        <span className="sr-only">Sözlük hazır</span>
+                      </span>
+                    )}
                   </span>
                 </div>
               </div>

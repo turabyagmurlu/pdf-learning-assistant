@@ -1,4 +1,6 @@
+import inspect
 import json
+import re
 from app.ai.factory import get_llm
 from app.ai.schemas import DOCUMENT_ANALYSIS_SCHEMA, STUDY_ITEMS_SCHEMA, GLOSSARY_SCHEMA, TIMELINE_SCHEMA, RELATIONS_SCHEMA
 from app.config import settings
@@ -203,15 +205,147 @@ def template_suggestions(concepts: list[str], titles: list[str]) -> dict:
     return {"theme": "", "groups": groups}
 
 
-def analyze_document(full_text: str) -> dict:
+# ---- Belge analizi (L0 + L1) ---------------------------------------------------------
+
+ANALYSIS_SAMPLE_CHARS = 40000      # bas-orta-son dengeli ornek (eskiden: ilk 24K karakter)
+
+
+def sample_pages(pages: list[dict], budget: int = ANALYSIS_SAMPLE_CHARS,
+                 head: float = 0.35, tail: float = 0.30) -> str:
+    """Belgenin basi, ortasi ve sonundan dengeli ornek alir; her sayfa `[s.N]` etiketiyle baslar.
+
+    - Toplam metin butceye sigiyorsa hepsi (etiketli) doner.
+    - Sigmiyorsa: bastan `head`, sondan `tail` payi ardisik sayfalarla doldurulur; kalan pay
+      ortadaki sayfalardan esit aralikla secilir (sozlukteki `_glossary_context` kalibi).
+    Boylece uzun bir tezin sonuc/tartisma bolumu de modele gider (T5-ozet §3.2).
+    Girdi: [{"page_number": n, "text": "..."}] ya da [{"page": n, "text": ...}].
+    """
+    items = []
+    for i, p in enumerate(pages or []):
+        t = (p.get("text") or "").strip()
+        if not t:
+            continue
+        n = p.get("page_number") or p.get("page") or (i + 1)
+        items.append((int(n), t))
+    if not items:
+        return ""
+    tag = lambda n, t: f"[s.{n}] {t}"  # noqa: E731
+    total = sum(len(t) + 8 for _, t in items)
+    if total <= budget:
+        return "\n\n".join(tag(n, t) for n, t in items)
+
+    def take(seq, limit):
+        out, used = [], 0
+        for n, t in seq:
+            room = limit - used
+            if room <= 0:
+                break
+            if len(t) > room:
+                t = t[:max(0, room - 1)].rsplit(" ", 1)[0] + "…"
+            out.append((n, t))
+            used += len(t) + 8
+        return out
+
+    head_b, tail_b = int(budget * head), int(budget * tail)
+    mid_b = budget - head_b - tail_b
+    head_part = take(items, head_b)
+    tail_src = list(reversed(items[len(head_part):]))
+    tail_part = list(reversed(take(tail_src, tail_b)))
+    lo, hi = len(head_part), len(items) - len(tail_part)
+    middle = items[lo:hi]
+    mid_part: list[tuple[int, str]] = []
+    if middle and mid_b > 0:
+        # esit aralikli sayfa secimi; her sayfadan en fazla ~1.2K karakter
+        per = max(600, min(1200, mid_b // 8))
+        k = max(1, min(len(middle), mid_b // per))
+        step = len(middle) / k
+        for i in range(k):
+            n, t = middle[int(i * step)]
+            if len(t) > per:
+                t = t[:per - 1].rsplit(" ", 1)[0] + "…"
+            mid_part.append((n, t))
+    parts = head_part + mid_part + tail_part
+    return "\n\n".join(tag(n, t) for n, t in parts)
+
+
+def _pages_from_text(full_text: str) -> list[dict]:
+    """Sayfa bilgisi olmayan duz metni ~3K karakterlik sanal sayfalara boler (etiketler yine [s.N])."""
+    out, i, n = [], 0, 1
+    while i < len(full_text):
+        out.append({"page_number": n, "text": full_text[i:i + 3000]})
+        i += 3000
+        n += 1
+    return out
+
+
+ANALYSIS_RULES = (
+    "Sen bir öğrenme tasarımcısısın; lisans mezunu, meraklı bir yetişkin öğrenen için kaynağı tanıtıyorsun. "
+    "Yalnızca Türkçe yaz (özgün ad gerekirse parantez içinde). Kaynağa sadık kal; uydurma. "
+    "Metadata değil İÇERİK anlat: yazar adı, üniversite, dergi, yayın yılı, sayfa sayısı özetlerin gövdesine girmez.\n\n"
+    "ALANLAR (uzunluklar kesin):\n"
+    "- short_summary: tek cümle, en fazla 30 kelime; kaynağın ana iddiasını/konusunu söyler. Markdown kullanılabilir (**kalın**).\n"
+    "- detailed_summary: 150-250 kelime, Markdown. 2-3 paragraf: (1) kaynak neyi, hangi soruya cevap olarak anlatıyor; "
+    "(2) ana fikirler ve bunların nasıl bağlandığı; (3) okuyanın eline ne geçer. Başlık koyma, madde kullanma.\n"
+    "- learn_goals: 3-5 madde; her biri 'Bu kaynağı okuyunca …' kalıbında değil, doğrudan fiille başlayan tam cümle "
+    "(örn. 'Kreatin yüklemesinin kas performansını hangi mekanizmayla etkilediğini açıklayabilirsin.'). En fazla 22 kelime.\n"
+    "- purpose: 1-2 cümle; kaynağın amacı / hangi boşluğu doldurduğu.\n"
+    "- difficulty_level: beginner (ön bilgi gerekmez), intermediate (temel alan bilgisi gerekir), advanced (uzmanlık/istatistik/ileri kavram).\n"
+    "- outline: kaynağın gerçek bölüm başlıkları sırayla (varsa metindeki başlıklar; yoksa içerikten 5-10 bölüm adı).\n"
+    "- key_concepts: 6-12 kavram; term kısa, definition 1-2 cümle (kaynağın bu kavramı nasıl kullandığı).\n"
+    "- difficult_concepts: 3-6 madde; biçim 'Kavram — neden zor olduğu (en fazla 12 kelime)'. "
+    "Örn. 'Etki büyüklüğü — farklı ölçekleri tek sayıya indirir, yorumu sezgisel değil'.\n"
+    "Metin parçaları [s.N] sayfa etiketleriyle gelir; belgenin başı, ortası ve sonu birlikte verilmiştir, hepsini dikkate al."
+)
+
+
+def analyze_document(full_text: str, pages: list[dict] | None = None) -> dict:
+    """Belge analizi (isleme hattinda bir kez). Girdi: bas-orta-son dengeli ~40K karakter.
+    `pages` verilirse gercek sayfa etiketleri kullanilir; yoksa duz metin sanal sayfalara bolunur."""
     llm = get_llm()
-    text = full_text[:24000]
+    text = sample_pages(pages or _pages_from_text(full_text or ""))
     messages = [
-        {"role": "system", "content": "Sen bir belge analiz uzmanısın. Türkçe, kaynağa sadık analiz üret."},
-        {"role": "user", "content": f"Aşağıdaki belgeyi analiz et ve şemaya uygun JSON döndür:\n\n{text}"},
+        {"role": "system", "content": ANALYSIS_RULES},
+        {"role": "user", "content": f"Aşağıdaki kaynağı analiz et ve şemaya uygun JSON döndür:\n\n{text}"},
     ]
-    raw = llm.structured(messages, DOCUMENT_ANALYSIS_SCHEMA, model=settings.active_llm_model)
-    return json.loads(raw)
+    raw = _structured(llm, messages, DOCUMENT_ANALYSIS_SCHEMA, temperature=0.3, max_output_tokens=4096)
+    data = json.loads(raw)
+    goals = [str(g).strip() for g in (data.get("learn_goals") or []) if str(g).strip()]
+    data["learn_goals"] = goals[:5]
+    data["difficult_concepts"] = [str(x).strip() for x in (data.get("difficult_concepts") or []) if str(x).strip()][:6]
+    return data
+
+
+def _structured(llm, messages, schema, **kw) -> str:
+    """Saglayici temperature/max_output_tokens parametresini tanimiyorsa eski imzayla cagir."""
+    try:
+        return llm.structured(messages, schema, model=settings.active_llm_model, **kw)
+    except TypeError:
+        return llm.structured(messages, schema, model=settings.active_llm_model)
+
+
+def _complete(llm, messages, **kw) -> str:
+    try:
+        return llm.complete(messages, model=settings.active_llm_model, **kw)
+    except TypeError:
+        return llm.complete(messages, model=settings.active_llm_model)
+
+
+DIFFICULTY_TR = {"beginner": "giriş", "intermediate": "orta", "advanced": "ileri"}
+
+
+def difficulty_tr(level: str | None) -> str | None:
+    return DIFFICULTY_TR.get((level or "").strip().lower()) if level else None
+
+
+def reading_minutes(token_total: int | None, media: dict | None = None) -> int | None:
+    """Okuma suresi (dk): toplam token / 1.3 ≈ kelime, 220 kelime/dk. Video/ses: media.duration."""
+    dur = (media or {}).get("duration") if isinstance(media, dict) else None
+    if isinstance(dur, (int, float)) and dur > 0:
+        return max(1, int(round(dur / 60)))
+    if not token_total or token_total <= 0:
+        return None
+    words = token_total / 1.3
+    return max(1, int(round(words / 220)))
 
 
 def cards_from_text(text: str, count: int = 2) -> list[dict]:
@@ -227,16 +361,20 @@ def cards_from_text(text: str, count: int = 2) -> list[dict]:
 
 
 def explain_page(text: str) -> str:
-    """Bir PDF sayfasini sade dille anlatir (sesli okunmaya uygun duz metin)."""
+    """Bir PDF sayfasini dinlenecek sekilde anlatir (duz metin; TTS ve cumle vurgusu ayni metni kullanir).
+
+    Dinlenebilir anlatim kurallari (_SPOKEN_RULES) + sicaklik 0.8: makale ozeti degil, ogretmen anlatimi."""
     llm = get_llm()
     messages = [
-        {"role": "system", "content": "Sen sabirli bir ogretmensin. Turkce, sade ve akici anlat. "
-                                      "Metin sesli okunacak: baslik, madde isareti, yildiz veya "
-                                      "bicimlendirme kullanma. Sadece duz cumleler yaz. 4-8 cumle."},
-        {"role": "user", "content": "Asagidaki sayfayi bana anlat. Once ana fikri soyle, sonra onemli "
-                                    f"noktalari acikla, gerekirse basit bir ornek ver.\n\n{text[:8000]}"},
+        {"role": "system", "content":
+            "Sen sabırlı, sıcak bir öğretmensin; bir öğrenciye bir sayfayı sesli anlatıyorsun. "
+            "Türkçe, sade ve akıcı konuş. Uzunluk: 60–90 saniyede dinlenecek kadar (120–170 kelime), "
+            "2–3 kısa paragraf. Önce sayfanın asıl derdini tek cümleyle söyle, sonra önemli noktaları "
+            "birbirine bağlayarak anlat, gerekirse günlük hayattan basit bir örnek ver, sonda en önemli "
+            "cümleyi farklı sözcüklerle tekrar et.\n\n" + _SPOKEN_RULES},
+        {"role": "user", "content": "Aşağıdaki sayfayı bana anlat.\n\n" + text[:8000]},
     ]
-    return llm.complete(messages, model=settings.active_llm_model)
+    return llm.complete(messages, model=settings.active_llm_model, **warm_kwargs(llm.complete))
 
 
 def feynman_review(concept: str, explanation: str, context: str) -> str:
@@ -260,48 +398,98 @@ def feynman_review(concept: str, explanation: str, context: str) -> str:
 
 
 _SPOKEN_RULES = (
-    "Metin SESLI OKUNACAK: baslik, madde isareti, yildiz, numara, parantez, tire, iki nokta "
-    "veya bicimlendirme KULLANMA. Kisaltma kullanma (vb., yy., M.O. gibi kisaltmalari acik yaz). "
-    "Sayilari ve tarihleri okunacagi gibi yaz. Cumleler 20 kelimeyi gecmesin. "
-    "Yalnizca Turkce yaz."
+    "Bu metin YALNIZCA KULAKLA dinlenecek; dinleyici hiçbir şey görmüyor. Kurallar:\n"
+    "(1) Birinci tekil anlatıcı ol (\"şimdi sana şunu anlatacağım\"), dinleyiciye \"sen\" de.\n"
+    "(2) Cümleler kısa: en fazla 15–18 kelime; her cümle tek fikir.\n"
+    "(3) Her bölümün başında ne anlatacağını bir cümleyle söyle; sonunda en önemli cümleyi farklı "
+    "sözcüklerle tekrar et.\n"
+    "(4) Geçişlerde konuşma bağlayıcıları kullan: \"Peki bu ne demek?\", \"Şimdi ikinci noktaya geçelim\", "
+    "\"Buraya kadar özetlersek\".\n"
+    "(5) Rakam yazma; tüm sayıları, yılları, yüzdeleri ve sıra sayılarını yazıyla yaz "
+    "(\"bin dokuz yüz yirmi üç\", \"yüzde on iki\", \"birinci\").\n"
+    "(6) Hiçbir kısaltma kullanma (vb., yy., M.Ö., Dr. gibi kısaltmaları açık yaz).\n"
+    "(7) Parantez, tire, iki nokta, tırnak, madde işareti, başlık, numaralandırma kullanma; parantez "
+    "yerine ayrı cümle kur.\n"
+    "(8) Kaynak, yazar adı, yıl atıfı, sayfa, şekil, tablo, dipnot referansı verme; \"Şekil üçte\" gibi "
+    "görsel atıfları tamamen çıkar, içeriği sözle anlat.\n"
+    "(9) Yabancı ya da Latince bir terimi ilk geçtiğinde Türkçe okunuşuyla ve bir kelimelik "
+    "açıklamayla ver (\"mitokondri, yani hücrenin enerji santrali\").\n"
+    "(10) Yazı dili kalıpları yasak: \"bu bağlamda\", \"söz konusu\", \"ele alınmaktadır\" ve "
+    "\"-mektedir\" edilgen zinciri; konuşur gibi yaz (\"burada şunu görüyoruz\").\n"
+    "(11) Noktalama ile nefes ver: önemli cümleden önce ve sonra kısa bir cümle; her paragraf 3–5 cümle; "
+    "paragraflar arasında boş satır. Yalnızca Türkçe yaz."
 )
+
+
+def warm_kwargs(fn) -> dict:
+    """Anlatim/sohbet cagrilarinda sicaklik 0.8 (duz-liste tonunun en buyuk nedeni 0.2'ydi).
+
+    Saglayici `temperature` parametresini destekliyorsa gecirir; desteklemiyorsa bos sozluk
+    (eski saglayici imzasiyla da calisir). Yapisal JSON cagrilari 0.2'de kalir."""
+    try:
+        return {"temperature": 0.8} if "temperature" in inspect.signature(fn).parameters else {}
+    except (TypeError, ValueError):
+        return {}
 
 
 def lecture_prompt(context: str, title: str, dialog: bool = False) -> list[dict]:
     """Sesli ozet istemi. dialog=True: iki kisilik sohbet (Ayse ogretmen, Kerem merakli ogrenci).
 
     Sohbet biciminde her replik ayri satirda 'Ayşe: …' / 'Kerem: …' olarak yazilir;
-    seslendirme bu etiketlere gore iki ayri sesle yapilir.
+    seslendirme bu etiketlere gore iki ayri sesle yapilir. Kurallar Turkce karakterli (T6).
     """
     if dialog:
         system = (
-            "Sen bir podcast senaristisin. Iki kisi konuyu sohbet ederek anlatir: "
-            "Ayşe (sakin, sicak bir ogretmen; anlatir ve ornek verir) ve "
-            "Kerem (merakli bir ogrenci; kisa sorular sorar, anladigini kendi cumleleriyle "
-            "tekrar eder, bazen sasirir). BICIM KESIN: her replik ayri satirda, satir 'Ayşe: ' "
-            "ya da 'Kerem: ' ile baslar; baska konusmaci, sahne yonergesi, baslik yok. "
-            "Replikler kisa (1-3 cumle), sirali ve dogal; Kerem'in sorulari dinleyicinin "
-            "aklina gelecek sorular olsun. Kerem giris yapar ve konuyu sorar, Ayşe anlatir; "
-            "sonda Kerem ogrendiklerini iki cumleyle toparlar. Yaklasik 900-1200 kelime. "
-            + _SPOKEN_RULES
+            "Sen bir podcast senaristisin. İki kişi konuyu sohbet ederek anlatır: "
+            "Ayşe (sakin, sıcak bir öğretmen; anlatır ve örnek verir) ve "
+            "Kerem (meraklı bir öğrenci; kısa sorular sorar, anladığını kendi cümleleriyle "
+            "tekrar eder, bazen şaşırır). BİÇİM KESİN: her replik ayrı satırda, satır 'Ayşe: ' "
+            "ya da 'Kerem: ' ile başlar; başka konuşmacı, sahne yönergesi, başlık yok. "
+            "Replikler kısa (1–3 cümle), sıralı ve doğal; Kerem'in soruları dinleyicinin "
+            "aklına gelecek sorular olsun. Kerem giriş yapar ve konuyu sorar, Ayşe anlatır. "
+            "Ayşe her yeni alt konudan önce 'Şimdi …' diye başlasın; Kerem her 3–4 replikte "
+            "anlaşılanı bir cümleyle tekrar etsin; sonda Kerem öğrendiklerini iki cümleyle toparlar. "
+            "Yaklaşık 900–1200 kelime.\n\n" + _SPOKEN_RULES
         )
-        user = (f"Konu: {title}\n\nAsagidaki kaynaklardan yararlanarak sohbeti yaz:\n\n{context[:14000]}")
+        user = f"Konu: {title}\n\nAşağıdaki kaynaklardan yararlanarak sohbeti yaz:\n\n{context[:14000]}"
     else:
         system = (
-            "Sen bir konuyu sesli anlatan ogretmensin. Sadece duz, akici cumleler. "
-            "Dinleyiciyi 'sen' diye kabul et. Once konuya kisa bir giris yap, sonra ana "
-            "fikirleri birbirine baglayarak anlat, aralarda 'simdi sunu dusun' gibi kucuk "
-            "duraklamalar koy, sonunda kisa bir toparlama yap. Paragraflar arasinda bos satir "
-            "birak. Yaklasik 900-1200 kelime. " + _SPOKEN_RULES
+            "Sen bir konuyu sesli anlatan öğretmensin. Sadece düz, akıcı cümleler. "
+            "Dinleyiciyi 'sen' diye kabul et. Önce konuya kısa bir giriş yap, sonra ana "
+            "fikirleri birbirine bağlayarak anlat, aralarda 'şimdi şunu düşün' gibi küçük "
+            "duraklamalar koy, sonunda kısa bir toparlama yap. Kaynakça, başlık sayfası, "
+            "içindekiler ve yazar bilgisi gibi kısımları anlatma; konunun kendisini anlat. "
+            "Paragraflar arasında boş satır bırak. Yaklaşık 900–1200 kelime.\n\n" + _SPOKEN_RULES
         )
-        user = f"Konu: {title}\n\nAsagidaki kaynaklardan yararlanarak dersi anlat:\n\n{context[:14000]}"
+        user = f"Konu: {title}\n\nAşağıdaki kaynaklardan yararlanarak dersi anlat:\n\n{context[:14000]}"
     return [{"role": "system", "content": system}, {"role": "user", "content": user}]
 
 
 def lecture_script(context: str, title: str, dialog: bool = False) -> str:
-    """Koleksiyon icerigini sesli dinlenebilir akici bir derse (ya da iki kisilik sohbete) cevirir."""
+    """Koleksiyon icerigini sesli dinlenebilir akici bir derse (ya da iki kisilik sohbete) cevirir (sicaklik 0.8)."""
     llm = get_llm()
-    return llm.complete(lecture_prompt(context, title, dialog), model=settings.active_llm_model)
+    return llm.complete(lecture_prompt(context, title, dialog), model=settings.active_llm_model,
+                        **warm_kwargs(llm.complete))
+
+
+def spoken_score(text: str) -> dict:
+    """Dinlenebilirlik olcumu (kota 0; T5 4.1): cumle uzunlugu, rakam/kisaltma/edilgen sayisi, hitap isaretleri."""
+    words = text.split()
+    sents = [s for s in re.split(r"(?<=[.!?])\s+", text.strip()) if s.strip()]
+    lens = [len(s.split()) for s in sents] or [0]
+    n_words = max(1, len(words))
+    return {
+        "words": len(words),
+        "sentences": len(sents),
+        "avg_sentence_words": round(sum(lens) / len(lens), 1),
+        "long_sentence_ratio": round(sum(1 for n in lens if n > 20) / max(1, len(lens)), 2),
+        "digits": len(re.findall(r"\d", text)),
+        "abbreviations": len(re.findall(r"\b(?:vb|vs|yy|bkz|örn|M\.Ö|M\.S|Dr|Prof)\.", text)),
+        "passive_per_100": round(100 * len(re.findall(r"\b\w+(?:mektedir|maktadır|mıştır|miştir|muştur|müştür)\b", text)) / n_words, 2),
+        "address_per_100": round(100 * len(re.findall(r"\b(?:sana|sen|şimdi|bak|peki|düşün|hatırla)\b", text, re.IGNORECASE)) / n_words, 2),
+        "paragraphs": len([p for p in re.split(r"\n\s*\n", text) if p.strip()]),
+        "punct_marks": len(re.findall(r"[()\[\]:—–\"“”]", text)),
+    }
 
 
 STUDY_QUALITY_RULES = """KALİTE KURALLARI (kesin):
@@ -361,3 +549,343 @@ def generate_study_items(context: str, kind: str, count: int = 8,
             continue
         out.append(it)
     return out
+
+
+# =====================================================================================
+# Çalışma notu (L2 ders notu, defter sentez notu, "Kendi sözlerinle anlat" geri bildirimi)
+# T5-ozet §3.1-3.4, SPEC-v3 "Çalışma notu". Uçlar: app/api/study_notes.py
+# =====================================================================================
+
+STUDY_NOTE_VERSION = "sn1"          # istem/şema değişince artır → önbellek anahtarı değişir
+STUDY_SINGLE_CALL_CHARS = 48000     # bu kadar karaktere kadar tek istek (⚡1); üstü map+reduce (⚡2)
+STUDY_MAP_BUDGET_CHARS = 90000      # map adımına giden toplam örnek
+STUDY_MAX_SECTIONS = 16
+STUDY_MIN_SECTION_CHARS = 1500
+
+_PAGE_TAG_RE = re.compile(r"\[s\.\s*\d+(?:\s*[-–]\s*\d+)?\]")
+
+
+def study_note_plan(total_chars: int) -> dict:
+    """Kaç istek gerekir? Rozet (⚡1 / ⚡2) bu sayıyı gösterir."""
+    if total_chars <= STUDY_SINGLE_CALL_CHARS:
+        return {"calls": 1, "mode": "single"}
+    return {"calls": 2, "mode": "map_reduce"}
+
+
+def _target_words(total_chars: int) -> tuple[int, int]:
+    """Belge kısaysa not da kısa (şişirme yok): <12K → 300-600, <40K → 600-1200, üstü 1200-2000."""
+    if total_chars < 12000:
+        return 300, 600
+    if total_chars < 40000:
+        return 600, 1200
+    return 1200, 2000
+
+
+def build_sections(chunks: list[dict]) -> list[dict]:
+    """document_chunks satırlarından bölümler: section_title'a göre gruplar; başlık yoksa ~12K karakterlik
+    dilimler. Küçük bölümler komşusuna katılır; en fazla STUDY_MAX_SECTIONS bölüm.
+    Girdi satırları: {page_number, section_title, content}. Çıktı: [{title, page_start, page_end, text, chars}]."""
+    rows = [c for c in chunks if (c.get("content") or "").strip()]
+    if not rows:
+        return []
+    titled = [c for c in rows if (c.get("section_title") or "").strip()]
+    secs: list[dict] = []
+    if len({(c.get("section_title") or "").strip() for c in titled}) >= 2 and len(titled) >= len(rows) * 0.5:
+        cur = None
+        for c in rows:
+            t = (c.get("section_title") or "").strip() or (cur["title"] if cur else "Giriş")
+            if not cur or t != cur["title"]:
+                cur = {"title": t, "page_start": c.get("page_number") or 1, "page_end": c.get("page_number") or 1, "parts": []}
+                secs.append(cur)
+            cur["parts"].append(c)
+            cur["page_end"] = c.get("page_number") or cur["page_end"]
+    else:
+        # başlık yok: sayfa korumalı ~12K karakterlik dilimler
+        cur, size = None, 0
+        for c in rows:
+            if not cur or size >= 12000:
+                cur = {"title": "", "page_start": c.get("page_number") or 1, "page_end": c.get("page_number") or 1, "parts": []}
+                secs.append(cur)
+                size = 0
+            cur["parts"].append(c)
+            cur["page_end"] = c.get("page_number") or cur["page_end"]
+            size += len(c.get("content") or "")
+        for i, s in enumerate(secs, 1):
+            s["title"] = f"Bölüm {i} (s. {s['page_start']}–{s['page_end']})" if s["page_end"] != s["page_start"] else f"Bölüm {i} (s. {s['page_start']})"
+
+    def finish(s):
+        lines = []
+        for c in s["parts"]:
+            pg = c.get("page_number")
+            lines.append((f"[s.{pg}] " if pg else "") + (c.get("content") or "").strip())
+        s["text"] = "\n".join(lines)
+        s["chars"] = len(s["text"])
+        s.pop("parts", None)
+        return s
+
+    secs = [finish(s) for s in secs]
+    # küçük bölümleri komşusuna kat
+    merged: list[dict] = []
+    for s in secs:
+        if merged and (s["chars"] < STUDY_MIN_SECTION_CHARS or merged[-1]["chars"] < STUDY_MIN_SECTION_CHARS):
+            m = merged[-1]
+            m["text"] += "\n" + s["text"]
+            m["chars"] = len(m["text"])
+            m["page_end"] = s["page_end"]
+            if m["chars"] - s["chars"] < STUDY_MIN_SECTION_CHARS and s["title"] and s["title"] not in m["title"]:
+                m["title"] = (m["title"] + " · " + s["title"])[:120]
+        else:
+            merged.append(dict(s))
+    # çok fazla bölüm: ardışıkları birleştir
+    while len(merged) > STUDY_MAX_SECTIONS:
+        k = len(merged) / STUDY_MAX_SECTIONS
+        out, i = [], 0
+        while i < len(merged):
+            group = merged[i:i + max(2, int(round(k)))]
+            m = dict(group[0])
+            for g in group[1:]:
+                m["text"] += "\n" + g["text"]
+                m["page_end"] = g["page_end"]
+            m["chars"] = len(m["text"])
+            out.append(m)
+            i += len(group)
+        merged = out
+    return merged
+
+
+def _sample_section(text: str, limit: int) -> str:
+    """Bölüm metni bütçeye sığmıyorsa baş + son (yarı yarıya)."""
+    if len(text) <= limit:
+        return text
+    h = int(limit * 0.6)
+    t = limit - h
+    return text[:h].rsplit(" ", 1)[0] + "\n[…]\n" + text[-t:].split(" ", 1)[-1]
+
+
+_STUDY_SYSTEM = (
+    "Sen bir öğrenme tasarımcısı ve deneyimli bir öğretmensin; lisans mezunu, meraklı bir yetişkin öğrenen için "
+    "kaynağı BÖLÜM BÖLÜM ders notuna çeviriyorsun. Amaç: okuyan kişi belgeyi açmadan ne anlattığını bilsin, "
+    "hangi bölümü derin okuması gerektiğini seçebilsin ve kavramların nasıl bağlandığını anlatabilsin.\n\n"
+    "KURALLAR (kesin):\n"
+    "1. Yalnızca Türkçe yaz; özgün terim gerekirse parantez içinde.\n"
+    "2. Metadata değil içerik: yazar, üniversite, dergi, yayın yılı, sayfa sayısı yazma.\n"
+    "3. HER paragrafın sonuna bilginin geçtiği sayfayı [s.N] olarak ekle (metin parçaları [s.N] etiketleriyle geliyor; "
+    "   etiketi aynen kullan, uydurma). Birden fazla sayfa ise [s.3] [s.5] gibi ayrı yaz.\n"
+    "4. Her bölüm için body_md: 1-3 paragraf Markdown; tanımlar, mekanizma/neden-sonuç, varsa şekil-tablo yorumu, "
+    "   somut örnek. Başlık (#) KOYMA; **kalın** ile anahtar kavramı işaretle. Madde listesi yalnız gerçekten liste olan yerde.\n"
+    "5. Kaynakta olmayan bilgi eklemek gerekirse paragrafı 'Genel bilgi:' ile başlat ve [s.N] koyma.\n"
+    "6. Konuşma dili tekrarlarını (video dökümü) ayıkla; öz bilgiyi yaz.\n"
+    "7. Sade, 'sen' diliyle; teknik jargon gereksiz yere yok."
+)
+
+
+def _wrap_rules() -> str:
+    return (
+        "- concept_relations_md: 5-10 cümlelik DÜZ YAZI (harita/tablo yok): ana kavramlar birbirine nasıl bağlanıyor, "
+        "hangisi hangisinin ön koşulu, nerede neden-sonuç var. İlgili yerde [s.N].\n"
+        "- misconceptions: 3-5 madde; 'Sık yanlış anlama → doğrusu' biçiminde tek cümle, kaynağa göre.\n"
+        "- questions: TAM 5 sorgulayıcı soru ('Neden…', 'Nasıl…', '… olmasaydı…', '… ile … farkı…'); "
+        "cevabı kaynakta olan; page: cevabın geçtiği sayfa (bilinmiyorsa 0)."
+    )
+
+
+def _validate_sections(secs_out: list[dict], secs_in: list[dict]) -> list[dict]:
+    """Modelden gelen bölümleri temizler: boşları atar, [s.N] olmayan paragrafa bölümün başlangıç sayfasını ekler."""
+    out = []
+    for i, s in enumerate(secs_out or []):
+        body = (s.get("body_md") or "").strip()
+        if not body:
+            continue
+        ref = secs_in[i] if i < len(secs_in) else None
+        ps = s.get("page_start") if isinstance(s.get("page_start"), int) and s.get("page_start") > 0 else (ref["page_start"] if ref else 0)
+        paras = []
+        for p in re.split(r"\n{2,}", body):
+            p = p.strip()
+            if not p:
+                continue
+            if not _PAGE_TAG_RE.search(p) and ps and not p.lower().startswith("genel bilgi"):
+                p += f" [s.{ps}]"
+            paras.append(p)
+        title = (s.get("title") or (ref["title"] if ref else f"Bölüm {i + 1}")).strip()
+        out.append({"title": title[:140], "page_start": ps or None, "body_md": "\n\n".join(paras)})
+    return out
+
+
+def _words(*texts: str) -> int:
+    return sum(len(re.findall(r"\S+", t or "")) for t in texts)
+
+
+def study_note_single(doc_title: str, sections: list[dict], total_chars: int) -> dict:
+    """Kısa/orta belge: tek istekte bölüm notları + toparlama."""
+    from app.ai.schemas import STUDY_NOTE_FULL_SCHEMA
+    llm = get_llm()
+    lo, hi = _target_words(total_chars)
+    body = "\n\n".join(f"### BÖLÜM {i + 1}: {s['title']} (s. {s['page_start']}–{s['page_end']})\n{s['text']}"
+                       for i, s in enumerate(sections))
+    user = (
+        f"KAYNAK: {doc_title}\n\nAşağıdaki {len(sections)} bölümün HER BİRİ için bir not yaz (sections dizisi aynı sırada, "
+        f"title bölümün adı, page_start başlangıç sayfası). Toplam uzunluk {lo}-{hi} kelime; bölümlere içeriğine göre dağıt.\n"
+        f"Ardından toparlama alanlarını doldur:\n{_wrap_rules()}\n\nMETİN:\n{body[:STUDY_SINGLE_CALL_CHARS + 4000]}"
+    )
+    raw = _structured(llm, [{"role": "system", "content": _STUDY_SYSTEM}, {"role": "user", "content": user}],
+                      STUDY_NOTE_FULL_SCHEMA, temperature=0.4, max_output_tokens=8192)
+    data = json.loads(raw)
+    return _finish_note(data, sections, calls=1, mode="single")
+
+
+def study_note_map(doc_title: str, sections: list[dict], total_chars: int) -> list[dict]:
+    """Uzun belge, 1. istek: bölüm başına örneklenmiş metinden bölüm notları."""
+    from app.ai.schemas import STUDY_NOTE_SECTIONS_SCHEMA
+    llm = get_llm()
+    lo, hi = _target_words(total_chars)
+    tot = sum(s["chars"] for s in sections) or 1
+    parts = []
+    for i, s in enumerate(sections):
+        share = max(2500, int(STUDY_MAP_BUDGET_CHARS * s["chars"] / tot))
+        parts.append(f"### BÖLÜM {i + 1}: {s['title']} (s. {s['page_start']}–{s['page_end']})\n{_sample_section(s['text'], share)}")
+    user = (
+        f"KAYNAK: {doc_title}\n\nAşağıdaki {len(sections)} bölümün HER BİRİ için bir not yaz (sections dizisi aynı sırada). "
+        f"Toplam {lo}-{hi} kelime; uzun bölümlere daha çok yer ver. Bölüm metinleri örneklenmiştir ([…] atlanan kısım).\n\n"
+        + "\n\n".join(parts)
+    )
+    raw = _structured(llm, [{"role": "system", "content": _STUDY_SYSTEM}, {"role": "user", "content": user}],
+                      STUDY_NOTE_SECTIONS_SCHEMA, temperature=0.4, max_output_tokens=8192)
+    return _validate_sections(json.loads(raw).get("sections", []), sections)
+
+
+def study_note_reduce(doc_title: str, section_notes: list[dict]) -> dict:
+    """Uzun belge, 2. istek: bölüm notlarından kavram ilişkileri, yanlış anlamalar, sorular."""
+    from app.ai.schemas import STUDY_NOTE_WRAP_SCHEMA
+    llm = get_llm()
+    notes = "\n\n".join(f"## {s['title']}\n{s['body_md']}" for s in section_notes)
+    user = (f"KAYNAK: {doc_title}\n\nAşağıda bu kaynağın bölüm bölüm ders notu var. Notlardaki [s.N] etiketlerini kullanarak "
+            f"toparlama alanlarını doldur:\n{_wrap_rules()}\n\nNOTLAR:\n{notes[:60000]}")
+    raw = _structured(llm, [{"role": "system", "content": _STUDY_SYSTEM}, {"role": "user", "content": user}],
+                      STUDY_NOTE_WRAP_SCHEMA, temperature=0.4, max_output_tokens=4096)
+    return json.loads(raw)
+
+
+def _finish_note(data: dict, sections_in: list[dict], calls: int, mode: str, sections_done: list[dict] | None = None) -> dict:
+    secs = sections_done if sections_done is not None else _validate_sections(data.get("sections", []), sections_in)
+    qs = []
+    for q in (data.get("questions") or [])[:5]:
+        if isinstance(q, dict) and (q.get("q") or "").strip():
+            pg = q.get("page")
+            qs.append({"q": q["q"].strip(), "page": pg if isinstance(pg, int) and pg > 0 else None})
+        elif isinstance(q, str) and q.strip():
+            qs.append({"q": q.strip(), "page": None})
+    rel = (data.get("concept_relations_md") or "").strip()
+    mis = [str(m).strip() for m in (data.get("misconceptions") or []) if str(m).strip()][:6]
+    from datetime import datetime, timezone
+    return {
+        "version": STUDY_NOTE_VERSION,
+        "mode": mode,
+        "calls": calls,
+        "sections": secs,
+        "concept_relations_md": rel,
+        "misconceptions": mis,
+        "questions": qs,
+        "words": _words(*(s["body_md"] for s in secs), rel, *mis, *(q["q"] for q in qs)),
+        "generated_at": datetime.now(timezone.utc).isoformat(),
+    }
+
+
+def generate_study_note(doc_title: str, chunks: list[dict]) -> dict:
+    """Belge L2 ders notu. Kısa belgede 1 istek; uzun belgede map (1) + reduce (1) = 2 istek."""
+    sections = build_sections(chunks)
+    if not sections:
+        raise ValueError("no text")
+    total = sum(s["chars"] for s in sections)
+    plan = study_note_plan(total)
+    if plan["mode"] == "single":
+        return study_note_single(doc_title, sections, total)
+    notes = study_note_map(doc_title, sections, total)
+    wrap = study_note_reduce(doc_title, notes)
+    return _finish_note(wrap, sections, calls=2, mode="map_reduce", sections_done=notes)
+
+
+def note_to_markdown(note: dict, title: str = "") -> str:
+    """L2 notunu düz Markdown'a çevirir (geri bildirim bağlamı, dışa aktarma)."""
+    out = [f"# {title}"] if title else []
+    for s in note.get("sections") or []:
+        out.append(f"## {s.get('title') or ''}")
+        out.append(s.get("body_md") or "")
+    if note.get("concept_relations_md"):
+        out += ["## Kavramlar nasıl bağlanıyor", note["concept_relations_md"]]
+    if note.get("misconceptions"):
+        out += ["## Sık yanlış anlamalar"] + [f"- {m}" for m in note["misconceptions"]]
+    if note.get("questions"):
+        out += ["## Kendini sına"] + [f"{i + 1}. {q.get('q')}" for i, q in enumerate(note["questions"])]
+    return "\n\n".join(x for x in out if x)
+
+
+def synthesis_note(notebook_title: str, sources: list[dict]) -> dict:
+    """Defter sentez notu (1 istek). sources: [{k, title, l0, l1, goals, concepts, note_md}] — k = [K#] numarası.
+    Çıktı Markdown alanlarında atıf biçimi [K2 s.4] (kaynak numarası + sayfa)."""
+    from app.ai.schemas import SYNTHESIS_NOTE_SCHEMA
+    llm = get_llm()
+    per = max(1500, 60000 // max(1, len(sources)))
+    blocks = []
+    for s in sources:
+        b = [f"[K{s['k']}] {s['title']}"]
+        if s.get("l0"):
+            b.append(f"Tek cümle: {s['l0']}")
+        if s.get("l1"):
+            b.append(f"Özet: {s['l1']}")
+        if s.get("goals"):
+            b.append("Öğrenme hedefleri: " + " | ".join(s["goals"][:5]))
+        if s.get("concepts"):
+            b.append("Kavramlar: " + ", ".join(s["concepts"][:10]))
+        if s.get("note_md"):
+            b.append("Ders notu:\n" + s["note_md"])
+        blocks.append("\n".join(b)[:per])
+    system = (
+        "Sen deneyimli bir öğretmensin; lisans mezunu bir öğrenen için bir defterdeki kaynakları BİRLEŞTİREN sentez notu yazıyorsun. "
+        "Yalnızca Türkçe, 'sen' diliyle, Markdown. Metadata (yazar, dergi, yıl) yok; içerik var. "
+        "Her iddianın sonuna kaynak atıfı: [K2] ya da sayfa biliniyorsa [K2 s.4] (kaynak numaraları aşağıda). Uydurma yok; "
+        "kaynaklar bir konuda sessizse 'kaynaklar bunu ele almıyor' de.\n"
+        "ALANLAR:\n"
+        "- overview_md: 1 paragraf (80-140 kelime): defterin büyük resmi, kaynaklar birlikte hangi soruya cevap veriyor.\n"
+        "- common_md: ORTAK KAVRAMLAR ve uzlaşılar — 5-10 cümle ya da kısa maddeler, her biri atıflı.\n"
+        "- conflicts_md: ÇELİŞKİLER / ayrışmalar — hangi kaynak ne diyor, fark neden olabilir (yöntem, örneklem, bağlam). Yoksa açıkça 'Belirgin çelişki yok' + neden.\n"
+        "- complementary_md: TAMAMLAYICI noktalar — bir kaynağın bıraktığı boşluğu hangisi dolduruyor.\n"
+        "- reading_order: önerilen okuma sırası, 'K3 — neden önce' biçiminde kısa maddeler.\n"
+        "- questions: 5 sorgulayıcı soru (kaynaklar arası).\n"
+        "Toplam 700-1400 kelime."
+    )
+    user = f"DEFTER: {notebook_title}\n\nKAYNAKLAR:\n\n" + "\n\n---\n\n".join(blocks)
+    raw = _structured(llm, [{"role": "system", "content": system}, {"role": "user", "content": user}],
+                      SYNTHESIS_NOTE_SCHEMA, temperature=0.4, max_output_tokens=8192)
+    data = json.loads(raw)
+    from datetime import datetime, timezone
+    out = {
+        "version": STUDY_NOTE_VERSION,
+        "overview_md": (data.get("overview_md") or "").strip(),
+        "common_md": (data.get("common_md") or "").strip(),
+        "conflicts_md": (data.get("conflicts_md") or "").strip(),
+        "complementary_md": (data.get("complementary_md") or "").strip(),
+        "reading_order": [str(x).strip() for x in (data.get("reading_order") or []) if str(x).strip()][:12],
+        "questions": [str(x).strip() for x in (data.get("questions") or []) if str(x).strip()][:6],
+        "generated_at": datetime.now(timezone.utc).isoformat(),
+    }
+    out["words"] = _words(out["overview_md"], out["common_md"], out["conflicts_md"], out["complementary_md"],
+                          *out["reading_order"], *out["questions"])
+    return out
+
+
+def study_feedback(user_text: str, note_md: str, title: str) -> str:
+    """'Kendi sözlerinle anlat' (Feynman): kullanıcının anlatımı ders notuyla karşılaştırılır. 200-400 kelime Markdown."""
+    llm = get_llm()
+    system = (
+        "Sen sabırlı, dürüst bir öğretmensin. Öğrenen bir kaynağı KENDİ SÖZLERİYLE anlattı; sen bu anlatımı aşağıdaki ders notuna "
+        "(ve yalnızca ona) göre değerlendiriyorsun. Türkçe, 'sen' diliyle, sıcak ama net; 200-400 kelime Markdown.\n"
+        "YAPI (başlıklar aynen):\n"
+        "### İyi yakaladıkların\n- 2-4 madde: doğru kavradığı noktalar; hangi kavramı doğru bağladığını söyle.\n"
+        "### Eksik kalanlar\n- 2-4 madde: nottaki önemli ama anlatımda olmayan noktalar; her birinde ilgili sayfa [s.N] (notta varsa).\n"
+        "### Yanlış ya da karışık\n- 0-3 madde: hatalı nedensellik, karıştırılan kavram, belirsiz ifade → doğrusu kısa. Hata yoksa tek satır 'Belirgin bir yanlış görmedim.'\n"
+        "### Bir adım ileri\nTek bir soru: anlatımını bir seviye derinleştirecek 'neden/nasıl' sorusu.\n"
+        "Kaynakta olmayan bilgi uydurma; küçük düşürme; puan/not verme."
+    )
+    user = f"KAYNAK: {title}\n\nÖĞRENENİN ANLATIMI:\n{user_text[:6000]}\n\nDERS NOTU:\n{note_md[:40000]}"
+    return _complete(llm, [{"role": "system", "content": system}, {"role": "user", "content": user}],
+                     temperature=0.5, max_output_tokens=4096).strip()

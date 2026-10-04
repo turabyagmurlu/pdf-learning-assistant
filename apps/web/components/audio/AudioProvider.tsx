@@ -14,9 +14,14 @@
  * Media Session (kilit ekranı) ve kaldığı yerden devam burada; iOS kilidi için çağıran tıklama anında
  * `primeAudio()` çağırır, `play()` önceki öğeleri bırakır ve sıradaki parça ısıtılmış öğeleri kullanır.
  * Çıkışta ((app) dışına geçiş) sağlayıcı kalkar ve ses durur; başka sekmede çıkış yapılırsa da durur.
+ * V3: `kind: "lecture" | "listen"` — "listen" oturumları (Sor cevabı "Sesli dinle") ListenDock'ta gösterilir;
+ * `dock` açıkken mini çubuk gizlenir. Hız tek kaynaktan (lib/audio, `audio.speed`). ListenDock burada bağlanır,
+ * böylece (app) layout'a dokunmadan her sayfada `typdf:listen` olayı dinlenir.
  */
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { useAudioQueue, useMediaSession, useQueueAutostart, type AudioQueue, type QueueChunk } from "@/hooks/useAudioQueue";
+import { loadSpeed, saveSpeed } from "@/lib/audio";
+import ListenDock from "@/components/audio/ListenDock";
 
 export type AudioSession = {
   key: number;
@@ -31,13 +36,17 @@ export type AudioSession = {
   note: string;             // ek durum satırı (ör. kota beklemesi)
   busy: boolean;            // ilk parça bekleniyor
   lost: boolean;            // sunucudaki iş kayboldu ("Yeniden başlat")
+  kind: "lecture" | "listen";   // listen: Sor cevabı / seçili metin (ListenDock)
+  dock: boolean;            // listen: tam oynatıcı paneli açık (mini çubuk gizli)
+  href?: string;            // mini çubuktan gidilecek sayfa (lecture: defterin Sesli özet sekmesi)
 };
 
 export type AudioStart = {
   collectionId: string; title: string; subtitle: string; storageKey: string;
   artwork?: string; autoPlay?: boolean; chunks?: QueueChunk[] | null; total?: number;
+  kind?: "lecture" | "listen"; href?: string;
 };
-export type AudioPatch = Partial<Pick<AudioSession, "chunks" | "total" | "note" | "busy" | "lost" | "title" | "subtitle">>;
+export type AudioPatch = Partial<Pick<AudioSession, "chunks" | "total" | "note" | "busy" | "lost" | "title" | "subtitle" | "dock">>;
 
 type SessionCtx = {
   session: AudioSession | null;
@@ -64,13 +73,8 @@ export function AudioProvider({ children }: { children: ReactNode }) {
   const seq = useRef(0);
 
   const [speed, setSpeedState] = useState(1);
-  useEffect(() => {
-    try { const v = parseFloat(localStorage.getItem("lecture.speed") || "1"); if (v > 0) setSpeedState(v); } catch {}
-  }, []);
-  const setSpeed = useCallback((n: number) => {
-    setSpeedState(n);
-    try { localStorage.setItem("lecture.speed", String(n)); } catch {}
-  }, []);
+  useEffect(() => { setSpeedState(loadSpeed()); }, []);
+  const setSpeed = useCallback((n: number) => { setSpeedState(n); saveSpeed(n); }, []);
 
   const q = useAudioQueue(session?.chunks || EMPTY, { rate: speed, storageKey: session?.storageKey });
   const qRef = useRef(q); qRef.current = q;
@@ -95,6 +99,7 @@ export function AudioProvider({ children }: { children: ReactNode }) {
       storageKey: s.storageKey, autoPlay: s.autoPlay ?? true,
       chunks: s.chunks ?? null, total: s.total ?? s.chunks?.length ?? 0,
       note: "", busy: !s.chunks, lost: false,
+      kind: s.kind ?? "lecture", dock: s.kind === "listen", href: s.href,
     });
     return { key, signal: ac.signal };
   }, [stop, commit]);
@@ -132,7 +137,10 @@ export function AudioProvider({ children }: { children: ReactNode }) {
 
   return (
     <SessionContext.Provider value={sessionValue}>
-      <PlaybackContext.Provider value={playbackValue}>{children}</PlaybackContext.Provider>
+      <PlaybackContext.Provider value={playbackValue}>
+        {children}
+        <ListenDock />
+      </PlaybackContext.Provider>
     </SessionContext.Provider>
   );
 }

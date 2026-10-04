@@ -4,13 +4,16 @@ import re
 import uuid
 from datetime import datetime, timezone
 from fastapi import APIRouter, Depends
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from app.deps import db, current_user
 from app.services import rag_service
+from app.services import intent as intent_svc
 from app.services.analysis_service import (generate_study_items, feynman_review,
                                            extract_glossary, extract_timeline, extract_relations,
                                            notebook_suggestions, template_suggestions)
 from app.ai.factory import get_embeddings, get_llm
+from app.ai.prompts.system import teacher_prompt, outline_prompt, PROMPT_VERSION
 from app.core.errors import NotFound, AppError
 from app.config import settings
 from app.services import membership
@@ -356,14 +359,16 @@ class AskIn(BaseModel):
     question: str
     fresh: bool = False          # True: kayitli cevabi yok say, yeniden uret
     chat_id: str | None = None   # sohbet gecmisi: bu sohbete yaz (yoksa yeni sohbet acilir)
+    depth: str = "ayrintili"     # kisa | ayrintili | derin (Sor v3)
 
 ANSWER_SIM = 0.95                # "ayni soru" sayilacak anlam benzerligi
+ASK_TEMPERATURE = 0.5
+ASK_MAX_OUT = 8192
+ASK_COST = {"kisa": 1, "ayrintili": 1, "derin": 2}
 
 
-@router.post("/collections/{cid}/ask")
-async def ask_collection(cid: str, body: AskIn, conn=Depends(db), user=Depends(current_user)):
-    """Defterdeki TUM kaynaklara soru sorar ve soru-cevabi sohbet gecmisine yazar."""
-    out = await _ask_core(cid, body, conn, user)
+async def _save_turn(conn, cid: str, body: AskIn, user, out: dict) -> dict:
+    """Soru-cevabi sohbet gecmisine yazar; chat_id'yi cevaba ekler (yazilamazsa cevap yine doner)."""
     try:
         chat_id = body.chat_id
         if chat_id:
@@ -379,10 +384,86 @@ async def ask_collection(cid: str, body: AskIn, conn=Depends(db), user=Depends(c
         await conn.execute("INSERT INTO collection_messages (chat_id, question, payload) VALUES ($1,$2,$3)",
                            chat_id, body.question.strip(), out)
         await conn.execute("UPDATE collection_chats SET updated_at=now() WHERE id=$1", chat_id)
-        out = {**out, "chat_id": chat_id}
+        return {**out, "chat_id": chat_id}
     except Exception:  # noqa - gecmis yazilamasa da cevap doner
-        pass
-    return out
+        return out
+
+
+@router.post("/collections/{cid}/ask")
+async def ask_collection(cid: str, body: AskIn, conn=Depends(db), user=Depends(current_user)):
+    """Defterdeki TUM kaynaklara soru sorar ve soru-cevabi sohbet gecmisine yazar (tek parca; eski uc).
+    Yeni web akisi /collections/{cid}/ask/stream kullanir."""
+    out = await _ask_core(cid, body, conn, user)
+    return await _save_turn(conn, cid, body, user, out)
+
+
+@router.post("/collections/{cid}/ask/stream")
+async def ask_collection_stream(cid: str, body: AskIn, token: str | None = None):
+    """Defter sohbeti — SSE akisi (okuyucu chat.py ile ayni olay dili):
+    meta {intent, rewritten_question, depth, cost} · token {text} · sources {items} · followups {items} ·
+    done {chat_id, cached?} · error {code, message}. Token query param olarak gelir (EventSource gibi)."""
+    from app.db.session import get_pool
+    from app.deps import user_id_from_token, is_owner
+    from app.api.chat import _sse, _sse_error
+    from app.ai import usage as _u
+    pool = await get_pool()
+
+    async def gen():
+        async with pool.acquire() as conn:
+            uid = None
+            if token:
+                try:
+                    uid = await user_id_from_token(conn, token)
+                except Exception:  # noqa
+                    uid = None
+            if not uid:
+                yield _sse_error(message="Oturumun kapanmış. Tekrar giriş yap.", code="UNAUTHORIZED"); return
+            user = {"id": uid}
+            try:
+                _u.set_user(str(uid), await is_owner(conn, str(uid)))
+            except Exception:  # noqa
+                pass
+            try:
+                prep = await _ask_prepare(cid, body, conn, user)
+            except AppError as e:
+                yield _sse_error(e); return
+            except Exception as e:  # noqa
+                yield _sse_error(e); return
+            yield _sse("meta", prep["meta"])
+            if prep.get("payload") is not None:          # kayitli cevap ya da kaynak yok
+                out = await _save_turn(conn, cid, body, user, prep["payload"])
+                ans = out.get("answer") or ""
+                for i in range(0, len(ans), 60):
+                    yield _sse("token", {"text": ans[i:i + 60]})
+                yield _sse("sources", {"items": out.get("sources") or []})
+                if out.get("followups"):
+                    yield _sse("followups", {"items": out["followups"]})
+                yield _sse("done", {"chat_id": out.get("chat_id"), "cached": bool(out.get("cached")),
+                                    "cached_question": out.get("cached_question")})
+                return
+            llm = get_llm()
+            full = ""
+            guard = intent_svc.TailGuard()
+            try:
+                async for tok in llm.stream_chat(prep["messages"], model=prep["model"],
+                                                 temperature=ASK_TEMPERATURE, max_output_tokens=ASK_MAX_OUT):
+                    full += tok
+                    vis = guard.feed(tok)
+                    if vis:
+                        yield _sse("token", {"text": vis})
+                tail = guard.flush()
+                if tail:
+                    yield _sse("token", {"text": tail})
+            except Exception as e:  # noqa
+                yield _sse_error(e); return
+            payload = await _ask_finish(conn, prep, full)
+            out = await _save_turn(conn, cid, body, user, payload)
+            yield _sse("sources", {"items": out.get("sources") or []})
+            if out.get("followups"):
+                yield _sse("followups", {"items": out["followups"]})
+            yield _sse("done", {"chat_id": out.get("chat_id"), "cost": prep["meta"]["cost"]})
+
+    return StreamingResponse(gen(), media_type="text/event-stream")
 
 
 @router.get("/collections/{cid}/chats")
@@ -433,32 +514,65 @@ async def delete_chat(cid: str, chat_id: str, conn=Depends(db), user=Depends(cur
     return {"ok": True, "trashed": True, "restore": f"/trash/chat/{chat_id}/restore"}
 
 
-async def _ask_core(cid: str, body: AskIn, conn, user):
-    """Defterdeki TUM hazir kaynaklara birden soru sorar."""
+async def _chat_history(conn, cid: str, chat_id: str | None, user_id, turns: int = intent_svc.HISTORY_TURNS):
+    """Acik sohbetin son N turu (soru, cevap) — eskiden yeniye; niyet adimi ve modele gider."""
+    if not chat_id:
+        return []
+    try:
+        rows = await conn.fetch(
+            """SELECT m.question, m.payload FROM collection_messages m JOIN collection_chats c ON c.id=m.chat_id
+               WHERE m.chat_id=$1 AND c.collection_id=$2 AND c.user_id=$3 ORDER BY m.id DESC LIMIT $4""",
+            chat_id, cid, user_id, turns)
+    except Exception:  # noqa
+        return []
+    out = []
+    for r in reversed(rows):
+        p = r["payload"] or {}
+        if isinstance(p, str):
+            p = _jload(p) or {}
+        out.append((r["question"] or "", (p.get("answer") or "") if isinstance(p, dict) else ""))
+    return out
+
+
+async def _ask_prepare(cid: str, body: AskIn, conn, user) -> dict:
+    """Sor'un modele kadar olan kismi (iki uc ortak): niyet, onbellek, arama, istem, model.
+    Donus: {"meta": {...}, "payload": dict|None (kayitli cevap / kaynak yok), "messages", "model", ...}."""
     col = await conn.fetchrow("SELECT id, title FROM collections WHERE id=$1 AND user_id=$2 AND deleted_at IS NULL", cid, user["id"])
     if not col:
         raise NotFound(COL_MISSING)
     q = (body.question or "").strip()
     if len(q) < 3:
         raise AppError("Soru çok kısa; en az birkaç kelime yaz.")
+    depth = intent_svc.normalize_depth(body.depth)
     rows = await conn.fetch(
         "SELECT id FROM documents d JOIN document_collections l ON l.document_id = d.id WHERE d.user_id=$1 AND l.collection_id=$2 AND status='ready'",
         user["id"], cid)
     ids = [str(r["id"]) for r in rows]
     if not ids:
         raise AppError(NO_READY)
-    # Cevap onbellegi: ayni kaynak kumesinde ayni/cok benzer soru -> kayitli cevap (0 kota)
+    llm = get_llm()
+    embedder = get_embeddings()
+
+    # 1) Niyet anlama (hafif model; gecmis varsa takip sorusu onceki konuya baglanir)
+    turns = await _chat_history(conn, cid, body.chat_id, user["id"])
+    it = await asyncio.to_thread(intent_svc.understand, llm, q, turns)
+    rq = it["rewritten_question"] or q
+    meta = {"intent": it["intent"], "rewritten_question": rq, "depth": depth,
+            "cost": ASK_COST.get(depth, 1), "understood": bool(it.get("ok"))}
+
+    # 2) Cevap onbellegi: ayni kaynak kumesi + derinlik + istem surumu + ayni/cok benzer soru -> kayitli (0 kota)
     import hashlib
-    docs_hash = hashlib.sha1(",".join(sorted(ids)).encode()).hexdigest()[:16]
-    qn = rag_service.norm_q(q)
+    docs_hash = hashlib.sha1(",".join(sorted(ids)).encode()).hexdigest()[:16] + f"|{depth}|{PROMPT_VERSION}"
+    qn = rag_service.norm_q(rq)
     if not body.fresh:
         hit = await conn.fetchrow(
             "SELECT id, payload, question FROM answer_cache WHERE collection_id=$1 AND docs_hash=$2 AND qnorm=$3",
             cid, docs_hash, qn)
         if hit:
             await conn.execute("UPDATE answer_cache SET hits=hits+1, used_at=now() WHERE id=$1", hit["id"])
-            return {**(hit["payload"] or {}), "cached": True, "cached_question": hit["question"]}
-    q_emb = await rag_service.embed_query(conn, get_embeddings(), q)
+            return {"meta": meta, "payload": {**(hit["payload"] or {}), "cached": True, "cached_question": hit["question"],
+                                              "rewritten_question": rq, "intent": it["intent"], "depth": depth}}
+    q_emb = await rag_service.embed_query(conn, embedder, rq)
     if not body.fresh:
         hit = await conn.fetchrow(
             """SELECT id, payload, question, 1 - (qvec <=> $3) AS sim FROM answer_cache
@@ -466,41 +580,68 @@ async def _ask_core(cid: str, body: AskIn, conn, user):
             cid, docs_hash, q_emb)
         if hit and float(hit["sim"]) >= ANSWER_SIM:
             await conn.execute("UPDATE answer_cache SET hits=hits+1, used_at=now() WHERE id=$1", hit["id"])
-            return {**(hit["payload"] or {}), "cached": True, "cached_question": hit["question"]}
-    chunks = await rag_service.retrieve_many(conn, ids, q, get_embeddings(), q_emb=q_emb)
-    if not chunks:
-        return {"answer": "Bu soruya defterdeki kaynaklarda karşılık bulamadım. Soruyu farklı kelimelerle sor "
-                          "ya da yeni kaynak ekle.",
-                "sources": []}
-    ctx = rag_service.build_context(chunks)
-    llm = get_llm()
-    messages = [
-        {"role": "system", "content":
-            "Sen bir çalışma asistanısın. SADECE verilen kaynaklara dayanarak Türkçe cevap ver. "
-            "Kaynakta olmayan bir şey uydurma. Cevabında hangi kaynağa dayandığını [K1], [K2] "
-            "biçiminde belirt. Sade ve öğretici anlat.\n\n"
-            "Cevabın EN SONUNA ayrı bir satırda '### Devam soruları' başlığı koy ve altına, kullanıcının "
-            "bu konuda bir adım daha derine inmesini sağlayacak 3 kısa soru yaz (her biri '- ' ile başlasın, "
-            "en fazla 15 kelime). Sorular kaynaklarda cevabı bulunabilecek türden olsun; tekrar etme."},
-        {"role": "user", "content": f"Kaynaklar:\n\n{ctx}\n\nSoru: {q}"},
-    ]
-    raw = await asyncio.to_thread(llm.complete, messages, model=settings.active_llm_model)
-    answer, followups = _split_followups(raw)
+            return {"meta": meta, "payload": {**(hit["payload"] or {}), "cached": True, "cached_question": hit["question"],
+                                              "rewritten_question": rq, "intent": it["intent"], "depth": depth}}
+
+    # 3) Baglam: k derinlige gore, belge basina denge, komsu parcalar, belge L1 ozetleri
+    chunks = await rag_service.retrieve_many(conn, ids, rq, embedder, k=rag_service.k_for(depth), q_emb=q_emb,
+                                             per_doc=rag_service.PER_DOC_CAP.get(depth, 5),
+                                             neighbors=(depth != "kisa"))
+    if not chunks and depth == "kisa":
+        return {"meta": meta, "payload": {
+            "answer": "Bu soruya defterdeki kaynaklarda karşılık bulamadım. Soruyu farklı kelimelerle sor, "
+                      "derinliği \"Ayrıntılı\" yapıp genel bilgiyle açıklatabilir ya da yeni kaynak ekleyebilirsin.",
+            "sources": [], "followups": [], "rewritten_question": rq, "intent": it["intent"], "depth": depth}}
+    doc_ids = list(dict.fromkeys(str(c["document_id"]) for c in chunks)) or ids[:6]
+    summaries = await rag_service.doc_summaries(conn, doc_ids) if depth != "kisa" else ""
+    ctx = rag_service.build_context(chunks, summaries)
+
+    # 4) Model (ayrintili/derin -> havuzdaki flash; kisa -> lite) + istem + gecmis
+    model = settings.active_llm_model_strong if depth != "kisa" else settings.active_llm_model_light
+    outline = None
+    if depth == "derin":
+        outline = await asyncio.to_thread(llm.complete, outline_prompt(ctx, rq), model=model,
+                                          temperature=0.3, max_output_tokens=900)
+    system = teacher_prompt(ctx, depth=depth, intent=it["intent"], scope_hint=it.get("scope_hint"), outline=outline)
+    user_msg = q if rq == q else f"{q}\n\n(Anladığım soru: {rq})"
+    messages = [{"role": "system", "content": system}, *intent_svc.history_messages(turns),
+                {"role": "user", "content": user_msg}]
+    return {"meta": meta, "payload": None, "messages": messages, "model": model, "chunks": chunks,
+            "cid": cid, "docs_hash": docs_hash, "qn": qn, "rq": rq, "q_emb": q_emb, "depth": depth,
+            "intent": it["intent"]}
+
+
+async def _ask_finish(conn, prep: dict, raw: str) -> dict:
+    """Model ciktisini cevaba cevirir (devam sorulari ayri alan), kaynaklari etiketler, onbellege yazar."""
+    answer, followups = intent_svc.split_followups(raw)
     sources = [{"document_id": str(c["document_id"]), "title": c.get("doc_title"),
                 "page": c["page_number"], "score": round(float(c["score"]), 3),
-                "snippet": re.sub(r"\s+", " ", (c.get("content") or ""))[:320]} for c in chunks]
+                "snippet": re.sub(r"\s+", " ", (c.get("content") or ""))[:320]} for c in prep["chunks"]]
     await annotate_media(conn, sources)
-    payload = {"answer": answer, "sources": sources, "followups": followups}
-    try:
-        await conn.execute(
-            """INSERT INTO answer_cache (collection_id, docs_hash, qnorm, question, qvec, payload)
-               VALUES ($1,$2,$3,$4,$5,$6)
-               ON CONFLICT (collection_id, docs_hash, qnorm)
-               DO UPDATE SET payload=EXCLUDED.payload, question=EXCLUDED.question, used_at=now()""",
-            cid, docs_hash, qn, q, q_emb, payload)
-    except Exception:  # noqa - onbellek yazilamazsa cevap yine doner
-        pass
+    payload = {"answer": answer, "sources": sources, "followups": followups,
+               "rewritten_question": prep["rq"], "intent": prep["intent"], "depth": prep["depth"]}
+    if len(answer) >= 300:
+        try:
+            await conn.execute(
+                """INSERT INTO answer_cache (collection_id, docs_hash, qnorm, question, qvec, payload)
+                   VALUES ($1,$2,$3,$4,$5,$6)
+                   ON CONFLICT (collection_id, docs_hash, qnorm)
+                   DO UPDATE SET payload=EXCLUDED.payload, question=EXCLUDED.question, used_at=now()""",
+                prep["cid"], prep["docs_hash"], prep["qn"], prep["rq"], prep["q_emb"], payload)
+        except Exception:  # noqa - onbellek yazilamazsa cevap yine doner
+            pass
     return payload
+
+
+async def _ask_core(cid: str, body: AskIn, conn, user):
+    """Defterdeki TUM hazir kaynaklara birden soru sorar (tek parca; eski /ask ucu)."""
+    prep = await _ask_prepare(cid, body, conn, user)
+    if prep.get("payload") is not None:
+        return prep["payload"]
+    llm = get_llm()
+    raw = await asyncio.to_thread(llm.complete, prep["messages"], model=prep["model"],
+                                  temperature=ASK_TEMPERATURE, max_output_tokens=ASK_MAX_OUT)
+    return await _ask_finish(conn, prep, raw)
 
 
 async def annotate_media(conn, sources: list[dict]):
@@ -532,21 +673,7 @@ async def annotate_media(conn, sources: list[dict]):
     return sources
 
 
-def _split_followups(text: str) -> tuple[str, list[str]]:
-    """Cevabin sonundaki '### Devam sorulari' bolumunu ayirir (ek istek harcamadan gelen oneriler)."""
-    m = re.search(r"\n[\s#*_]*devam\s+soru(?:lar[ıi])?[\s*_:]*\n", text or "", flags=re.I)
-    if not m:
-        return (text or "").strip(), []
-    body, tail = text[:m.start()].rstrip(), text[m.end():]
-    qs = []
-    for line in tail.splitlines():
-        s = re.sub(r"^\s*(?:[-*•]|\d+[.)])\s*", "", line).strip().strip("*").strip()
-        s = re.sub(r"\s*\[K\s*\d+(?:\s*[,;]\s*K?\s*\d+)*\]", "", s).strip()     # atif etiketi soruda olmasin
-        if len(s) >= 8 and s not in qs:
-            qs.append(s)
-        if len(qs) >= 3:
-            break
-    return body, qs
+# Devam sorulari ayristirma -> app/services/intent.split_followups (FOLLOWUP_MARKER + eski baslik uyumu)
 
 
 def _suggest_digest(docs, max_chars: int = 14000) -> tuple[str, list[str]]:

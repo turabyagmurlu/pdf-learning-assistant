@@ -26,11 +26,19 @@ class OpenAILLM(LLMProvider):
         self.sync = OpenAI(api_key=settings.openai_api_key)
         self.aclient = AsyncOpenAI(api_key=settings.openai_api_key)
 
-    async def stream_chat(self, messages, model=None) -> AsyncIterator[str]:
+    @staticmethod
+    def _opts(temperature, max_output_tokens) -> dict:
+        o = {"temperature": 0.2 if temperature is None else float(temperature)}
+        if max_output_tokens:
+            o["max_tokens"] = int(max_output_tokens)
+        return o
+
+    async def stream_chat(self, messages, model=None, *, temperature=None, max_output_tokens=None,
+                          kind="metin") -> AsyncIterator[str]:
         model = model or settings.llm_model
         try:
             stream = await self.aclient.chat.completions.create(
-                model=model, messages=messages, stream=True, temperature=0.2)
+                model=model, messages=messages, stream=True, **self._opts(temperature, max_output_tokens))
             async for chunk in stream:
                 delta = chunk.choices[0].delta.content
                 if delta:
@@ -38,21 +46,23 @@ class OpenAILLM(LLMProvider):
         except Exception as e:  # noqa
             raise AiUnavailable(detail=str(e))
 
-    def complete(self, messages, model=None) -> str:
+    def complete(self, messages, model=None, *, temperature=None, max_output_tokens=None, kind="metin") -> str:
         model = model or settings.llm_model
         try:
-            r = self.sync.chat.completions.create(model=model, messages=messages, temperature=0.2)
+            r = self.sync.chat.completions.create(model=model, messages=messages,
+                                                  **self._opts(temperature, max_output_tokens))
             return r.choices[0].message.content or ""
         except Exception as e:  # noqa
             raise AiUnavailable(detail=str(e))
 
-    def structured(self, messages, schema, model=None) -> str:
+    def structured(self, messages, schema, model=None, *, temperature=None, max_output_tokens=None,
+                   kind="metin") -> str:
         model = model or settings.llm_model
         try:
             r = self.sync.chat.completions.create(
                 model=model, messages=messages,
                 response_format={"type": "json_schema", "json_schema": schema},
-                temperature=0.2)
+                **self._opts(temperature, max_output_tokens))
             return r.choices[0].message.content or "{}"
         except Exception as e:  # noqa
             raise AiUnavailable(detail=str(e))

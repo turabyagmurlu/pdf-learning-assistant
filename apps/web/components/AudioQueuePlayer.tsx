@@ -9,14 +9,17 @@
  *    Sayfadan çıkınca ses kesilmez; alttaki mini çubuk devralır. Sesli özet sekmesi bunu kullanır.
  *  - `<AudioQueuePlayer chunks=... />`: bu bileşene ait yerel ses (sayfadan çıkınca durur; PodcastPlayer).
  *    Yerel ses çalmaya başlayınca global ses duraklatılır.
+ *  V3 (T5-ses): bölüm çentikleri + ⏮⏭ bölüm + bölüm listesi; uyku zamanlayıcısı menüsü (15/30/45 dk, bölüm sonu);
+ *  "İndir" (tüm parçalar hazır olunca tek dosya); hız tek kaynaktan (lib/audio SPEEDS, `audio.speed`).
  */
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Play, Pause, RotateCcw, RotateCw, Gauge, Loader2 } from "lucide-react";
+import { Play, Pause, RotateCcw, RotateCw, Gauge, Loader2, SkipBack, SkipForward, Moon, Download, List, Check } from "lucide-react";
 import { useAudioQueue, useMediaSession, useQueueAutostart, type AudioQueue, type QueueChunk } from "@/hooks/useAudioQueue";
 import { useAudioPlayback, useAudioPlaybackOptional, useAudioSession } from "@/components/audio/AudioProvider";
 import { API, getToken } from "@/lib/api";
+import { SPEEDS, loadSpeed, saveSpeed, SLEEP_OPTIONS, downloadChunks, type SleepMode } from "@/lib/audio";
 
-export const SPEEDS = [0.8, 1, 1.15, 1.3, 1.5];
+export { SPEEDS };
 export const SKIP = 15;   // saniye
 
 export function fmt(s: number) {
@@ -91,11 +94,9 @@ function GlobalPlayer({ showText = true }: { showText?: boolean }) {
 /** Yerel ses (bu bileşenle yaşar). */
 function LocalPlayer({ chunks, total, title, subtitle, artwork, storageKey, autoPlay, showText = true,
                        syncDocId, note, preparingEta }: LocalPlayerProps) {
-  const [speed, setSpeed] = useState<number>(() => {
-    try { return parseFloat(localStorage.getItem("lecture.speed") || "1") || 1; } catch { return 1; }
-  });
+  const [speed, setSpeed] = useState<number>(() => loadSpeed());
   const q = useAudioQueue(chunks, { rate: speed, storageKey });
-  useEffect(() => { try { localStorage.setItem("lecture.speed", String(speed)); } catch {} }, [speed]);
+  useEffect(() => { saveSpeed(speed); }, [speed]);
   useQueueAutostart(q, storageKey, storageKey, autoPlay);
   useMediaSession(q, useMemo(() => ({ title, subtitle, artwork }), [title, subtitle, artwork]), speed);
   // Aynı anda iki ses çalmasın: yerel ses başlayınca kalıcı sesi duraklat
@@ -114,9 +115,24 @@ function PlayerView({ q, chunks, total, title, subtitle, artwork, speed, setSpee
   speed: number; setSpeed: (n: number) => void;
   showText: boolean; syncDocId?: string; note?: string; preparingEta?: number;
 }) {
-  const { index, chunkTime, time, total: dur, allKnown, durations, playing, waiting, blocked, firstReady } = q;
+  const { index, chunkTime, time, total: dur, allKnown, durations, playing, waiting, blocked, firstReady,
+          chapters, chapterIndex, sleep, setSleep } = q;
   const readyN = chunks.filter((c) => !!c.url).length;
   const totalN = total;
+  const allReady = readyN >= totalN && readyN === chunks.length && chunks.length > 0;
+  const [menu, setMenu] = useState<"" | "sleep" | "chapters">("");
+  const [dl, setDl] = useState<"" | "busy" | "err">("");
+  const [sleepLeft, setSleepLeft] = useState("");
+  useEffect(() => {
+    if (!sleep.endsAt) { setSleepLeft(sleep.mode === "chapter" ? "bölüm sonunda" : ""); return; }
+    const tick = () => { const s = Math.max(0, Math.round(((sleep.endsAt || 0) - Date.now()) / 1000)); setSleepLeft(fmt(s)); };
+    tick(); const t = setInterval(tick, 1000); return () => clearInterval(t);
+  }, [sleep.endsAt, sleep.mode]);
+  async function download() {
+    setDl("busy");
+    try { const ok = await downloadChunks(chunks, title, "Bearer " + (getToken() || "")); setDl(ok ? "" : "err"); }
+    catch { setDl("err"); }
+  }
 
   // Konumu sunucuya yaz (cihazlar arası): 5 sn'de bir, değiştiyse
   const lastSync = useRef(0);
@@ -194,17 +210,25 @@ function PlayerView({ q, chunks, total, title, subtitle, artwork, speed, setSpee
              const r = (e.currentTarget as HTMLDivElement).getBoundingClientRect();
              const p = (e.clientX - r.left) / r.width; if (dur > 0) { q.unlock(); q.seek(p * dur); }
            }}>
-        <div className="h-2 w-full overflow-hidden rounded-full bg-surface-muted">
+        <div className="relative h-2 w-full overflow-hidden rounded-full bg-surface-muted">
           <div className="h-full rounded-full bg-accent-purple transition-[width]" style={{ width: pct + "%" }} />
+          {/* bölüm çentikleri */}
+          {dur > 0 && chapters.slice(1).map((c, i) => (
+            <span key={i} aria-hidden className="absolute top-0 h-full w-px bg-surface/80" style={{ left: `${Math.min(99.5, (c.start / dur) * 100)}%` }} />
+          ))}
         </div>
         <div className="mt-1 flex justify-between text-xs text-text-secondary">
           <span>{fmt(time)}</span><span>{allKnown ? "" : "~"}-{fmt(Math.max(0, dur - time))}</span>
         </div>
       </div>
 
-      <div className="mt-3 flex items-center justify-center gap-2 sm:gap-3">
+      <div className="mt-3 flex items-center justify-center gap-1.5 sm:gap-3">
         <button onClick={nextSpeed} title="Oynatma hızı" aria-label={`Oynatma hızı ${speed}×, değiştir`} className="flex min-h-[40px] w-14 items-center justify-center gap-1 rounded-lg border px-2 py-1.5 text-xs text-text-secondary hover:border-accent-purple/50">
           <Gauge size={13} /> {speed}×
+        </button>
+        <button onClick={() => { q.unlock(); q.prevChapter(); }} disabled={chapters.length < 2} aria-label="Önceki bölüm" title="Önceki bölüm"
+                className="flex h-10 w-10 items-center justify-center rounded-xl border text-text-secondary hover:border-accent-purple/50 hover:bg-surface-muted disabled:opacity-40">
+          <SkipBack size={16} />
         </button>
         <button onClick={() => { q.unlock(); q.skip(-SKIP); }} aria-label={`${SKIP} saniye geri`} title={`${SKIP} sn geri (←)`}
                 className="flex min-h-[40px] items-center gap-1 rounded-xl border px-3 py-2 text-sm hover:border-accent-purple/50 hover:bg-surface-muted">
@@ -219,8 +243,64 @@ function PlayerView({ q, chunks, total, title, subtitle, artwork, speed, setSpee
                 className="flex min-h-[40px] items-center gap-1 rounded-xl border px-3 py-2 text-sm hover:border-accent-purple/50 hover:bg-surface-muted">
           <span className="text-xs text-text-secondary">sn</span><span className="font-semibold">{SKIP}</span><RotateCw size={18} />
         </button>
-        <span className="w-14" />
+        <button onClick={() => { q.unlock(); q.nextChapter(); }} disabled={chapters.length < 2} aria-label="Sonraki bölüm" title="Sonraki bölüm"
+                className="flex h-10 w-10 items-center justify-center rounded-xl border text-text-secondary hover:border-accent-purple/50 hover:bg-surface-muted disabled:opacity-40">
+          <SkipForward size={16} />
+        </button>
+        <button onClick={() => setMenu(menu === "sleep" ? "" : "sleep")} aria-expanded={menu === "sleep"} aria-haspopup="menu"
+                title="Uyku zamanlayıcısı" aria-label={sleep.mode === "off" ? "Uyku zamanlayıcısı" : `Uyku zamanlayıcısı açık: ${sleepLeft}`}
+                className={"flex min-h-[40px] w-14 items-center justify-center gap-1 rounded-lg border px-2 py-1.5 text-xs hover:border-accent-purple/50 " +
+                  (sleep.mode !== "off" ? "border-accent-purple text-accent-purple" : "text-text-secondary")}>
+          <Moon size={13} /> {sleep.mode !== "off" && sleep.endsAt ? sleepLeft : ""}
+        </button>
       </div>
+
+      {/* Bölüm adı + liste / indir */}
+      <div className="mt-2 flex items-center justify-between gap-2 text-xs text-text-secondary">
+        <button onClick={() => setMenu(menu === "chapters" ? "" : "chapters")} disabled={chapters.length === 0} aria-expanded={menu === "chapters"}
+                className="flex min-h-[32px] min-w-0 items-center gap-1 rounded-lg px-2 hover:bg-surface-muted disabled:opacity-50">
+          <List size={13} />
+          <span className="truncate">{chapters.length ? `Bölüm ${Math.max(1, chapterIndex + 1)}/${chapters.length}${chapterIndex >= 0 ? " · " + chapters[chapterIndex].title : ""}` : "Bölümler hazırlanıyor"}</span>
+        </button>
+        <button onClick={download} disabled={!allReady || dl === "busy"} title={allReady ? "Sesi tek dosya olarak indir (çevrimdışı dinle)" : "Tüm parçalar hazır olunca indirilebilir"}
+                aria-label="Sesi indir" className="flex min-h-[32px] shrink-0 items-center gap-1 rounded-lg px-2 hover:bg-surface-muted disabled:opacity-50">
+          {dl === "busy" ? <Loader2 size={13} className="animate-spin" /> : <Download size={13} />} {dl === "err" ? "İndirilemedi" : "İndir"}
+        </button>
+      </div>
+
+      {menu === "sleep" && (
+        <div role="menu" aria-label="Uyku zamanlayıcısı" className="mt-2 flex flex-wrap items-center gap-1.5 rounded-xl border bg-surface-muted/40 p-2 text-xs">
+          <span className="mr-1 text-text-secondary">Uyku:</span>
+          {SLEEP_OPTIONS.map((o) => (
+            <button key={o.id} role="menuitemradio" aria-checked={sleep.mode === o.id}
+                    onClick={() => { setSleep(o.id as SleepMode); setMenu(""); }}
+                    className={"flex min-h-[36px] items-center gap-1 rounded-lg border px-2.5 " +
+                      (sleep.mode === o.id ? "border-accent-purple bg-accent-purple/10 font-semibold text-text-primary" : "hover:bg-black/5")}>
+              {sleep.mode === o.id && <Check size={12} />}{o.label}
+            </button>
+          ))}
+          <span className="ml-1 text-text-secondary">Süre dolunca ses yavaşça kısılır, otuz saniye geri alınır.</span>
+        </div>
+      )}
+
+      {menu === "chapters" && chapters.length > 0 && (
+        <ol aria-label="Bölümler" className="mt-2 max-h-48 overflow-y-auto rounded-xl border bg-surface-muted/40 p-1 text-sm">
+          {chapters.map((c, i) => {
+            const ready = !!chunks[c.chunk]?.url;
+            return (
+              <li key={i}>
+                <button disabled={!ready} onClick={() => { q.unlock(); q.seekChapter(i); setMenu(""); }}
+                        className={"flex w-full min-h-[40px] items-center gap-2 rounded-lg px-2 text-left hover:bg-black/5 disabled:opacity-50 " +
+                          (i === chapterIndex ? "bg-accent-purple/10 font-medium" : "")}>
+                  <span className="w-6 shrink-0 text-xs text-text-secondary">{i + 1}</span>
+                  <span className="min-w-0 flex-1 truncate">{c.title}</span>
+                  <span className="shrink-0 text-xs text-text-secondary">{fmt(c.start)}</span>
+                </button>
+              </li>
+            );
+          })}
+        </ol>
+      )}
 
       {(statusLine || note || blocked) && (
         <p role="status" className="mt-3 text-center text-xs text-text-secondary">

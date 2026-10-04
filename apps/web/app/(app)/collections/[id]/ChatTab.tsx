@@ -1,25 +1,34 @@
 "use client";
 /**
- * Defter sohbeti: kaynaklarin tamaminda atifli cevap. Sohbetler sunucuda saklanir;
- * acik sohbet adreste (&chat=) tutulur, geri tusuyla ayni sohbete donulur.
+ * Defter "Sor" sekmesi (Sor v3): kaynaklarin tamaminda, ders gibi uzun ve atifli cevap.
+ *  - Ustte derinlik secici (Kısa · Ayrıntılı · Derin ⚡2; varsayilan Ayrıntılı, localStorage)
+ *  - Hazir sorular: Kaynakları karşılaştır (≥2 kaynak) · Ana fikirleri çıkar · Örnekle
+ *  - Cevap SSE ile akar (POST /collections/{id}/ask/stream); eski /ask ucu sunucuda duruyor
+ *  - Cevabin altinda: Sesli dinle (typdf:listen), Çalışma notuna ekle (POST /collections/{id}/draft/blocks),
+ *    Kopyala; devam sorulari ayri alanda; "Sorunu şöyle anladım: …" gri satiri (tiklayinca duzeltme)
+ * Sohbetler sunucuda saklanir; acik sohbet adreste (&chat=) tutulur, geri tusuyla ayni sohbete donulur.
  */
 import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
-import { Loader2, Send, Plus, X, Trash2, Sparkles, RefreshCw, PenLine, Scale, Copy, Check, MessageSquare, RotateCcw } from "lucide-react";
+import { Loader2, Send, Plus, X, Trash2, Sparkles, RefreshCw, MessageSquare, RotateCcw } from "lucide-react";
 import { api, API, getToken, errorMessage } from "@/lib/api";
 import { docHref } from "@/lib/links";
-import { mdToPlain } from "@/lib/markdown";
 import CitedText, { citeLoc } from "@/components/CitedText";
 import SourceIcon, { sourceTint } from "@/components/SourceIcon";
 import { Cost, costTitle, ErrNote, Err, toErr } from "@/components/CostBadge";
 import { toast } from "@/components/Toast";
+import { streamSse, type ChatError } from "@/hooks/useChatStream";
+import DepthPicker from "@/components/chat/DepthPicker";
+import { AnswerActions, Understood, Followups, type AddState } from "@/components/chat/AnswerExtras";
+import { type Depth, loadDepth, saveDepth, depthCost, quickQuestions } from "@/components/chat/depth";
 
 /** Sohbet silme 10 sn ertelenir ("Geri al" icin); sekmeden cikilsa da zamanlayici calisir. */
 const UNDO_MS = 10000;
 
 export type SGroup = { kind: string; label: string; questions: { q: string; why: string }[] };
 export type Sugg = { theme: string; groups: SGroup[]; source: string };
-export type Turn = { q: string; answer: string; sources: any[]; followups?: string[]; cached?: boolean; cachedQ?: string };
+export type Turn = { q: string; answer: string; sources: any[]; followups?: string[]; cached?: boolean; cachedQ?: string;
+  rewritten?: string | null; depth?: Depth };
 
 const cx = (...a: (string | false | null | undefined)[]) => a.filter(Boolean).join(" ");
 const scrollTop = () => {
@@ -29,36 +38,43 @@ const scrollTop = () => {
 
 function toThread(msgs: any[]): Turn[] {
   return (msgs || []).map((m: any) => ({ q: m.q, answer: m.answer || "", sources: m.sources || [],
-    followups: m.followups || [], cached: !!m.cached, cachedQ: m.cached_question }));
+    followups: m.followups || [], cached: !!m.cached, cachedQ: m.cached_question, rewritten: m.rewritten_question || null,
+    depth: m.depth }));
 }
 
 export default function ChatTab({ id, colTitle, readyN, active, chatId, setChatUrl, sugg, suggBusy, loadSuggestions,
-  pendingAsk, onPendingDone, prefill, onPrefillDone, onToDraft, onCompare, onAsked }: {
+  pendingAsk, onPendingDone, prefill, onPrefillDone, onAsked }: {
   id: string; colTitle: string; readyN: number; active: boolean;
   chatId: string | null; setChatUrl: (cid: string | null) => void;
   sugg: Sugg | null; suggBusy: boolean; loadSuggestions: (refresh?: boolean) => void;
   pendingAsk: string | null; onPendingDone: () => void;
   /** Soru kutusuna on-dolgu (okuyucudan "Tüm deftere sor", ?q=); sorulmaz, sen gonderirsin */
   prefill?: string | null; onPrefillDone?: () => void;
-  onToDraft: (t: Turn) => void; onCompare: (q: string) => void; onAsked: () => void;
+  /** Eski: cevabi taslaga ekleme/karsilastirma sayfadan geliyordu; artik sekme kendi yapar (uyumluluk icin kalir). */
+  onToDraft?: (t: Turn) => void; onCompare?: (q: string) => void; onAsked: () => void;
 }) {
   const router = useRouter();
   const [q, setQ] = useState("");
   const [asking, setAsking] = useState(false);
+  const [live, setLive] = useState<{ q: string; text: string; rewritten: string | null } | null>(null);
   const [askErr, setAskErr] = useState<(NonNullable<Err> & { q: string }) | null>(null);
   const [thread, setThread] = useState<Turn[]>([]);
   const [chats, setChats] = useState<{ id: string; title: string; updated_at: string; n: number }[] | null>(null);
   const [chatsOpen, setChatsOpen] = useState(false);
   const [suggOpen, setSuggOpen] = useState(true);
   const [openSrc, setOpenSrc] = useState<Record<number, boolean>>({});
-  const [copiedIdx, setCopiedIdx] = useState<number | null>(null);
+  const [addState, setAddState] = useState<Record<number, AddState>>({});
+  const [depth, setDepth] = useState<Depth>("ayrintili");
   const [announce, setAnnounce] = useState("");
   const current = useRef<string | null>(null);     // ekranda acik olan sohbet
   const inited = useRef(false);
   const inputRef = useRef<HTMLInputElement>(null);
+  const liveRef = useRef<HTMLDivElement>(null);
   // H-6: silinmesi bekleyen sohbetler (10 sn "Geri al"); listeden hemen gizlenir, sunucuya sonra gider
   const pendingDel = useRef(new Map<string, ReturnType<typeof setTimeout>>());
   const [hidden, setHidden] = useState<Set<string>>(new Set());
+  useEffect(() => { setDepth(loadDepth()); }, []);
+  const changeDepth = (d: Depth) => { setDepth(d); saveDepth(d); };
 
   async function loadChats(openLatest = false) {
     try {
@@ -74,14 +90,14 @@ export default function ChatTab({ id, colTitle, readyN, active, chatId, setChatU
     try {
       const r = await api(`/collections/${id}/chats/${cid}`, {}, 1);
       setThread(toThread(r.messages)); current.current = cid; setChatUrl(cid);
-      setChatsOpen(false); setSuggOpen(false); setAskErr(null);
+      setChatsOpen(false); setSuggOpen(false); setAskErr(null); setAddState({});
     } catch (e) {
       if (current.current === cid) current.current = null;
       toast.error(errorMessage(e, "Sohbet açılamadı; bağlantını kontrol edip tekrar dene."));
     }
   }
   function newChat() {
-    setThread([]); current.current = null; setChatUrl(null); setChatsOpen(false); setSuggOpen(true); setAskErr(null);
+    setThread([]); current.current = null; setChatUrl(null); setChatsOpen(false); setSuggOpen(true); setAskErr(null); setAddState({});
   }
   async function commitDelete(cid: string) {
     pendingDel.current.delete(cid);
@@ -167,52 +183,94 @@ export default function ChatTab({ id, colTitle, readyN, active, chatId, setChatU
     return () => window.removeEventListener("keydown", onKey);
   }, [chatsOpen]);
 
+  // Akan cevap ekranda kalsin
+  useEffect(() => {
+    if (!live?.text) return;
+    const reduce = window.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
+    liveRef.current?.scrollIntoView({ behavior: reduce ? "auto" : "smooth", block: "end" });
+  }, [live?.text]);
+
   async function ask(text?: string, fresh = false) {
     const question = (text ?? q).trim();
     if (question.length < 3 || asking) return;
     setAsking(true); setQ(""); setSuggOpen(false); setAskErr(null); setAnnounce("Kaynaklar taranıyor…");
-    try {
-      const r = await api(`/collections/${id}/ask`, { method: "POST", body: JSON.stringify({ question, fresh, chat_id: current.current }) }, 1);
-      let fu: string[] = (r.followups || []).map((s: string) => s.replace(/\s*\[K\s*\d+(?:\s*[,;]\s*K?\s*\d+)*\]/g, "").trim()).filter(Boolean);
-      if (!fu.length && sugg?.groups?.length) {
-        // Devam sorusu gelmediyse: henuz sorulmamis onerilerden 3 tane (ek maliyet yok)
-        const asked = new Set([...thread.map((x) => x.q), question]);
-        fu = sugg.groups.flatMap((g) => g.questions.map((x) => x.q)).filter((x) => !asked.has(x)).slice(0, 3);
-      }
-      if (r.chat_id && r.chat_id !== current.current) { current.current = r.chat_id; setChatUrl(r.chat_id); loadChats(); }
-      const item: Turn = { q: question, answer: r.answer, sources: r.sources || [], followups: fu, cached: !!r.cached, cachedQ: r.cached_question };
-      setThread((t) => fresh && t.length && t[t.length - 1].q === question ? [...t.slice(0, -1), item] : [...t, item]);
-      setAnnounce("Cevap geldi.");
-      onAsked();
-    } catch (e) {
+    setLive({ q: question, text: "", rewritten: null });
+    let full = "", sources: any[] = [], followups: string[] = [], rewritten: string | null = null;
+    let cached = false, cachedQ: string | undefined, chat: string | null = null;
+    const err: ChatError | null = await streamSse(`${API}/collections/${id}/ask/stream?token=${getToken() || ""}`,
+      { question, fresh, chat_id: current.current, depth }, {
+        onToken: (t) => { full += t; setLive((l) => (l ? { ...l, text: full } : l)); },
+        onEvent: (type, data) => {
+          if (type === "meta") { rewritten = data.rewritten_question || null; setLive((l) => (l ? { ...l, rewritten } : l)); }
+          else if (type === "sources") sources = Array.isArray(data.items) ? data.items : [];
+          else if (type === "followups") followups = Array.isArray(data.items) ? data.items : [];
+          else if (type === "done") { cached = !!data.cached; cachedQ = data.cached_question || undefined; chat = data.chat_id || null; }
+        },
+      });
+    setLive(null);
+    if (err || !full.trim()) {
       // Hata cevap balonu olarak gosterilmez; soru kutuya geri konur, "Tekrar dene" sunulur.
-      const er = toErr(e, "Cevap alınamadı; birazdan tekrar dene.");
+      const er = toErr(err ? { message: err.message, code: err.code } : null, "Cevap alınamadı; birazdan tekrar dene.");
       if (er) setAskErr({ ...er, q: question });
       setQ((cur) => cur || question);
       setAnnounce(er?.text || "");
-    } finally { setAsking(false); }
+      setAsking(false);
+      return;
+    }
+    let fu = followups.map((s) => s.replace(/\s*\[K\s*\d+(?:\s*s\.\s*\d+)?(?:\s*[,;]\s*K?\s*\d+(?:\s*s\.\s*\d+)?)*\]/g, "").trim()).filter(Boolean);
+    if (!fu.length && sugg?.groups?.length) {
+      // Devam sorusu gelmediyse: henuz sorulmamis onerilerden 3 tane (ek maliyet yok)
+      const asked = new Set([...thread.map((x) => x.q), question]);
+      fu = sugg.groups.flatMap((g) => g.questions.map((x) => x.q)).filter((x) => !asked.has(x)).slice(0, 3);
+    }
+    if (chat && chat !== current.current) { current.current = chat; setChatUrl(chat); loadChats(); }
+    const item: Turn = { q: question, answer: full, sources, followups: fu, cached, cachedQ, rewritten, depth };
+    setThread((t) => fresh && t.length && t[t.length - 1].q === question ? [...t.slice(0, -1), item] : [...t, item]);
+    setAnnounce("Cevap geldi.");
+    setAsking(false);
+    onAsked();
+  }
+
+  /** Cevabi defterin Çalışma notuna ekler (mevcut taslagin sonuna; ucretsiz). */
+  async function addToNote(i: number, t: Turn) {
+    if (addState[i] === "busy" || addState[i] === "done" || !t.answer.trim()) return;
+    setAddState((s) => ({ ...s, [i]: "busy" }));
+    try {
+      await api(`/collections/${id}/draft/blocks`, { method: "POST", body: JSON.stringify({ blocks: [{ type: "answer", q: t.q, text: t.answer.trim(),
+        sources: (t.sources || []).map((s: any) => ({ title: s.title, page: s.page ?? null, document_id: s.document_id })) }] }) }, 1);
+      setAddState((s) => ({ ...s, [i]: "done" }));
+      toast("Çalışma notuna eklendi", { action: { label: "Notu aç", run: () => router.push(`/collections/${id}?tab=taslak`) } });
+    } catch (e) {
+      setAddState((s) => ({ ...s, [i]: "idle" }));
+      toast.error(errorMessage(e, "Çalışma notuna eklenemedi. Birkaç saniye sonra tekrar dene."));
+    }
   }
 
   const firstQ = sugg?.groups?.[0]?.questions?.[0]?.q || "";
   const hasSugg = !!sugg?.groups?.length;
   const current_title = current.current ? (chats?.find((c) => c.id === current.current)?.title || "Bu sohbet") : "Yeni sohbet";
+  const quick = quickQuestions({ multi: readyN >= 2, scope: "defter" });
+  const cost = depthCost(depth);
 
   return (
     <div className="max-w-3xl">
       <p aria-live="polite" className="sr-only">{announce}</p>
-      {/* Sohbet gecmisi */}
-      <div className="relative mb-3 flex items-center gap-2">
+      {/* Sohbet gecmisi + derinlik */}
+      <div className="relative mb-3 flex flex-wrap items-center gap-2">
         <button onClick={() => { setChatsOpen((o) => !o); if (!chatsOpen) loadChats(); }} aria-expanded={chatsOpen} aria-haspopup="listbox"
-                className="flex min-h-[40px] min-w-0 items-center gap-1.5 rounded-lg border bg-surface px-3 text-sm hover:border-accent-purple/40">
+                className="flex min-h-[44px] min-w-0 items-center gap-1.5 rounded-lg border bg-surface px-3 text-sm hover:border-accent-purple/40">
           <MessageSquare size={14} className="shrink-0 text-accent-purple" />
           <span className="truncate">{current_title}</span>
           <span className="shrink-0 text-xs text-text-secondary">· {(chats || []).filter((c) => !hidden.has(c.id)).length} kayıtlı</span>
         </button>
         {thread.length > 0 && (
-          <button onClick={newChat} className="flex min-h-[40px] shrink-0 items-center gap-1 rounded-lg px-2.5 text-sm text-accent-purple hover:bg-accent-purple/10">
+          <button onClick={newChat} className="flex min-h-[44px] shrink-0 items-center gap-1 rounded-lg px-2.5 text-sm text-accent-purple hover:bg-accent-purple/10">
             <Plus size={14} /> Yeni sohbet
           </button>
         )}
+        <div className="ml-auto w-full sm:w-auto sm:min-w-[300px]">
+          <DepthPicker value={depth} onChange={changeDepth} compact disabled={asking} />
+        </div>
         {chatsOpen && (
           <div className="absolute left-0 top-full z-20 mt-1 max-h-80 w-full max-w-md overflow-y-auto rounded-xl border bg-surface p-1.5 shadow-lg">
             {!chats?.length ? (
@@ -220,14 +278,14 @@ export default function ChatTab({ id, colTitle, readyN, active, chatId, setChatU
             ) : chats.filter((c) => !hidden.has(c.id)).map((c) => (
               <div key={c.id} className={cx("group flex items-center gap-2 rounded-lg px-2.5 py-1 text-sm hover:bg-surface-muted",
                                               c.id === current.current && "bg-surface-muted font-medium")}>
-                <button onClick={() => openChat(c.id)} className="min-h-[40px] min-w-0 flex-1 text-left">
+                <button onClick={() => openChat(c.id)} className="min-h-[44px] min-w-0 flex-1 text-left">
                   <span className="block truncate">{c.title || "Sohbet"}</span>
                   <span className="block text-xs text-text-secondary">
                     {c.n} soru · {new Date(c.updated_at).toLocaleString("tr-TR", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" })}
                   </span>
                 </button>
                 <button onClick={() => deleteChat(c.id)} aria-label={`Sohbeti sil: ${c.title || "Sohbet"}`} title="Sohbeti sil"
-                        className="flex h-10 w-10 shrink-0 items-center justify-center rounded-md text-text-secondary transition hover:text-danger md:opacity-0 md:group-hover:opacity-100 md:group-focus-within:opacity-100 md:focus-visible:opacity-100 [@media(hover:none)]:opacity-100">
+                        className="flex h-11 w-11 shrink-0 items-center justify-center rounded-md text-text-secondary transition hover:text-danger md:opacity-0 md:group-hover:opacity-100 md:group-focus-within:opacity-100 md:focus-visible:opacity-100 [@media(hover:none)]:opacity-100">
                   <Trash2 size={15} />
                 </button>
               </div>
@@ -238,10 +296,20 @@ export default function ChatTab({ id, colTitle, readyN, active, chatId, setChatU
 
       {thread.length === 0 && !asking && (
         <p className="mb-3 text-sm text-text-secondary">
-          Soru sor; <b>{colTitle}</b> defterindeki {readyN} hazır kaynağın tamamında arayıp atıflı cevaplayayım.
-          Beğendiğin cevabı tek dokunuşla taslağa alırsın.
+          Soru sor; <b>{colTitle}</b> defterindeki {readyN} hazır kaynağın tamamında arayıp ders gibi, atıflı anlatayım.
+          Beğendiğin cevabı tek dokunuşla çalışma notuna alırsın.
         </p>
       )}
+
+      {/* Hazir sorular: her zaman tek satir */}
+      <div className="mb-3 flex flex-wrap gap-1.5" role="group" aria-label="Hazır sorular">
+        {quick.map((s) => (
+          <button key={s.label} type="button" onClick={() => ask(s.q)} disabled={asking} title={s.q}
+                  className="flex min-h-[44px] items-center gap-1 rounded-full border bg-surface px-3 text-sm text-text-secondary hover:border-accent-purple/50 hover:text-accent-purple disabled:opacity-60">
+            <Sparkles size={12} className="text-accent-purple" aria-hidden /> {s.label}
+          </button>
+        ))}
+      </div>
 
       {/* Yonlendirici sorular: bos sohbette acik, sonra katlanir */}
       {(thread.length === 0 || suggOpen) && (hasSugg || suggBusy || sugg?.source === "sablon") && (
@@ -253,7 +321,7 @@ export default function ChatTab({ id, colTitle, readyN, active, chatId, setChatU
             </div>
             {thread.length > 0 && (
               <button onClick={() => setSuggOpen(false)} aria-label="Soru önerilerini kapat"
-                      className="flex h-9 w-9 items-center justify-center rounded-md text-text-secondary hover:bg-surface-muted"><X size={15} /></button>
+                      className="flex h-11 w-11 items-center justify-center rounded-md text-text-secondary hover:bg-surface-muted"><X size={15} /></button>
             )}
           </div>
           {suggBusy && !hasSugg ? (
@@ -269,7 +337,7 @@ export default function ChatTab({ id, colTitle, readyN, active, chatId, setChatU
                   <div className="flex flex-col gap-1.5">
                     {g.questions.map((s, k) => (
                       <button key={k} onClick={() => ask(s.q)} disabled={asking} title={s.why}
-                              className="group flex min-h-[40px] items-start gap-2 rounded-xl border bg-surface px-3 py-2 text-left text-sm transition hover:border-accent-purple/50 hover:bg-accent-purple/5 disabled:opacity-60">
+                              className="group flex min-h-[44px] items-start gap-2 rounded-xl border bg-surface px-3 py-2 text-left text-sm transition hover:border-accent-purple/50 hover:bg-accent-purple/5 disabled:opacity-60">
                         <Send size={12} className="mt-1 shrink-0 text-text-secondary group-hover:text-accent-purple" />
                         <span className="min-w-0 flex-1">
                           {s.q}
@@ -286,10 +354,10 @@ export default function ChatTab({ id, colTitle, readyN, active, chatId, setChatU
             {sugg?.source === "sablon" ? (
               <span>Yapay zekâ şu an yoğun; genel örnek sorular gösteriliyor.</span>
             ) : (
-              <span>Kaynak özetlerinden üretildi · her yeni soru 1 kullanım harcar, kayıtlı cevaplar ücretsiz</span>
+              <span>Kaynak özetlerinden üretildi · her yeni soru {cost} kullanım harcar, kayıtlı cevaplar ücretsiz</span>
             )}
             <button onClick={() => loadSuggestions(true)} disabled={suggBusy} title={costTitle(1)}
-                    className="ml-auto flex min-h-[36px] items-center gap-1 rounded-md px-2 hover:bg-surface-muted disabled:opacity-60">
+                    className="ml-auto flex min-h-[44px] items-center gap-1 rounded-md px-2 hover:bg-surface-muted disabled:opacity-60">
               {suggBusy ? <Loader2 size={12} className="animate-spin" /> : <RefreshCw size={12} />} Başka öneriler <Cost n={1} />
             </button>
           </div>
@@ -307,9 +375,9 @@ export default function ChatTab({ id, colTitle, readyN, active, chatId, setChatU
                 <div className="mb-2.5 flex flex-wrap items-center gap-2 rounded-full bg-green-500/10 px-3 py-1 text-xs text-green-800 dark:text-green-300">
                   <span>Kayıtlı cevap · ücretsiz{t.cachedQ && t.cachedQ !== t.q ? ` · benzer soru: “${t.cachedQ}”` : ""}</span>
                   {i === thread.length - 1 && (
-                    <button onClick={() => ask(t.q, true)} disabled={asking} title={costTitle(1)}
-                            className="ml-auto flex min-h-[32px] items-center rounded-md border border-green-700/30 px-2 hover:bg-green-500/10 disabled:opacity-60">
-                      Yeniden sor <Cost n={1} />
+                    <button onClick={() => ask(t.q, true)} disabled={asking} title={costTitle(cost)}
+                            className="ml-auto flex min-h-[36px] items-center rounded-md border border-green-700/30 px-2 hover:bg-green-500/10 disabled:opacity-60">
+                      Yeniden sor <Cost n={cost} />
                     </button>
                   )}
                 </div>
@@ -324,7 +392,7 @@ export default function ChatTab({ id, colTitle, readyN, active, chatId, setChatU
                   return (
                     <div className="w-full">
                       <button onClick={() => setOpenSrc((o) => ({ ...o, [i]: !open }))} aria-expanded={open}
-                              className="flex min-h-[40px] w-full items-center gap-2.5 rounded-lg py-1 text-left text-xs text-text-secondary hover:text-text-primary">
+                              className="flex min-h-[44px] w-full items-center gap-2.5 rounded-lg py-1 text-left text-xs text-text-secondary hover:text-text-primary">
                         <span className="flex" aria-hidden>
                           {uniq.slice(0, 4).map((s: any, j: number) => (
                             <span key={j} className={cx("flex h-6 w-6 items-center justify-center rounded-full border-2 border-surface", sourceTint(s.kind), j > 0 && "-ml-1.5")}>
@@ -352,46 +420,45 @@ export default function ChatTab({ id, colTitle, readyN, active, chatId, setChatU
                     </div>
                   );
                 })()}
-                <span className="ml-auto flex flex-wrap gap-1.5">
-                  <button onClick={() => onToDraft(t)}
-                          className="flex min-h-[36px] items-center gap-1 rounded-full border border-accent-purple/40 bg-accent-purple/5 px-3 text-xs font-medium text-text-primary hover:bg-accent-purple/10">
-                    <PenLine size={12} /> Taslağa ekle
-                  </button>
-                  {readyN >= 2 && (
-                    <button onClick={() => onCompare(t.q)}
-                            className="flex min-h-[36px] items-center gap-1 rounded-full border px-3 text-xs text-text-secondary hover:border-accent-purple/40 hover:text-accent-purple">
-                      <Scale size={12} /> Karşılaştır
-                    </button>
-                  )}
-                  <button onClick={async () => { try { await navigator.clipboard.writeText(mdToPlain(t.answer, () => "").replace(/[ \t]+([.,;:!?])/g, "$1").trim()); setCopiedIdx(i); setTimeout(() => setCopiedIdx(null), 1500); } catch { toast.error("Panoya kopyalanamadı; metni seçip kopyalayabilirsin."); } }}
-                          className="flex min-h-[36px] items-center gap-1 rounded-full border px-3 text-xs text-text-secondary hover:border-accent-purple/40 hover:text-accent-purple">
-                    {copiedIdx === i ? <Check size={12} /> : <Copy size={12} />} {copiedIdx === i ? "Kopyalandı" : "Kopyala"}
-                  </button>
-                </span>
+                <div className="w-full">
+                  <AnswerActions text={t.answer} title={`${colTitle}: ${t.q.slice(0, 60)}`}
+                                 onAddNote={() => addToNote(i, t)} addState={addState[i] || "idle"} />
+                </div>
               </div>
             </div>
-            {/* Devam sorulari: ayni cevapla gelir */}
-            {!!t.followups?.length && i === thread.length - 1 && (
-              <div className="mt-2 flex flex-col gap-1.5 pl-1">
-                <p className="text-xs font-medium uppercase tracking-wide text-text-secondary">Daha derine in</p>
-                {t.followups.map((f, k) => (
-                  <button key={k} onClick={() => ask(f)} disabled={asking}
-                          className="group flex min-h-[40px] items-start gap-2 self-start rounded-xl border border-dashed bg-surface px-3 py-1.5 text-left text-sm text-text-secondary transition hover:border-accent-purple/50 hover:text-text-primary disabled:opacity-60">
-                    <Send size={12} className="mt-1 shrink-0 group-hover:text-accent-purple" /> {f}
-                  </button>
-                ))}
-              </div>
+            {i === thread.length - 1 && (
+              <>
+                <Understood question={t.q} rewritten={t.rewritten} disabled={asking} onCorrect={(fixed) => ask(fixed, true)} />
+                <Followups items={t.followups || []} onAsk={(f) => ask(f)} disabled={asking} />
+              </>
             )}
           </div>
         ))}
-        {asking && <p className="flex items-center gap-2 text-sm text-text-secondary"><Loader2 size={14} className="animate-spin" /> Kaynaklar taranıyor…</p>}
+        {live && (
+          <div ref={liveRef} className="fade-in">
+            <div className="mb-2 flex justify-end">
+              <p className="max-w-[85%] rounded-2xl rounded-br-md border bg-surface px-3.5 py-2 text-sm">{live.q}</p>
+            </div>
+            <div className="rounded-2xl border bg-surface p-4 md:p-5">
+              {live.text ? (
+                <CitedText text={live.text} sources={[]} className="font-reading" onCite={() => {}} />
+              ) : (
+                <p className="flex items-center gap-2 text-sm text-text-secondary">
+                  <Loader2 size={14} className="animate-spin" />
+                  {live.rewritten ? <>Sorunu şöyle anladım: <i>“{live.rewritten}”</i> — kaynaklar taranıyor…</> : "Sorunu anlıyorum, kaynaklar taranıyor…"}
+                </p>
+              )}
+              {live.text && <p className="mt-2 flex items-center gap-1.5 text-xs text-text-secondary"><Loader2 size={12} className="animate-spin" /> Yazıyor…</p>}
+            </div>
+          </div>
+        )}
         {askErr && !asking && (
           <div className="rounded-xl border border-dashed p-3">
             <ErrNote err={askErr} />
             {!askErr.limit && (
-              <button onClick={() => ask(askErr.q)} title={costTitle(1)}
-                      className="mt-2 flex min-h-[40px] items-center gap-1.5 rounded-lg border px-3 text-sm hover:border-accent-purple/50">
-                <RotateCcw size={14} /> Tekrar dene <Cost n={1} />
+              <button onClick={() => ask(askErr.q)} title={costTitle(cost)}
+                      className="mt-2 flex min-h-[44px] items-center gap-1.5 rounded-lg border px-3 text-sm hover:border-accent-purple/50">
+                <RotateCcw size={14} /> Tekrar dene <Cost n={cost} />
               </button>
             )}
           </div>
@@ -412,9 +479,9 @@ export default function ChatTab({ id, colTitle, readyN, active, chatId, setChatU
                aria-label="Kaynaklarına soru sor" enterKeyHint="send"
                placeholder={thread.length ? "Devam et ya da yeni bir soru sor…" : firstQ ? `Örn: ${firstQ}` : "Kaynaklarına bir soru sor…"}
                className="min-h-[44px] min-w-0 flex-1 rounded-xl border bg-surface px-3 py-2.5 text-base shadow-sm outline-none focus:border-accent-purple md:text-sm" />
-        <button onClick={() => ask()} disabled={asking} title={costTitle(1) + " (kayıtlı cevaplar ücretsiz)"}
+        <button onClick={() => ask()} disabled={asking} title={costTitle(cost) + " (kayıtlı cevaplar ücretsiz)"}
                 className="flex min-h-[44px] items-center gap-1.5 rounded-xl bg-accent-purple px-4 text-sm font-medium text-white disabled:opacity-60">
-          {asking ? <Loader2 size={15} className="animate-spin" /> : <Send size={15} />} Sor <Cost n={1} className="bg-white/20" />
+          {asking ? <Loader2 size={15} className="animate-spin" /> : <Send size={15} />} Sor <Cost n={cost} className="bg-white/20" />
         </button>
       </div>
     </div>

@@ -53,9 +53,96 @@ DOCUMENT_ANALYSIS_SCHEMA = {
                 },
             },
             "difficult_concepts": {"type": "array", "items": {"type": "string"}},
+            # Ogrenme hedefleri (3-5 madde): "Bu kaynagi okuyunca ... yapabilirsin"
+            "learn_goals": {"type": "array", "items": {"type": "string"}},
         },
         "required": ["short_summary", "detailed_summary", "purpose", "difficulty_level",
-                     "outline", "key_concepts", "difficult_concepts"],
+                     "outline", "key_concepts", "difficult_concepts", "learn_goals"],
+    },
+}
+
+# ---- Calisma notu (L2 ders notu) -------------------------------------------------
+# Bolum notlari: her bolum icin Markdown govde; paragraflarda [s.N] atifi (sunucu dogrular).
+STUDY_NOTE_SECTIONS_SCHEMA = {
+    "name": "study_note_sections",
+    "strict": True,
+    "schema": {
+        "type": "object",
+        "additionalProperties": False,
+        "properties": {
+            "sections": {
+                "type": "array",
+                "items": {
+                    "type": "object", "additionalProperties": False,
+                    "properties": {
+                        "title": {"type": "string"},
+                        "page_start": {"type": "integer"},
+                        "body_md": {"type": "string"},
+                    },
+                    "required": ["title", "page_start", "body_md"],
+                },
+            },
+        },
+        "required": ["sections"],
+    },
+}
+
+# Toparlama: kavram iliskileri (duz yazi), sik yanlis anlamalar, 5 sorgulayici soru.
+STUDY_NOTE_WRAP_SCHEMA = {
+    "name": "study_note_wrap",
+    "strict": True,
+    "schema": {
+        "type": "object",
+        "additionalProperties": False,
+        "properties": {
+            "concept_relations_md": {"type": "string"},
+            "misconceptions": {"type": "array", "items": {"type": "string"}},
+            "questions": {
+                "type": "array",
+                "items": {
+                    "type": "object", "additionalProperties": False,
+                    "properties": {"q": {"type": "string"}, "page": {"type": "integer"}},
+                    "required": ["q", "page"],
+                },
+            },
+        },
+        "required": ["concept_relations_md", "misconceptions", "questions"],
+    },
+}
+
+# Kisa belgede tek istek: bolumler + toparlama birlikte.
+STUDY_NOTE_FULL_SCHEMA = {
+    "name": "study_note_full",
+    "strict": True,
+    "schema": {
+        "type": "object",
+        "additionalProperties": False,
+        "properties": {
+            "sections": STUDY_NOTE_SECTIONS_SCHEMA["schema"]["properties"]["sections"],
+            "concept_relations_md": {"type": "string"},
+            "misconceptions": {"type": "array", "items": {"type": "string"}},
+            "questions": STUDY_NOTE_WRAP_SCHEMA["schema"]["properties"]["questions"],
+        },
+        "required": ["sections", "concept_relations_md", "misconceptions", "questions"],
+    },
+}
+
+# Defter sentez notu: kaynaklar arasi ortak kavramlar, celiskiler, tamamlayici noktalar; [K# s.N] atifli.
+SYNTHESIS_NOTE_SCHEMA = {
+    "name": "synthesis_note",
+    "strict": True,
+    "schema": {
+        "type": "object",
+        "additionalProperties": False,
+        "properties": {
+            "overview_md": {"type": "string"},
+            "common_md": {"type": "string"},
+            "conflicts_md": {"type": "string"},
+            "complementary_md": {"type": "string"},
+            "reading_order": {"type": "array", "items": {"type": "string"}},
+            "questions": {"type": "array", "items": {"type": "string"}},
+        },
+        "required": ["overview_md", "common_md", "conflicts_md", "complementary_md", "reading_order", "questions"],
     },
 }
 

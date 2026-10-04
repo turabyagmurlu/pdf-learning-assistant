@@ -168,7 +168,16 @@ class GeminiLLM(LLMProvider):
             usage.mark_limited(model, False, 20); return True
         return False
 
-    def _post(self, base_model: str, body: dict, stream: bool = False) -> dict:
+    @staticmethod
+    def _gen_config(temperature: float | None, max_output_tokens: int | None, **extra) -> dict:
+        """generationConfig: verilmeyen alanlar eski davranisi korur (sicaklik 0.2, cikti siniri yok)."""
+        cfg = {"temperature": 0.2 if temperature is None else float(temperature)}
+        if max_output_tokens:
+            cfg["maxOutputTokens"] = int(max_output_tokens)
+        cfg.update(extra)
+        return cfg
+
+    def _post(self, base_model: str, body: dict, stream: bool = False, kind: str = "metin") -> dict:
         import time
         usage.check_user()
         last_status, last_text = 0, ""
@@ -186,7 +195,7 @@ class GeminiLLM(LLMProvider):
                     continue
                 if r.status_code == 200:
                     j = r.json()
-                    usage.record(m, "metin", (j.get("usageMetadata") or {}).get("totalTokenCount", 0))
+                    usage.record(m, kind or "metin", (j.get("usageMetadata") or {}).get("totalTokenCount", 0))
                     return j
                 last_status, last_text = r.status_code, r.text
                 if not self._handle_fail(m, r.status_code, r.text):
@@ -199,12 +208,13 @@ class GeminiLLM(LLMProvider):
             last_status, last_text = 429, "PerDay"
         raise self._friendly(last_status or 503, last_text)
 
-    async def stream_chat(self, messages, model=None) -> AsyncIterator[str]:
+    async def stream_chat(self, messages, model=None, *, temperature=None, max_output_tokens=None,
+                          kind="metin") -> AsyncIterator[str]:
         import asyncio
         usage.check_user()
         model = model or settings.active_llm_model
         system, contents = _to_gemini(messages)
-        body = {"contents": contents, "generationConfig": {"temperature": 0.2}}
+        body = {"contents": contents, "generationConfig": self._gen_config(temperature, max_output_tokens)}
         if system:
             body["systemInstruction"] = system
         last_status, last_text = 503, ""
@@ -238,7 +248,7 @@ class GeminiLLM(LLMProvider):
                                             yield p["text"]
                                 except Exception:  # noqa
                                     continue
-                    usage.record(m, "metin", toks)
+                    usage.record(m, kind or "metin", toks)
                     return
                 except AiUnavailable:
                     raise
@@ -253,20 +263,21 @@ class GeminiLLM(LLMProvider):
             await asyncio.sleep(self._WAITS[min(round_, len(self._WAITS) - 1)] * 2)
         raise self._friendly(last_status or 503, last_text)
 
-    def complete(self, messages, model=None) -> str:
+    def complete(self, messages, model=None, *, temperature=None, max_output_tokens=None, kind="metin") -> str:
         model = model or settings.active_llm_model
         system, contents = _to_gemini(messages)
-        body = {"contents": contents, "generationConfig": {"temperature": 0.2}}
+        body = {"contents": contents, "generationConfig": self._gen_config(temperature, max_output_tokens)}
         if system:
             body["systemInstruction"] = system
         try:
-            return self._post(model, body)["candidates"][0]["content"]["parts"][0]["text"]
+            return self._post(model, body, kind=kind)["candidates"][0]["content"]["parts"][0]["text"]
         except AiUnavailable:
             raise
         except Exception as e:  # noqa
             raise AiUnavailable(detail=str(e))
 
-    def structured(self, messages, schema, model=None) -> str:
+    def structured(self, messages, schema, model=None, *, temperature=None, max_output_tokens=None,
+                   kind="metin") -> str:
         """Gemini'de JSON modu: responseMimeType=application/json.
         schema OpenAI formatında geldiği için sadece JSON iste ve prompt'a şema ipucu ekle."""
         model = model or settings.active_llm_model
@@ -275,11 +286,12 @@ class GeminiLLM(LLMProvider):
         if contents:
             contents[-1]["parts"][0]["text"] += hint
         body = {"contents": contents,
-                "generationConfig": {"temperature": 0.2, "responseMimeType": "application/json"}}
+                "generationConfig": self._gen_config(temperature, max_output_tokens,
+                                                     responseMimeType="application/json")}
         if system:
             body["systemInstruction"] = system
         try:
-            return self._post(model, body)["candidates"][0]["content"]["parts"][0]["text"]
+            return self._post(model, body, kind=kind)["candidates"][0]["content"]["parts"][0]["text"]
         except AiUnavailable:
             raise
         except Exception as e:  # noqa

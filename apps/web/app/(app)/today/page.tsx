@@ -1,11 +1,12 @@
 "use client";
 /**
- * Bugün: günün başlangıç sayfası (GET /atelier/today; yapay zekâ harcamaz).
- * Selam · Kaldığın yer · Günün tekrarı · Son biriktirdiklerin · Defterler · 7 günlük şerit + seri.
+ * Bugün: günün başlangıç sayfası (yapay zekâ harcamaz).
+ * 3 blok: Kaldığın yer (tek ana eylem: Okumaya devam et) · Son biriktirdiklerin · Defterlerin.
+ * Veri: GET /documents (okuma alanı), GET /notes/recent, GET /collections — hafif uçlar.
  */
 import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
-import { ArrowRight, BookOpen, Flame, Library, Palette } from "lucide-react";
+import { ArrowRight, BookOpen, Library } from "lucide-react";
 import { api, errorMessage } from "@/lib/api";
 import { docHref } from "@/lib/links";
 import { coverOf } from "@/lib/covers";
@@ -13,20 +14,15 @@ import { pigmentOf } from "@/lib/reader";
 import { useRefreshOn } from "@/components/Wake";
 import { Skeleton } from "@/components/Skeleton";
 import { buttonClass } from "@/components/ui/Button";
-import { Folio, GoldenSpiral, QuillSketch } from "@/components/art";
-import { atelierHref } from "@/hooks/useAtelier";
+import { Folio, GoldenSpiral } from "@/components/art";
 
 const cx = (...a: (string | false | null | undefined)[]) => a.filter(Boolean).join(" ");
 
 type Recent = { note_id: string; text: string; note?: string | null; color?: string | null; page?: number | null; document_id: string; source?: string | null; at?: string | null };
-type Scope = { kind: "collection"; id: string; title: string; cover_color?: string | null; cover_icon?: string | null; due: number };
-type Today = {
-  due: number; new_available: number; reviewed_today: number; streak_days: number;
-  week: { day: string; count: number }[];
-  recent: Recent[];
-  resume: { document_id: string; title: string; page?: number | null; num_pages?: number | null; pct?: number | null; reading_at?: string | null } | null;
-  scopes: Scope[];
-};
+type Scope = { id: string; title: string; cover_color?: string | null; cover_icon?: string | null; doc_count?: number; note_count?: number };
+type Resume = { document_id: string; title: string; page?: number | null; num_pages?: number | null; pct?: number | null; reading_at?: string | null };
+type DocRow = { id: string; title: string; page_count?: number | null; last_page?: number | null; progress_pct?: number | null; reading_at?: string | null };
+type Today = { recent: Recent[]; resume: Resume | null; scopes: Scope[] };
 
 function greeting(h: number) {
   if (h >= 5 && h < 12) return "Günaydın";
@@ -35,11 +31,11 @@ function greeting(h: number) {
   return "İyi geceler";
 }
 
-const DAY_SHORT = ["Paz", "Pzt", "Sal", "Çar", "Per", "Cum", "Cmt"];
-
-function localDay(d = new Date()) {
-  const p = (n: number) => String(n).padStart(2, "0");
-  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
+function pickResume(docs: DocRow[]): Resume | null {
+  const read = docs.filter((d) => d.reading_at).sort((a, b) => String(b.reading_at).localeCompare(String(a.reading_at)));
+  const r = read[0];
+  if (!r) return null;
+  return { document_id: r.id, title: r.title, page: r.last_page ?? null, num_pages: r.page_count ?? null, pct: r.progress_pct ?? null, reading_at: r.reading_at ?? null };
 }
 
 function SectionTitle({ eyebrow, title, right, id }: { eyebrow: string; title: string; right?: React.ReactNode; id: string }) {
@@ -61,8 +57,14 @@ export default function TodayPage() {
 
   const load = useCallback(async () => {
     setErr("");
-    try { setD((await api("/atelier/today")) as Today); }
-    catch (e) { setErr(errorMessage(e, "Bugün sayfası yüklenemedi.")); }
+    try {
+      const [docs, recent, cols] = await Promise.all([
+        api("/documents").catch(() => []) as Promise<DocRow[]>,
+        api("/notes/recent?limit=6").catch(() => []) as Promise<Recent[]>,
+        api("/collections") as Promise<Scope[]>,
+      ]);
+      setD({ resume: pickResume(Array.isArray(docs) ? docs : []), recent: Array.isArray(recent) ? recent : [], scopes: Array.isArray(cols) ? cols : [] });
+    } catch (e) { setErr(errorMessage(e, "Bugün sayfası yüklenemedi.")); }
   }, []);
   useEffect(() => { setNow(new Date()); void load(); }, [load]);
   useRefreshOn(load);
@@ -70,20 +72,16 @@ export default function TodayPage() {
 
   const hour = now?.getHours() ?? 9;
   const dateLine = now ? now.toLocaleDateString("tr-TR", { weekday: "long", day: "numeric", month: "long" }) : "";
-  const due = d?.due ?? 0;
-  const week = d?.week || [];
-  const maxWeek = Math.max(1, ...week.map((w) => w.count));
-  const todayKey = localDay(now || new Date());
 
   return (
     <div className="mx-auto w-full max-w-6xl px-4 pb-phi-5 pt-phi-4 md:px-8 md:pt-phi-5">
       {/* Selam */}
       <header className="sfumato-in">
         <h1 className="font-heading text-[40px] leading-[1.05] text-text-primary md:text-[56px]" suppressHydrationWarning>
-          {now ? greeting(hour) : " "}
+          {now ? greeting(hour) : " "}
         </h1>
         <p className="mt-phi-1 font-heading text-title italic text-text-secondary" suppressHydrationWarning>
-          {dateLine ? dateLine.charAt(0).toLocaleUpperCase("tr-TR") + dateLine.slice(1) : " "}
+          {dateLine ? dateLine.charAt(0).toLocaleUpperCase("tr-TR") + dateLine.slice(1) : " "}
         </p>
         <div className="rule-gold mt-phi-3" aria-hidden />
       </header>
@@ -96,114 +94,53 @@ export default function TodayPage() {
       )}
 
       {!d && !err ? (
-        <div role="status" aria-label="Yükleniyor" className="mt-phi-4 grid gap-phi-3 lg:grid-cols-[minmax(0,1.5fr)_minmax(0,1fr)]">
+        <div role="status" aria-label="Yükleniyor" className="mt-phi-4 grid gap-phi-3">
           <div className="vellum rounded-2xl border p-phi-4"><Skeleton className="h-3 w-28" /><Skeleton className="mt-4 h-10 w-2/3" /><Skeleton className="mt-6 h-11 w-44" /></div>
-          <div className="vellum rounded-2xl border p-phi-3"><Skeleton className="h-3 w-24" /><Skeleton className="mt-4 h-5 w-5/6" /><Skeleton className="mt-6 h-2 w-full" /></div>
-          <div className="grid gap-phi-2 sm:grid-cols-2 lg:col-span-2 lg:grid-cols-3">
+          <div className="grid gap-phi-2 sm:grid-cols-2 lg:grid-cols-3">
             {[0, 1, 2].map((i) => <div key={i} className="rounded-2xl border bg-surface p-4"><Skeleton className="h-4 w-full" /><Skeleton className="mt-2 h-4 w-4/5" /><Skeleton className="mt-4 h-3 w-1/3" /></div>)}
           </div>
         </div>
       ) : d ? (
         <>
-          <div className="mt-phi-4 grid gap-phi-3 lg:grid-cols-[minmax(0,1.5fr)_minmax(0,1fr)]">
-            {/* Günün tekrarı */}
-            <section aria-labelledby="t-review" className="vellum relative overflow-hidden rounded-2xl border p-phi-3 shadow-soft md:p-phi-4">
-              <p className="eyebrow">Günün tekrarı</p>
-              {due > 0 ? (
-                <>
-                  <h2 id="t-review" className="mt-phi-1 font-heading text-display text-text-primary">
-                    <span className="text-gold">{due}</span> kart seni bekliyor
-                  </h2>
-                  <p className="mt-phi-1 max-w-md text-body text-text-secondary">
-                    Biriktirdiğin alıntılardan birkaç dakikalık sakin bir tekrar.
-                    {d.new_available > 0 ? ` İçlerinde ${d.new_available} yeni kart var.` : ""}
-                  </p>
-                  <Link href={atelierHref("all", "recall")} className={buttonClass({ variant: "primary", size: "lg", className: "mt-phi-3" })}>
-                    <Palette size={17} aria-hidden /> Atölyeye gir <ArrowRight size={16} aria-hidden />
-                  </Link>
-                </>
-              ) : (
-                <div className="flex items-center gap-phi-3">
-                  <div className="shrink-0 text-text-secondary" aria-hidden><GoldenSpiral size={96} /></div>
-                  <div>
-                    <h2 id="t-review" className="mt-phi-1 font-heading text-display text-text-primary">Bugünlük tamam</h2>
-                    <p className="mt-phi-1 text-body text-text-secondary">
-                      {d.reviewed_today > 0 ? `Bugün ${d.reviewed_today} kart çalıştın.` : "Bekleyen tekrar yok."}{" "}
-                      İstersen <Link href={atelierHref("all", "read")} className="font-medium text-text-primary underline decoration-gold underline-offset-4">alıntılarında dolaş</Link>.
-                    </p>
-                  </div>
+          {/* Kaldığın yer — tek ana eylem */}
+          <section aria-labelledby="t-resume" className="vellum relative mt-phi-4 overflow-hidden rounded-2xl border p-phi-3 shadow-soft md:p-phi-4">
+            <p className="eyebrow">Kaldığın yer</p>
+            {d.resume ? (
+              <>
+                <h2 id="t-resume" className="mt-phi-1 line-clamp-2 font-heading text-display text-text-primary">{d.resume.title}</h2>
+                <div className="mt-phi-1 flex flex-wrap items-center gap-2 text-sm text-text-secondary">
+                  {d.resume.page ? <Folio page={d.resume.page} /> : null}
+                  {d.resume.num_pages ? <span>/ {d.resume.num_pages}</span> : null}
+                  {typeof d.resume.pct === "number" ? <span>· %{Math.round(d.resume.pct)} okundu</span> : null}
                 </div>
-              )}
-              <div className="pointer-events-none absolute -bottom-4 -right-2 hidden text-gold opacity-40 md:block" aria-hidden><QuillSketch /></div>
-            </section>
-
-            {/* Kaldığın yer + 7 gün */}
-            <div className="flex flex-col gap-phi-3">
-              {d.resume ? (
+                {typeof d.resume.pct === "number" && (
+                  <div className="mt-phi-2 h-[3px] max-w-md overflow-hidden rounded-full bg-gold-soft" role="progressbar"
+                       aria-label="Okuma ilerlemesi" aria-valuemin={0} aria-valuemax={100} aria-valuenow={Math.round(d.resume.pct)}>
+                    <div className="h-full rounded-full" style={{ width: Math.max(2, Math.min(100, d.resume.pct)) + "%", background: "var(--gold)" }} />
+                  </div>
+                )}
                 <Link href={docHref(d.resume.document_id, { page: d.resume.page ?? null })}
-                      className="vellum lift group block rounded-2xl border p-phi-3 shadow-soft">
-                  <p className="eyebrow">Kaldığın yer</p>
-                  <p className="mt-phi-1 line-clamp-2 font-heading text-heading text-text-primary">{d.resume.title}</p>
-                  <div className="mt-phi-1 flex items-center gap-2 text-sm text-text-secondary">
-                    {d.resume.page ? <Folio page={d.resume.page} /> : null}
-                    {d.resume.num_pages ? <span>/ {d.resume.num_pages}</span> : null}
-                    <span className="ml-auto inline-flex items-center gap-1 text-text-primary group-hover:underline">
-                      <BookOpen size={15} aria-hidden /> Devam et
-                    </span>
-                  </div>
-                  {typeof d.resume.pct === "number" && (
-                    <div className="mt-phi-2 h-[3px] overflow-hidden rounded-full bg-gold-soft" role="progressbar"
-                         aria-label="Okuma ilerlemesi" aria-valuemin={0} aria-valuemax={100} aria-valuenow={Math.round(d.resume.pct)}>
-                      <div className="h-full rounded-full" style={{ width: Math.max(2, Math.min(100, d.resume.pct)) + "%", background: "var(--gold)" }} />
-                    </div>
-                  )}
+                      className={buttonClass({ variant: "primary", size: "lg", className: "mt-phi-3" })}>
+                  <BookOpen size={17} aria-hidden /> Okumaya devam et <ArrowRight size={16} aria-hidden />
                 </Link>
-              ) : (
-                <Link href="/library" className="vellum lift block rounded-2xl border p-phi-3 shadow-soft">
-                  <p className="eyebrow">Kaldığın yer</p>
-                  <p className="mt-phi-1 text-body text-text-secondary">Henüz bir okuma yok. Kütüphane&apos;den bir kaynak aç.</p>
-                </Link>
-              )}
-
-              <section aria-labelledby="t-week" className="vellum rounded-2xl border p-phi-3 shadow-soft">
-                <div className="flex items-baseline justify-between gap-2">
-                  <p id="t-week" className="eyebrow">Son 7 gün</p>
-                  {d.streak_days > 0 && (
-                    <p className="inline-flex items-center gap-1 font-heading text-base italic text-text-primary">
-                      <Flame size={15} aria-hidden className="text-gold" />
-                      {d.streak_days >= 2 ? `${d.streak_days} gün üst üste` : "Seri bugün başladı"}
-                    </p>
-                  )}
+              </>
+            ) : (
+              <div className="flex items-center gap-phi-3">
+                <div className="shrink-0 text-text-secondary" aria-hidden><GoldenSpiral size={96} /></div>
+                <div>
+                  <h2 id="t-resume" className="mt-phi-1 font-heading text-display text-text-primary">Henüz bir okuma yok</h2>
+                  <p className="mt-phi-1 text-body text-text-secondary">Kütüphane&apos;den bir kaynak aç; kaldığın yer burada görünür.</p>
+                  <Link href="/library" className={buttonClass({ variant: "primary", size: "lg", className: "mt-phi-2" })}>
+                    <Library size={17} aria-hidden /> Kütüphaneyi aç
+                  </Link>
                 </div>
-                <ol className="mt-phi-2 grid h-24 grid-cols-7 items-end gap-2" aria-label="Günlere göre çalışılan kart">
-                  {week.map((w) => {
-                    const isToday = w.day === todayKey;
-                    const dt = new Date(w.day + "T12:00:00");
-                    const h = w.count ? Math.max(8, Math.round((w.count / maxWeek) * 100)) : 4;
-                    return (
-                      <li key={w.day} className="flex h-full flex-col items-center justify-end gap-1"
-                          aria-label={`${dt.toLocaleDateString("tr-TR", { weekday: "long" })}: ${w.count} kart${isToday ? " (bugün)" : ""}`}>
-                        <span aria-hidden className={cx("w-full max-w-[22px] rounded-full", !isToday && (w.count ? "bg-border-strong opacity-60" : "bg-border"))}
-                              style={{ height: h + "%", background: isToday ? "var(--gold)" : undefined }} />
-                        <span aria-hidden className={cx("text-xs", isToday ? "font-semibold text-text-primary" : "text-text-secondary")}>
-                          {DAY_SHORT[dt.getDay()]}
-                        </span>
-                      </li>
-                    );
-                  })}
-                </ol>
-              </section>
-            </div>
-          </div>
+              </div>
+            )}
+          </section>
 
           {/* Son biriktirdiklerin */}
           <section aria-labelledby="t-recent" className="mt-phi-5">
-            <SectionTitle id="t-recent" eyebrow="Taslaklarına düştü" title="Son biriktirdiklerin"
-                          right={d.recent.length ? (
-                            <Link href={atelierHref("all", "read")} className="inline-flex min-h-[40px] items-center gap-1 text-sm text-text-secondary hover:text-text-primary">
-                              Akışta oku <ArrowRight size={14} aria-hidden />
-                            </Link>
-                          ) : undefined} />
+            <SectionTitle id="t-recent" eyebrow="Çalışma notuna düştü" title="Son biriktirdiklerin" />
             {d.recent.length ? (
               <ul className="grid gap-phi-2 sm:grid-cols-2 lg:grid-cols-3">
                 {d.recent.slice(0, 6).map((r) => (
@@ -223,7 +160,7 @@ export default function TodayPage() {
               </ul>
             ) : (
               <p className="rounded-2xl border border-dashed px-5 py-6 text-body text-text-secondary">
-                Okurken vurguladığın her şey burada birikir ve Atölye&apos;de çalışma kartına dönüşür.
+                Okurken vurguladığın her şey burada birikir ve defterinin Çalışma notu&apos;na düşer.
               </p>
             )}
           </section>
@@ -246,14 +183,12 @@ export default function TodayPage() {
                         <cv.Icon size={22} strokeWidth={1.9} className={cv.tone.fg} aria-hidden />
                         <span className={cx("line-clamp-2 font-heading text-heading leading-tight", cv.tone.fg)}>{s.title}</span>
                       </Link>
-                      {s.due > 0 && (
-                        <Link href={atelierHref("collection:" + s.id, "recall")}
-                              aria-label={`${s.title}: ${s.due} tekrar — Atölyede çalış`}
-                              className="flex min-h-[40px] items-center justify-between gap-2 border-t px-4 text-sm hover:bg-gold-soft">
-                          <span className="font-medium text-gold-ink">{s.due} tekrar</span>
-                          <Palette size={15} aria-hidden className="text-gold" />
-                        </Link>
-                      )}
+                      {(s.doc_count || s.note_count) ? (
+                        <p className="flex min-h-[36px] items-center gap-2 border-t px-4 text-xs text-text-secondary">
+                          {s.doc_count ? <span>{s.doc_count} kaynak</span> : null}
+                          {s.note_count ? <span>· {s.note_count} vurgu</span> : null}
+                        </p>
+                      ) : null}
                     </li>
                   );
                 })}

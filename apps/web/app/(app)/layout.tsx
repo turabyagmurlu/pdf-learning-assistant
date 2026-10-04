@@ -2,7 +2,7 @@
 import { Suspense, useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
-import { Library, LogOut, Search, Notebook, Sun, Moon, MonitorSmartphone, MoreHorizontal, Keyboard, Trash2, Palette } from "lucide-react";
+import { Library, LogOut, Search, Notebook, Sun, Moon, MonitorSmartphone, MoreHorizontal, Keyboard, Trash2 } from "lucide-react";
 import { api, clearToken, refreshSessionIfNeeded } from "@/lib/api";
 import { BrandMarkSvg } from "@/components/BrandMark";
 import ThemeToggle, { useTheme, THEME_LABEL, ThemeMode } from "@/components/ThemeToggle";
@@ -13,18 +13,15 @@ import QuotaMeter from "@/components/QuotaMeter";
 import CommandPalette, { openPalette } from "@/components/CommandPalette";
 import ToastHost from "@/components/Toast";
 import { AudioProvider } from "@/components/audio/AudioProvider";
-import MiniPlayer from "@/components/audio/MiniPlayer";
-import { useAtelierCounts } from "@/hooks/useAtelier";
+import ListenDock from "@/components/audio/ListenDock";
 
-// 2.0 sirasi: Bugun · Defterler · Kutuphane · Atolye (tekrar rozeti) · Arastir
+// 3.0 sirasi (4 oge): Bugun · Defterler · Kutuphane · Ara
 const NAV = [
   { href: "/today", label: "Bugün", Icon: Sun, title: "Bugün" },
   { href: "/notebooks", label: "Defterler", Icon: Notebook, title: "Defterler" },
   { href: "/library", label: "Kütüphane", Icon: Library, title: "Kütüphane" },
-  { href: "/atelier", label: "Atölye", Icon: Palette, title: "Atölye" },
-  { href: "/search", label: "Araştır", Icon: Search, title: "Araştır" },
+  { href: "/search", label: "Ara", Icon: Search, title: "Ara" },
 ];
-const ATELIER = "/atelier";
 const cx = (...a: any[]) => a.filter(Boolean).join(" ");
 
 /**
@@ -51,23 +48,6 @@ function TrashBadge({ n }: { n: number }) {
   );
 }
 
-/** Atolye rozeti: tekrar bekleyen kart sayisi (altin). `dot` rayda/alt menude ikon ustu kucuk rozet. */
-function DueBadge({ n, dot }: { n: number; dot?: boolean }) {
-  if (!n) return null;
-  const t = n > 99 ? "99+" : String(n);
-  if (dot) {
-    return (
-      <span aria-hidden className="absolute -right-2 -top-1 min-w-[18px] rounded-full px-1 text-center text-[12px] font-semibold leading-[18px] text-on-accent"
-            style={{ background: "var(--gold)" }}>
-        {t}
-      </span>
-    );
-  }
-  return (
-    <span aria-hidden className="ml-auto rounded-full bg-gold-soft px-1.5 text-2xs font-semibold text-gold-ink">{t}</span>
-  );
-}
-
 /**
  * Ortak yerlesim olculeri (yuzen ogeler bunlara gore konumlanir; D1/D2 kullanir):
  *  --bottom-nav : mobil alt menu yuksekligi + alt guvenli alan. md ve ustunde, okuyucuda 0.
@@ -77,7 +57,7 @@ function DueBadge({ n, dot }: { n: number; dot?: boolean }) {
  *  --sidebar-w  : sol menu genisligi. Telefon 0 · md (768-1023) 72px ikon rayi · lg+ 224px tam menu.
  *                 Okuyucuda 0. Ornek (yapiskan serit): md:left-[var(--sidebar-w)]
  *  --reader-bar : okuyucunun dar ekrandaki alt cubugu (64px); diger durumlarda 0/tanimsiz.
- *  --mini-player-h : kalici ses mini cubugu gorunurken 56px (MiniPlayer yazar), yoksa tanimsiz.
+ *  --mini-player-h : kalici ses cubugu (ListenDock) gorunurken yuksekligi, yoksa tanimsiz.
  *                 Alttaki yuzen ogeler ekler: calc(var(--bottom-nav, 0px) + var(--mini-player-h, 0px) + 12px)
  */
 const LAYOUT_VARS = `
@@ -85,7 +65,6 @@ const LAYOUT_VARS = `
 @media (min-width:768px){:root{--bottom-nav:0px;--topbar-h:0px;--sidebar-w:72px}}
 @media (min-width:1024px){:root{--sidebar-w:224px}}
 html[data-reader]{--bottom-nav:0px;--topbar-h:0px;--sidebar-w:0px;--reader-bar:64px}
-html[data-focus]{--bottom-nav:0px;--topbar-h:0px;--sidebar-w:0px}
 @media (min-width:1024px){html[data-reader]{--reader-bar:0px}}
 `;
 
@@ -174,16 +153,11 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
   const { dark, mode, set } = useTheme();
   // Okuyucu rotasi: uygulama menuleri gizli, okuyucunun kendi basligi (Geri + Defter › Kaynak) var
   const isReader = pathname.startsWith("/documents/");
-  // Atolye: tam ekran calisma odasi — menuler ve mini oynatici gizli (kendi kapat dugmesi var)
-  const isFocus = pathname === ATELIER || pathname.startsWith(ATELIER + "/");
-  const bare = isReader || isFocus;
+  const bare = isReader;
   const active = (href: string) => pathname === href || pathname.startsWith(href + "/");
   const sub = isSubPage(pathname);
   const parent = parentOf(pathname);
   const trashCount = useTrashCount(pathname);
-  const atelierCounts = useAtelierCounts(pathname);
-  const dueTotal = atelierCounts?.due_total || 0;
-  const navLabel = (href: string, label: string) => (href === ATELIER && dueTotal ? `${label}, ${dueTotal} tekrar bekliyor` : label);
 
   // Ilk sayfadan sonra yapilan her gecis "uygulama ici gezinti"dir -> geri tusu gercek geri gider.
   const firstPath = useRef<string | null>(null);
@@ -198,24 +172,19 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
     if (isReader) el.setAttribute("data-reader", ""); else el.removeAttribute("data-reader");
     return () => el.removeAttribute("data-reader");
   }, [isReader]);
-  useEffect(() => {
-    const el = document.documentElement;
-    if (isFocus) el.setAttribute("data-focus", ""); else el.removeAttribute("data-focus");
-    return () => el.removeAttribute("data-focus");
-  }, [isFocus]);
 
   // oturumu sessizce uzat (duzenli kullananin oturumu hic dusmez)
   useEffect(() => { refreshSessionIfNeeded(); }, []);
 
   // sekme basligi rotaya gore (okuyucu kendi basligini kaynak adiyla yazar)
   useEffect(() => {
-    if (isReader || isFocus) return;
+    if (isReader) return;
     const n = NAV.find((x) => active(x.href));
     const base = "TY PDF";
     document.title = n ? `${n.title} · ${base}` : pathname.startsWith("/collections/") ? `Defter · ${base}`
       : pathname.startsWith("/trash") ? `Çöp kutusu · ${base}` : base;
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [pathname, isReader, isFocus]);
+  }, [pathname, isReader]);
 
   const logout = () => { clearToken(); router.replace("/login"); };
   const iconBtn = "flex h-11 w-11 items-center justify-center rounded-lg text-text-secondary hover:bg-surface-muted";
@@ -263,14 +232,10 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
         </button>
         <nav aria-label="Ana menü" className="flex w-full flex-col gap-1">
           {NAV.map(({ href, label, Icon }) => (
-            <Link key={href} href={href} aria-current={active(href) ? "page" : undefined} aria-label={navLabel(href, label)} title={label}
+            <Link key={href} href={href} aria-current={active(href) ? "page" : undefined} title={label}
                   className={cx(navItem, active(href) && "bg-accent-purple/10 font-medium text-text-primary")}>
-              <span className="relative inline-flex">
-                <Icon size={18} aria-hidden className={cx("md:h-[22px] md:w-[22px] lg:h-[18px] lg:w-[18px]", active(href) ? "text-accent-purple" : "")} />
-                {href === ATELIER && <span className="lg:hidden"><DueBadge n={dueTotal} dot /></span>}
-              </span>
+              <Icon size={18} aria-hidden className={cx("md:h-[22px] md:w-[22px] lg:h-[18px] lg:w-[18px]", active(href) ? "text-accent-purple" : "")} />
               <span className="truncate">{label}</span>
-              {href === ATELIER && <span className="hidden lg:contents"><DueBadge n={dueTotal} /></span>}
             </Link>
           ))}
         </nav>
@@ -341,21 +306,18 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
         <Shortcuts />
         <CommandPalette />
         <ToastHost />
-        {/* Kalici ses: sesli ozet calarken baska sayfada "simdi caliyor" cubugu (okuyucuda kucuk kapsul) */}
-        {!isFocus && <Suspense fallback={null}><MiniPlayer compact={isReader} /></Suspense>}
+        {/* Kalici ses (Ajan V): tek oynatici cubugu — sesli ozet / "Sesli dinle" calarken her sayfada */}
+        <Suspense fallback={null}><ListenDock /></Suspense>
 
-        {/* Mobil: alt sekme cubugu (5 oge). `bottom-nav`: klavye acikken globals.css gizler. */}
+        {/* Mobil: alt sekme cubugu (4 oge). `bottom-nav`: klavye acikken globals.css gizler. */}
         {!bare && (
-          <nav aria-label="Ana menü" className="bottom-nav fixed inset-x-0 bottom-0 z-30 grid grid-cols-5 border-t bg-surface/95 backdrop-blur md:hidden"
+          <nav aria-label="Ana menü" className="bottom-nav fixed inset-x-0 bottom-0 z-30 grid grid-cols-4 border-t bg-surface/95 backdrop-blur md:hidden"
                style={{ paddingBottom: "env(safe-area-inset-bottom)" }}>
             {NAV.map(({ href, label, Icon }) => (
-              <Link key={href} href={href} aria-current={active(href) ? "page" : undefined} aria-label={navLabel(href, label)}
+              <Link key={href} href={href} aria-current={active(href) ? "page" : undefined}
                     className={cx("flex min-h-[56px] min-w-0 flex-col items-center justify-center gap-0.5 px-0.5 text-xs",
                       active(href) ? "font-semibold text-text-primary" : "text-text-secondary")}>
-                <span className="relative inline-flex">
-                  <Icon size={22} strokeWidth={active(href) ? 2.2 : 1.8} aria-hidden className={active(href) ? "text-accent-purple" : ""} />
-                  {href === ATELIER && <DueBadge n={dueTotal} dot />}
-                </span>
+                <Icon size={22} strokeWidth={active(href) ? 2.2 : 1.8} aria-hidden className={active(href) ? "text-accent-purple" : ""} />
                 <span className="max-w-full truncate">{label}</span>
               </Link>
             ))}

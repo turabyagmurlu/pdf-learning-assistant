@@ -9,8 +9,12 @@
  *   iki <audio> öğesi sessiz WAV ile bir kez çalınır; ses çok sonra gelse de aynı öğeler çalabilir.
  * - `reset()`: yeni bir kayda geçerken (kalıcı oynatıcı, AudioProvider) öğeleri bırakır; bir sonraki parça
  *   `primeAudio()` ile ısıtılmış yeni öğeleri kullanır. Ayrıca `useMediaSession` ve `useQueueAutostart` yardımcıları.
+ * - V3 (T5-ses): parça geçişinde 150 ms nefes payı (sunucu parça sonuna 500 ms sessizlik ekler);
+ *   bölümler (paragraf bazlı, kota 0) + `nextChapter/prevChapter`; uyku zamanlayıcısı
+ *   (15/30/45 dk ya da bölüm sonunda; 10 sn yumuşak kısılma, 30 sn geri alma).
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { deriveChapters, type Chapter, type SleepMode } from "@/lib/audio";
 
 export type QueueChunk = {
   text: string;          // parçanın metni (cümle vurgusu ve süre tahmini için)
@@ -19,6 +23,11 @@ export type QueueChunk = {
 };
 
 export const DEFAULT_CPS = 15.5;   // Türkçe konuşma ≈ 15–16 karakter/sn
+export const CHUNK_GAP_MS = 150;   // parça geçişinde nefes payı (çakışmayı da önler)
+export const SLEEP_FADE_MS = 10000;
+export const SLEEP_REWIND_SEC = 30;
+
+export type SleepState = { mode: SleepMode; endsAt: number | null; chapter: number | null };
 
 // Boş veri bloklu WAV (24 kHz, mono, 16 bit): tıklama anında kilidi açmak için
 const SILENT_WAV = "data:audio/wav;base64,UklGRiQAAABXQVZFZm10IBAAAAABAAEAwF0AAIC7AAACABAAZGF0YQAAAAA=";
@@ -60,6 +69,10 @@ export function useAudioQueue(chunks: QueueChunk[], opts: { rate?: number; stora
   const [playing, setPlaying] = useState(false);
   const [waiting, setWaiting] = useState(false);
   const [blocked, setBlocked] = useState(false);   // tarayıcı otomatik başlatmayı reddetti
+  const [sleep, setSleepState] = useState<SleepState>({ mode: "off", endsAt: null, chapter: null });
+  const sleepRef = useRef(sleep); sleepRef.current = sleep;
+  const gapTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const fadeTimer = useRef<ReturnType<typeof setInterval> | null>(null);
 
   // Süresi verilmeyen parçaların gerçek süresi yüklenince ölçülür (loadedmetadata)
   const [measured, setMeasured] = useState<Record<number, number>>({});
@@ -71,6 +84,15 @@ export function useAudioQueue(chunks: QueueChunk[], opts: { rate?: number; stora
   const allKnown = merged.length > 0 && merged.every((c) => !!c.duration);
   const time = (offsets[index] || 0) + chunkTime;
   const firstReady = !!chunks[0]?.url;
+
+  // Bölümler (paragraf bazlı): başlangıçlar karakter orantılı; parça = paragraf sınırı olduğunda parça başı kesin
+  const chapters: Chapter[] = useMemo(() => deriveChapters(merged, durations, offsets), [merged, durations, offsets]);
+  const chaptersRef = useRef(chapters); chaptersRef.current = chapters;
+  const chapterIndex = useMemo(() => {
+    let k = -1;
+    for (let i = 0; i < chapters.length; i++) { if (chapters[i].start <= time + 0.2) k = i; else break; }
+    return k;
+  }, [chapters, time]);
 
   function active(): HTMLAudioElement | undefined { return els.current[idxRef.current % 2]; }
   // Olaylar yalnız gerçek bir parça yüklü ve etkin öğeden gelirse işlenir (sessiz kilit sesi sayılmaz)
@@ -104,8 +126,11 @@ export function useAudioQueue(chunks: QueueChunk[], opts: { rate?: number; stora
   function onEnded() {
     const next = idxRef.current + 1;
     if (next < chunksRef.current.length) {
-      if (chunksRef.current[next].url) { void playIndex(next, 0, true); }
-      else {
+      if (chunksRef.current[next].url) {
+        // 150 ms nefes payı: parçalar birbirine yapışmaz, iki öğe çakışmaz
+        if (gapTimer.current) clearTimeout(gapTimer.current);
+        gapTimer.current = setTimeout(() => { gapTimer.current = null; if (playingRef.current) void playIndex(next, 0, true); }, CHUNK_GAP_MS);
+      } else {
         // Sıradaki parça henüz hazır değil: bekle, gelince kendiliğinden devam et
         idxRef.current = next; setIndex(next); setChunkTime(0); setPlaying(false);
         pendingSeek.current = { i: next, off: 0 }; setWaiting(true);
@@ -159,7 +184,11 @@ export function useAudioQueue(chunks: QueueChunk[], opts: { rate?: number; stora
   }, [chunks]);
 
   useEffect(() => { els.current.forEach((a) => { if (a) a.playbackRate = rate; }); }, [rate]);
-  useEffect(() => () => { els.current.forEach((a) => { try { a.pause(); a.removeAttribute("src"); a.load(); } catch {} }); }, []);
+  useEffect(() => () => {
+    if (gapTimer.current) clearTimeout(gapTimer.current);
+    if (fadeTimer.current) clearInterval(fadeTimer.current);
+    els.current.forEach((a) => { try { a.pause(); a.removeAttribute("src"); a.load(); } catch {} });
+  }, []);
 
   const seek = useCallback((t: number) => {
     const o = offsetsRef.current; const n = chunksRef.current.length;
@@ -187,9 +216,82 @@ export function useAudioQueue(chunks: QueueChunk[], opts: { rate?: number; stora
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
   const pause = useCallback(() => {
-    playingRef.current = false; try { active()?.pause(); } catch {} setPlaying(false);
+    playingRef.current = false;
+    if (gapTimer.current) { clearTimeout(gapTimer.current); gapTimer.current = null; }
+    try { active()?.pause(); } catch {} setPlaying(false);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // ---- Bölüm atlama ----
+  const seekChapter = useCallback((k: number) => {
+    const ch = chaptersRef.current; if (!ch.length) return;
+    k = Math.max(0, Math.min(ch.length - 1, k));
+    seek(ch[k].start + 0.05);
+  }, [seek]);
+  const nextChapter = useCallback(() => {
+    const ch = chaptersRef.current; const t = (offsetsRef.current[idxRef.current] || 0) + (active()?.currentTime || 0);
+    const k = ch.findIndex((c) => c.start > t + 0.5);
+    if (k >= 0) seekChapter(k);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [seekChapter]);
+  const prevChapter = useCallback(() => {
+    const ch = chaptersRef.current; const t = (offsetsRef.current[idxRef.current] || 0) + (active()?.currentTime || 0);
+    let k = -1; for (let i = 0; i < ch.length; i++) { if (ch[i].start <= t - 3) k = i; else break; }   // 3 sn içinde: bir öncekine
+    seekChapter(Math.max(0, k));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [seekChapter]);
+
+  // ---- Uyku zamanlayıcısı ----
+  const setSleep = useCallback((mode: SleepMode) => {
+    if (fadeTimer.current) { clearInterval(fadeTimer.current); fadeTimer.current = null; }
+    els.current.forEach((a) => { try { if (a) a.volume = 1; } catch {} });
+    if (mode === "off") { setSleepState({ mode, endsAt: null, chapter: null }); return; }
+    if (mode === "chapter") {
+      const t = (offsetsRef.current[idxRef.current] || 0) + (active()?.currentTime || 0);
+      let k = -1; for (let i = 0; i < chaptersRef.current.length; i++) { if (chaptersRef.current[i].start <= t + 0.2) k = i; else break; }
+      setSleepState({ mode, endsAt: null, chapter: k });
+      return;
+    }
+    setSleepState({ mode, endsAt: Date.now() + parseInt(mode, 10) * 60000, chapter: null });
+  }, []);
+
+  /** Süre dolunca: 10 sn'de yumuşak kısılma (iOS'ta volume salt okunur → doğrudan durdur), sonra duraklat ve 30 sn geri al. */
+  function sleepNow() {
+    const a = active();
+    const finish = () => {
+      pause();
+      els.current.forEach((x) => { try { if (x) x.volume = 1; } catch {} });
+      const t = (offsetsRef.current[idxRef.current] || 0) + (a?.currentTime || 0);
+      seek(Math.max(0, t - SLEEP_REWIND_SEC));
+      setSleepState({ mode: "off", endsAt: null, chapter: null });
+    };
+    if (!a) { finish(); return; }
+    let canFade = false;
+    try { a.volume = 0.99; canFade = a.volume < 1; a.volume = 1; } catch {}
+    if (!canFade) { finish(); return; }
+    const steps = 20; let i = 0;
+    fadeTimer.current = setInterval(() => {
+      i++;
+      try { a.volume = Math.max(0, 1 - i / steps); } catch {}
+      if (i >= steps) { if (fadeTimer.current) clearInterval(fadeTimer.current); fadeTimer.current = null; finish(); }
+    }, SLEEP_FADE_MS / steps);
+  }
+  useEffect(() => {
+    const s = sleepRef.current;
+    if (s.mode === "off" || !playing) return;
+    if (s.endsAt) {
+      const left = s.endsAt - Date.now();
+      if (left <= 0) { sleepNow(); return; }
+      const t = setTimeout(sleepNow, left);
+      return () => clearTimeout(t);
+    }
+    if (s.mode === "chapter" && s.chapter != null && chapterIndex > s.chapter) {
+      pause();
+      seek(chaptersRef.current[chapterIndex]?.start ?? time);
+      setSleepState({ mode: "off", endsAt: null, chapter: null });
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sleep, playing, chapterIndex]);
   // Bekleme sırasında (parça yok) "çalıyor" niyeti de oynatma sayılır: dokununca duraklar
   const toggle = useCallback(() => { (playingRef.current && (playing || waiting)) ? pause() : play(); }, [play, pause, playing, waiting]);
 
@@ -213,10 +315,14 @@ export function useAudioQueue(chunks: QueueChunk[], opts: { rate?: number; stora
     els.current = [];
     unlocked.current = false;
     idxRef.current = 0; playingRef.current = false; pendingSeek.current = null;
+    if (gapTimer.current) { clearTimeout(gapTimer.current); gapTimer.current = null; }
+    if (fadeTimer.current) { clearInterval(fadeTimer.current); fadeTimer.current = null; }
     setIndex(0); setChunkTime(0); setPlaying(false); setWaiting(false); setBlocked(false); setMeasured({});
+    setSleepState({ mode: "off", endsAt: null, chapter: null });
   }, []);
 
   return { index, chunkTime, time, total, allKnown, durations, offsets, playing, waiting, blocked, firstReady,
+           chapters, chapterIndex, seekChapter, nextChapter, prevChapter, sleep, setSleep,
            play, pause, toggle, seek, skip, unlock, reset, isUnlocked: () => unlocked.current };
 }
 
@@ -240,9 +346,12 @@ export function useMediaSession(q: AudioQueue, meta: MediaMeta | null, speed: nu
       ms.setActionHandler("seekbackward", () => qRef.current.skip(-skipSec));
       ms.setActionHandler("seekforward", () => qRef.current.skip(skipSec));
       ms.setActionHandler("seekto", (d: any) => { if (typeof d.seekTime === "number") qRef.current.seek(d.seekTime); });
+      // Kilit ekranı ⏮ ⏭ → önceki/sonraki bölüm
+      try { ms.setActionHandler("previoustrack", () => qRef.current.prevChapter()); } catch {}
+      try { ms.setActionHandler("nexttrack", () => qRef.current.nextChapter()); } catch {}
     } catch {}
     return () => {
-      try { ["play", "pause", "seekbackward", "seekforward", "seekto"].forEach((k) => ms.setActionHandler(k, null)); } catch {}
+      try { ["play", "pause", "seekbackward", "seekforward", "seekto", "previoustrack", "nexttrack"].forEach((k) => ms.setActionHandler(k, null)); } catch {}
       try { ms.metadata = null; } catch {}
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps

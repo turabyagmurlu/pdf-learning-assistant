@@ -24,11 +24,15 @@ export type Block =
   | { type: "ol"; items: Inline[][]; start: number }
   | { type: "blockquote"; inline: Inline[] };
 
-/** Atıf işareti: [K1], [K1, K3], [K1; K4], [K 2] */
-export const CITE_RE = /\[(K\s*\d+(?:\s*[,;]\s*K?\s*\d+)*)\]/g;
+/** Atıf işareti: [K1], [K1, K3], [K1; K4], [K 2] ve sayfalı biçim [K1 s.3], [K1 s.3, K4 s.12] (Sor v3). */
+const CITE_ITEM = String.raw`K?\s*\d+(?:\s*s\.\s*\d+(?:\s*[–-]\s*\d+)?)?`;
+export const CITE_RE = new RegExp(String.raw`\[(K\s*\d+(?:\s*s\.\s*\d+(?:\s*[–-]\s*\d+)?)?(?:\s*[,;]\s*${CITE_ITEM})*)\]`, "g");
+const CITE_HEAD = new RegExp("^" + CITE_RE.source);
 
+/** [K1 s.3, K4 s.12] → [1, 4]: her öğenin yalnız K numarası (sayfa numarası atıf numarası değildir). */
 function citeNums(inner: string): number[] {
-  return Array.from(inner.matchAll(/\d+/g)).map((m) => parseInt(m[0], 10)).filter((n) => n > 0);
+  return inner.split(/[,;]/).map((p) => /\d+/.exec(p)).filter((m): m is RegExpExecArray => !!m)
+    .map((m) => parseInt(m[0], 10)).filter((n) => n > 0);
 }
 
 /* ---------------------------------------------------------------- satır içi */
@@ -51,9 +55,7 @@ export function parseInline(src: string): Inline[] {
     }
     // Atıf
     if (ch === "[") {
-      CITE_RE.lastIndex = 0;
-      const rest = src.slice(i);
-      const m = /^\[(K\s*\d+(?:\s*[,;]\s*K?\s*\d+)*)\]/.exec(rest);
+      const m = CITE_HEAD.exec(src.slice(i));
       if (m) { flush(); out.push({ t: "cite", n: citeNums(m[1]), raw: m[0] }); i += m[0].length; continue; }
     }
     // Kalın: ** ... ** ya da __ ... __

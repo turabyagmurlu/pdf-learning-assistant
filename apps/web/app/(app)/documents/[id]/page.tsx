@@ -1,9 +1,10 @@
 "use client";
 import { useEffect, useMemo, useRef, useState } from "react";
 import dynamic from "next/dynamic";
+import type { StudyNoteProps } from "@/components/studynote/StudyNote";
 import { api } from "@/lib/api";
 import {
-  exportMarkdown, Annotation, HIGHLIGHT_COLORS, HighlightStyle, PenPrefs, loadPenPrefs, savePenPrefs,
+  Annotation, HIGHLIGHT_COLORS, HighlightStyle, PenPrefs, loadPenPrefs, savePenPrefs,
   OPACITY_STEPS, DEFAULT_OPACITY, annotationMarks, pigmentOf, pigmentName,
 } from "@/lib/reader";
 import { stageInfo } from "@/lib/docstage";
@@ -12,19 +13,16 @@ import InkPreview from "@/components/reader/InkPreview";
 import type { InkDraft } from "@/components/reader/PdfReader";
 import { useAnnotations } from "@/hooks/useAnnotations";
 import { usePoll } from "@/hooks/usePoll";
-import ReaderToolbar, { ReaderMoreMenu, ReaderBottomBar, Theme, Tool, usePaper } from "@/components/reader/ReaderToolbar";
+import ReaderToolbar, { ReaderMoreMenu, ReaderBottomBar, Theme, Tool, ViewMode, usePaper } from "@/components/reader/ReaderToolbar";
 import PenPalette from "@/components/reader/PenPalette";
 import ReaderHeader, { useNotebookContext, notebookHref, useMedia } from "@/components/reader/ReaderHeader";
-import { useAddToDraft } from "@/components/reader/useAddToDraft";
-import NotesPanel from "@/components/reader/NotesPanel";
-import ExplainPanel from "@/components/reader/ExplainPanel";
 import ConnectionsPanel from "@/components/reader/ConnectionsPanel";
 import { ChatPanel } from "@/components/chat/ChatPanel";
-import DraftEditor from "@/components/DraftEditor";
 import Modal from "@/components/Modal";
+import Markdown from "@/components/Markdown";
 import { toast as notify } from "@/components/Toast";
 import { useRouter } from "next/navigation";
-import { X, Sparkles, Volume2, Link2, Pin, PinOff, AlignLeft, FileText, PenLine, Highlighter } from "lucide-react";
+import { X, Sparkles, Link2, Pin, PinOff, PenLine } from "lucide-react";
 
 /** El yazisi: bu kadar sure yeni darbe gelmezse darbeler tek not olarak kaydedilir */
 const INK_IDLE_MS = 1200;
@@ -40,18 +38,20 @@ import { useReadingSync } from "@/hooks/useReadingSync";
 const PdfReader = dynamic(() => import("@/components/reader/PdfReader"), { ssr: false });
 const VideoReader = dynamic(() => import("@/components/reader/VideoReader"), { ssr: false });
 const TextReader = dynamic(() => import("@/components/reader/TextReader"), { ssr: false });
+// Çalışma notu paneli (Ajan N): ders notu (L0/L1) + bu kaynağın vurguları/notları; compact
+const StudyNote = dynamic<StudyNoteProps>(() => import("@/components/studynote/StudyNote"), { ssr: false });
 
-// 2.0: Taslak · Vurgular · Anlat · Sor (+ Bağlantılar korunur). "ai" anahtari = Sor (eski adi Sohbet).
-type RightTab = "draft" | "notes" | "explain" | "ai" | "links";
+// 3.0: 3 yan panel — Çalışma notu (vurgular içinde) · Sor ("Bu sayfayı anlat" hazır soru) · Bağlantılar.
+// Taslak/Vurgular → "note"; Anlat → "ai" (eski kayıtlı tercihler böyle eşlenir).
+type RightTab = "note" | "ai" | "links";
 const RIGHT_TABS: { key: RightTab; label: string; hint: string; Icon: typeof Sparkles }[] = [
-  { key: "draft", label: "Taslak", hint: "Bu kaynağın taslağı: vurguların kendiliğinden burada birikir", Icon: PenLine },
-  { key: "notes", label: "Vurgular", hint: "Vurgular, alt çizgiler ve kenar notları", Icon: Highlighter },
-  { key: "explain", label: "Anlat", hint: "Açık sayfayı sade dille anlat ve sesli oku", Icon: Volume2 },
-  { key: "ai", label: "Sor", hint: "Bu kaynağa sor: cevaplar yalnız bu kaynaktan gelir", Icon: Sparkles },
+  { key: "note", label: "Çalışma notu", hint: "Ders notu ve bu kaynakta biriktirdiklerin (vurgular, notlar)", Icon: PenLine },
+  { key: "ai", label: "Sor", hint: "Bu kaynağa sor; “Bu sayfayı anlat” hazır sorusu burada", Icon: Sparkles },
   { key: "links", label: "Bağlantılar", hint: "Bu sayfayla bağlantılı diğer kaynaklar", Icon: Link2 },
 ];
 const RIGHT_TAB_KEY = "reader.rightTab";
-const PANEL_LABEL = "Taslak, vurgular ve sohbet";
+const LEGACY_RIGHT: Record<string, RightTab> = { draft: "note", notes: "note", explain: "ai" };
+const PANEL_LABEL = "Çalışma notu, Sor ve Bağlantılar";
 /**
  * Okuyucu duzeni (TB-2):
  *  - < 768        telefon: paneller alttan acilan tabaka (Modal), alt cubuk.
@@ -65,7 +65,6 @@ const MD = "(min-width: 768px)";
 const TOUCH = "(hover: none) and (pointer: coarse)";
 const SIDE_W = 380;          // dikey tablette yan tabaka genisligi
 const TOUCH_RIGHT_W = 368;   // yatay dokunmatik tablette sohbetin ilk genisligi (360-380)
-type ViewMode = "page" | "text";
 
 function toArr(v: any): any[] {
   if (Array.isArray(v)) return v;
@@ -84,7 +83,6 @@ export default function DocumentPage({ params }: { params: { id: string } }) {
   const [page, setPage] = useState(1);
   const [numPages, setNumPages] = useState(0);
   const [scale, setScale] = useState(1);
-  const [spread, setSpread] = useState(false);
   const [tool, setToolRaw] = useState<Tool>("none");
   // Kalem paleti (Ajan P): renk, kademe, konum, kucuk mu — cihazda saklanir. prevTool: kalemle cift dokunusta gecis.
   const [pen, setPen] = useState<PenPrefs>({ color: HIGHLIGHT_COLORS[0].value, opacity: DEFAULT_OPACITY, collapsed: false, pos: null,
@@ -106,9 +104,10 @@ export default function DocumentPage({ params }: { params: { id: string } }) {
     setTool(cur === "none" ? "highlight" : other);
   }
 
-  const [theme, setTheme] = useState<Theme>("light");
-  // Okuma kagidi (Ajan V2): Otomatik / Beyaz / Parşömen / Gece — yalniz sayfa yuzeyi; "typdf-paper"
-  const { paper, setPaper, paperTone } = usePaper(theme);
+  // Okuma kagidi (Ajan V2): Otomatik / Beyaz / Krem / Gece ("typdf-paper"). 3.0: ayri "okuma temasi" yok;
+  // okuyucu temasi kagittan turetilir (Gece → koyu, Krem → sepya, Beyaz → acik).
+  const { paper, setPaper, paperTone } = usePaper();
+  const theme: Theme = paperTone === "night" ? "dark" : paperTone === "cream" ? "sepia" : "light";
   const [focus, setFocus] = useState(false);
   // Paneller kapali baslar; genis ekranda (>=1024) kayitli tercih uygulanir. Dar ekranda
   // paneller alttan acilan tabaka olur ve her acilista kapali gelir (PDF once gorunsun).
@@ -116,8 +115,8 @@ export default function DocumentPage({ params }: { params: { id: string } }) {
   const [panelsReady, setPanelsReady] = useState(false);
   const [leftOpen, setLeftOpen] = useState(false);
   const [rightOpen, setRightOpen] = useState(false);
-  const [rightTab, setRightTab] = useState<RightTab>("draft");
-  // Biriktirme geri bildirimi (2.0): Taslak sekmesinde "+N" (yeni biriken), yeni vurguda .ink-bloom + kose rozeti
+  const [rightTab, setRightTab] = useState<RightTab>("note");
+  // Biriktirme geri bildirimi: Çalışma notu sekmesinde "+N" (yeni biriken), yeni vurguda .ink-bloom + kose rozeti
   const [draftFresh, setDraftFresh] = useState(0);
   const [bloomId, setBloomId] = useState<string | null>(null);
   const [chip, setChip] = useState(0);
@@ -131,7 +130,7 @@ export default function DocumentPage({ params }: { params: { id: string } }) {
   const [prefill, setPrefill] = useState<{ text: string; key: number } | null>(null);
   // dikey tablet (768-1023): sag yan tabaka sabitlenince akisa girer (PDF daralir)
   const [pinned, setPinned] = useState(false);
-  // "Sayfa | Metin": telefonda kucuk kalan PDF metnini yeniden akisli gosterir (T-5)
+  // "Sayfa | Metin": telefonda kucuk kalan PDF metnini yeniden akisli gosterir (T-5); "⋯" menusunde
   const [viewMode, setViewMode] = useState<ViewMode>("page");
 
   const isMd = useMedia(MD);
@@ -145,7 +144,6 @@ export default function DocumentPage({ params }: { params: { id: string } }) {
   useVisualViewport();
 
   const ctx = useNotebookContext(doc);
-  const { addToDraft, picker: draftPicker } = useAddToDraft(doc, ctx);
   const { annotations, add, patch, remove, restore } = useAnnotations(id);
   // vurgu haritasi (metin gorunumu): her vurgu / not icin sayfa + konum + renk
   const marks = useMemo(() => annotationMarks(annotations), [annotations]);
@@ -340,16 +338,13 @@ export default function DocumentPage({ params }: { params: { id: string } }) {
   // kalici okuyucu tercihleri
   useEffect(() => {
     try {
-      const t = localStorage.getItem("reader.theme") as Theme | null;
-      if (t === "light" || t === "sepia" || t === "dark") setTheme(t);
-      const sp = localStorage.getItem("reader.spread");
-      if (sp) setSpread(sp === "1");
       const rw = parseInt(localStorage.getItem("reader.rightW") || "", 10); if (!isNaN(rw)) setRightW(Math.min(760, Math.max(320, rw)));
       const lw = parseInt(localStorage.getItem("reader.leftW") || "", 10); if (!isNaN(lw)) setLeftW(Math.min(460, Math.max(220, lw)));
       setPinned(localStorage.getItem("reader.pinRight") === "1");
       const vm = localStorage.getItem("reader.mode");
       if (vm === "page" || vm === "text") setViewMode(vm);
-      const rt = localStorage.getItem(RIGHT_TAB_KEY) as RightTab | null;
+      const raw = localStorage.getItem(RIGHT_TAB_KEY);
+      const rt = raw ? (LEGACY_RIGHT[raw] || raw) as RightTab : null;
       if (rt && RIGHT_TABS.some((t) => t.key === rt)) setRightTab(rt);
     } catch {}
   }, []);
@@ -358,8 +353,6 @@ export default function DocumentPage({ params }: { params: { id: string } }) {
     if (chipTimer.current) clearTimeout(chipTimer.current);
     if (bloomTimer.current) clearTimeout(bloomTimer.current);
   }, []);
-  useEffect(() => { try { localStorage.setItem("reader.theme", theme); } catch {} }, [theme]);
-  useEffect(() => { try { localStorage.setItem("reader.spread", spread ? "1" : "0"); } catch {} }, [spread]);
   useEffect(() => { try { localStorage.setItem("reader.rightW", String(rightW)); } catch {} }, [rightW]);
   useEffect(() => { try { localStorage.setItem("reader.leftW", String(leftW)); } catch {} }, [leftW]);
   useEffect(() => { try { localStorage.setItem("reader.pinRight", pinned ? "1" : "0"); } catch {} }, [pinned]);
@@ -414,7 +407,7 @@ export default function DocumentPage({ params }: { params: { id: string } }) {
   // dar ekranda ayni anda tek tabaka (dikey tablette sabitlenmis sohbet acik kalabilir)
   function openLeft(v: boolean) { setLeftOpen(v); if (v && !isLg && !(sideSheet && pinned)) setRightOpen(false); }
   function openRight(v: boolean) { setRightOpen(v); if (v && !isLg) setLeftOpen(false); }
-  function showNotes() { setRightTab("notes"); if (isLg || sideSheet) setRightOpen(true); }
+  function showNotes() { setRightTab("note"); if (isLg || sideSheet) setRightOpen(true); }
   // tabakadan sayfaya atlayinca tabaka kapansin (yan panel ve sabitlenmis yan tabaka acik kalir)
   function closeAfterJump() { if (!isLg && !(sideSheet && pinned)) setRightOpen(false); }
 
@@ -529,22 +522,14 @@ export default function DocumentPage({ params }: { params: { id: string } }) {
     return () => window.removeEventListener("mousemove", onMove);
   }, [focus, isLg, leftW, rightW]);
 
-  // acik sayfanin metnini DOM'dan al (pdf.js metin katmani)
-  function getPageText(n: number): string {
-    try {
-      const el = document.querySelector(`[data-page="${n}"] .react-pdf__Page__textContent`);
-      return el ? (el.textContent || "") : "";
-    } catch { return ""; }
-  }
-
   const showLeft = leftOpen && (!focus || peek === "left");
   const showRight = rightOpen && (!focus || peek === "right");
   const progress = numPages ? Math.round((page / numPages) * 100) : 0;
-  // Taslak sekmesi gorunur olunca "+N" sifirlanir (yeni birikenler goruldu)
-  const draftVisible = rightTab === "draft" && (isLg ? showRight : rightOpen);
+  // Çalışma notu sekmesi gorunur olunca "+N" sifirlanir (yeni birikenler goruldu)
+  const draftVisible = rightTab === "note" && (isLg ? showRight : rightOpen);
   useEffect(() => { if (draftVisible) setDraftFresh(0); }, [draftVisible]);
 
-  /** Yeni vurgu taslaga birikti: murekkep yayilmasi + sayfa kosesinde 1,6 sn "Taslağına eklendi" + sekmede +1 */
+  /** Yeni vurgu çalışma notuna birikti: mürekkep yayılması + sayfa köşesinde 1,6 sn "Çalışma notuna eklendi" + sekmede +1 */
   function celebrateAccumulate(annId: string) {
     setBloomId(annId);
     if (bloomTimer.current) clearTimeout(bloomTimer.current);
@@ -587,12 +572,6 @@ export default function DocumentPage({ params }: { params: { id: string } }) {
     setPrefill({ text: `«${snip}» (s.${pg}) — bu kısmı açıklar mısın?`, key: Date.now() });
     setRightTab("ai");
     openRight(true);
-  }
-  function onExport() {
-    const md = exportMarkdown(doc?.title || "Kaynak", annotations);
-    const blob = new Blob([md], { type: "text/markdown" });
-    const a = document.createElement("a");
-    a.href = URL.createObjectURL(blob); a.download = `${doc?.title || "notlar"}.md`; a.click(); setTimeout(() => URL.revokeObjectURL(a.href), 4000);
   }
 
   if (!doc) {
@@ -652,11 +631,9 @@ export default function DocumentPage({ params }: { params: { id: string } }) {
   );
 
   const tb = {
-    page, numPages, setPage, scale, setScale, spread, setSpread, tool, setTool, theme, setTheme,
-    focus, setFocus, leftOpen, setLeftOpen: openLeft, rightOpen, setRightOpen: openRight, onExport,
-    onUndo: undo, onRedo: redo, paper, paperTone, setPaper,
-    canUndo: histTick >= 0 && (undoRef.current.length > 0 || !!inkRef.current.active?.strokes.length),
-    canRedo: histTick >= 0 && redoRef.current.length > 0,
+    page, numPages, setPage, scale, setScale, tool, setTool,
+    focus, setFocus, leftOpen, setLeftOpen: openLeft, rightOpen, setRightOpen: openRight,
+    viewMode, setViewMode, paper, paperTone, setPaper,
   };
   const st = stageInfo(doc);
 
@@ -669,7 +646,7 @@ export default function DocumentPage({ params }: { params: { id: string } }) {
         </p>
       ) : (
         <>
-          {doc.short_summary && <p className="mt-2 text-sm leading-relaxed text-text-secondary">{doc.short_summary}</p>}
+          {doc.short_summary && <div className="mt-2 text-sm leading-relaxed text-text-secondary"><Markdown text={doc.short_summary} /></div>}
           {toArr(doc.outline).length > 0 && (
             <div className="mt-5">
               <h3 className="mb-1.5 text-xs font-semibold uppercase tracking-wide text-text-secondary">İçindekiler</h3>
@@ -742,16 +719,11 @@ export default function DocumentPage({ params }: { params: { id: string } }) {
             <Icon size={16} aria-hidden className={on ? "text-accent-purple" : ""} />
             <span className="flex max-w-full items-center gap-1 truncate">
               {label}
-              {key === "notes" && annotations.length > 0 && (
-                <span className="rounded-full bg-accent-purple/15 px-1.5 text-xs text-text-primary">
-                  {annotations.length}<span className="sr-only"> vurgu ve not</span>
-                </span>
-              )}
-              {key === "draft" && draftFresh > 0 && !on && (
-                <span className="draft-fresh">+{draftFresh}<span className="sr-only"> yeni vurgu taslağa eklendi</span></span>
+              {key === "note" && draftFresh > 0 && !on && (
+                <span className="draft-fresh">+{draftFresh}<span className="sr-only"> yeni vurgu çalışma notuna eklendi</span></span>
               )}
             </span>
-            {on && <span aria-hidden className="absolute inset-x-2 bottom-0 h-0.5 rounded-full" style={{ background: key === "draft" ? "var(--gold, #A57A2C)" : "var(--accent-purple)" }} />}
+            {on && <span aria-hidden className="absolute inset-x-2 bottom-0 h-0.5 rounded-full" style={{ background: key === "note" ? "var(--gold, #A57A2C)" : "var(--accent-purple)" }} />}
           </button>
         );
       })}
@@ -759,49 +731,24 @@ export default function DocumentPage({ params }: { params: { id: string } }) {
   );
   const rightBody = (
     <div id="rpanel" role="tabpanel" aria-labelledby={`rtab-${rightTab}`} className="min-h-0 flex-1">
-      {rightTab === "draft" ? (
+      {rightTab === "note" ? (
         <div className="h-full min-h-0 overflow-y-auto">
-          <DraftEditor scope={{ kind: "document", id }} title={doc?.title || "Kaynak"} compact
-                       onOpenPage={(docId: string, pg: number | null) => {
-                         if (docId === id) { if (pg) setPage(Math.max(1, Math.min(numPages || pg, pg))); closeAfterJump(); }
-                         else router.push(`/documents/${docId}${pg ? `?page=${pg}` : ""}`);
-                       }} />
+          {/* Ajan N: ders notu (L0/L1, "Ders notunu hazırla ⚡") + biriktirilenler; vurguya tıkla → sayfa */}
+          <StudyNote scope={{ kind: "document", id }} compact
+                     onOpenPage={(docId: string, pg?: number | null) => {
+                       if (docId === id) { if (pg) setPage(Math.max(1, Math.min(numPages || pg, pg))); closeAfterJump(); }
+                       else router.push(`/documents/${docId}${pg ? `?page=${pg}` : ""}`);
+                     }} />
         </div>
       ) : rightTab === "ai" ? (
+        /* Ajan S: "Bu sayfayı anlat" hazır sorusu + cevabın altında "Sesli dinle" (eski Anlat paneli) */
         <ChatPanel documentId={id} prefill={prefill} notebookHref={ctx.id ? notebookHref(ctx) : null}
                    onGoPage={(pg) => { setPage(Math.max(1, Math.min(numPages || pg, pg))); closeAfterJump(); }} />
-      ) : rightTab === "explain" ? (
-        <ExplainPanel documentId={id} page={page} getPageText={getPageText} />
-      ) : rightTab === "links" ? (
+      ) : (
         <ConnectionsPanel documentId={id} page={page}
                           onOpen={(docId, pg) => router.push(`/documents/${docId}${pg ? `?page=${pg}` : ""}`)} />
-      ) : (
-        <NotesPanel docTitle={doc?.title} annotations={annotations}
-                    onJump={(a) => { setPage(a.page_number); closeAfterJump(); }}
-                    onDelete={removeTracked}
-                    onEditNote={(a) => setEditing(a)} />
       )}
     </div>
-  );
-
-  // "Sayfa | Metin" anahtari: md ve ustunde iki etiketli dugme, telefonda tek ikon (44 px)
-  const viewSwitch = (
-    <>
-      <div role="group" aria-label="Görünüm" className="hidden shrink-0 items-center rounded-lg border p-0.5 text-xs md:flex">
-        {([["page", "Sayfa", FileText], ["text", "Metin", AlignLeft]] as const).map(([k, label, Icon]) => (
-          <button key={k} type="button" aria-pressed={viewMode === k} onClick={() => setViewMode(k)}
-                  className={`flex h-10 min-w-[60px] items-center justify-center gap-1 rounded-md px-2 ${viewMode === k ? "bg-accent-purple/10 font-medium text-accent-purple" : "text-text-secondary hover:bg-surface-muted"}`}>
-            <Icon size={14} aria-hidden /> {label}
-          </button>
-        ))}
-      </div>
-      <button type="button" aria-pressed={viewMode === "text"} onClick={() => setViewMode(viewMode === "text" ? "page" : "text")}
-              aria-label={viewMode === "text" ? "Metin görünümü açık. Sayfa görünümüne geç" : "Metin görünümüne geç"}
-              title={viewMode === "text" ? "Sayfa görünümü" : "Metin görünümü"}
-              className={`flex h-11 w-11 shrink-0 items-center justify-center rounded-lg md:hidden ${viewMode === "text" ? "bg-accent-purple/10 text-accent-purple" : "hover:bg-surface-muted"}`}>
-        {viewMode === "text" ? <FileText size={19} aria-hidden /> : <AlignLeft size={19} aria-hidden />}
-      </button>
-    </>
   );
 
   // Dikey tablet: sag yan tabaka basligi (sekmeler + Sabitle + Kapat)
@@ -823,13 +770,12 @@ export default function DocumentPage({ params }: { params: { id: string } }) {
 
   const pdfView = fileUrl ? (
     viewMode === "text" ? (
-      <TextView fileUrl={fileUrl} page={page} onPageChange={setPage} onAsk={onAsk}
-                onAddToDraft={(text: string, pg: number) => addToDraft(text, pg)} theme={theme}
+      <TextView fileUrl={fileUrl} page={page} onPageChange={setPage} onAsk={onAsk} theme={theme}
                 paper={paperTone} marks={marks} />
     ) : (
       <PinchZoom scale={scale} onScaleChange={(s: number) => setScale(() => s)} fitLabel="Sığdır">
         <PdfReader
-          fileUrl={fileUrl} page={page} scale={scale} spread={isLg && spread} tool={tool}
+          fileUrl={fileUrl} page={page} scale={scale} spread={false} tool={tool}
           pen={{ color: pen.color, opacity: pen.opacity }}
           ink={{ color: pen.inkColor, width: pen.inkWidth }}
           inkDrafts={inkDrafts} onInkStroke={onInkStroke} onInkStart={onInkStart} onInkUndo={undoInkStroke}
@@ -840,7 +786,6 @@ export default function DocumentPage({ params }: { params: { id: string } }) {
           onErase={onErase} onPenDoubleTap={penDoubleTap}
           onSelectAnnotation={(a) => { setEditing(a); showNotes(); }}
           onAsk={onAsk}
-          onAddToDraft={(text, pg) => addToDraft(text, pg)}
           paper={paperTone} bloomId={bloomId}
         />
       </PinchZoom>
@@ -856,7 +801,7 @@ export default function DocumentPage({ params }: { params: { id: string } }) {
     <div className="reader-root flex h-dvh flex-col" data-theme={theme}>
       <ReaderHeader doc={doc} ctx={ctx} serverPage={serverPage} serverDevice={serverDevice} currentPage={page}
                     onGoServerPage={(n: number) => setPage(Math.max(1, Math.min(numPages || n, n)))}>
-        {viewSwitch}
+        {/* Üst çubuk: geniş ekranda ≤8 düğme (Geri + 7); dar ekranda yalnız "⋯" (araçlar alt çubukta) */}
         {isLg ? <ReaderToolbar {...tb} /> : <ReaderMoreMenu {...tb} variant="narrow" />}
       </ReaderHeader>
 
@@ -928,7 +873,7 @@ export default function DocumentPage({ params }: { params: { id: string } }) {
             {chip > 0 && (
               <span key={chip} className="draft-chip gilded">
                 <span className="draft-chip-dot" aria-hidden />
-                Taslağına eklendi
+                Çalışma notuna eklendi
               </span>
             )}
           </div>
@@ -978,7 +923,8 @@ export default function DocumentPage({ params }: { params: { id: string } }) {
                          onLeft={() => openLeft(!leftOpen)} onRight={() => openRight(!rightOpen)}
                          rightLabel={(RIGHT_TABS.find((t) => t.key === rightTab) || RIGHT_TABS[0]).label}
                          rightIcon={(() => { const T = (RIGHT_TABS.find((t) => t.key === rightTab) || RIGHT_TABS[0]).Icon; return <T size={18} aria-hidden />; })()}
-                         rightFresh={draftFresh} />
+                         rightFresh={draftFresh}
+                         tool={viewMode === "page" && !!fileUrl ? tool : undefined} setTool={viewMode === "page" && !!fileUrl ? setTool : undefined} />
       )}
       {/* Icindekiler: telefonda alttan, tablette (dikey ve dokunmatik yatay) ustten tabaka */}
       {(!isLg || leftAsSheet) && (
@@ -1005,7 +951,6 @@ export default function DocumentPage({ params }: { params: { id: string } }) {
         </Modal>
       )}
 
-      {draftPicker}
       {editing && (
         <NoteEditor ann={editing} onClose={() => setEditing(null)}
                     onSave={(content, color, style, opacity) => {

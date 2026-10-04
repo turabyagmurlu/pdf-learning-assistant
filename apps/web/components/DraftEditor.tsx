@@ -7,8 +7,10 @@
  *   yerel değişikliği korur (mergeRemote). Kaydedilemeyen son hâl cihazda yedeklenir.
  * - Sekme odaklanınca ve boştayken 15 sn'de bir sunucu sürümüne bakar; kendiliğinden biriken (auto)
  *   vurgular `.gilded` altın parıltıyla belirir.
- * - Defter kapsamında: sürüm geçmişi, Word (.docx) dışa aktarma, AI düzenle (Kısalt, Kendi cümlelerinle).
- * - compact: okuyucu yan paneli — tek sütun, küçük araç çubuğu (Atölyede çalış + vurguları getir + filtre).
+ * - 3.0 "Çalışma notu → Biriktirdiklerin": sade araç çubuğu (Vurguları getir · Sayfa sırasına diz · Dışa aktar · ⋯ [Önceki sürümler]).
+ *   AI düzenle menüsü ve "Atölyede çalış" KALKTI. Her alıntının yanında "Sor": window "typdf:ask" olayı
+ *   ({text, page, document_id}) → Sor paneli/sekmesi alıntıyı soruya ekler.
+ * - compact: okuyucu yan paneli — tek sütun, küçük araç çubuğu.
  */
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { useRouter } from "next/navigation";
@@ -18,10 +20,9 @@ import { mdToPlain, mdToHtml, mdNormalize } from "@/lib/markdown";
 import { pigmentName } from "@/lib/reader";
 import type { InkStroke } from "@/lib/ink";
 import {
-  ArrowUp, ArrowDown, X, Plus, Sparkles, RefreshCw, Heading2, Wand2, Loader2, Check,
-  Download, ChevronDown, History, Share2, TextCursorInput, ListOrdered, BookOpen,
+  ArrowUp, ArrowDown, X, Plus, Sparkles, RefreshCw, Heading2, Loader2,
+  Download, ChevronDown, History, Share2, TextCursorInput, ListOrdered, BookOpen, MoreHorizontal,
 } from "lucide-react";
-import { Cost, costTitle, isUsageLimit } from "@/components/CostBadge";
 import { toast } from "@/components/Toast";
 import CitedText from "@/components/CitedText";
 import Modal from "@/components/Modal";
@@ -29,7 +30,6 @@ import { Skeleton } from "@/components/Skeleton";
 import { Fleuron, DropCap } from "@/components/art";
 import QuoteCard, { quotePigment } from "@/components/draft/QuoteCard";
 import EmptyDraft from "@/components/draft/EmptyDraft";
-import AtelierButton from "@/components/draft/AtelierButton";
 import { sortQuoteRuns } from "@/components/draft/order";
 import {
   type DraftScope, fetchDraft, saveDraft, beaconSave, backupKey, baseKey, importUrl,
@@ -247,8 +247,9 @@ function DraftBody({ scope, title, compact, onOpenPage, initial, initialRev }: D
   const [importing, setImporting] = useState(false);
   const [importDone, setImportDone] = useState(false);
   const [docNotes, setDocNotes] = useState<string[] | null>(null); // belge kapsamında vurgu kimlikleri
-  const [countKey, setCountKey] = useState(0);
+  const [moreOpen, setMoreOpen] = useState(false);      // "⋯" menüsü (Önceki sürümler, İçindekiler)
   const exportRef = useRef<HTMLDivElement>(null);
+  const moreRef = useRef<HTMLDivElement>(null);
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const retryTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const gildTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -269,39 +270,12 @@ function DraftBody({ scope, title, compact, onOpenPage, initial, initialRev }: D
     gildTimer.current = setTimeout(() => { if (mounted.current) setGild(new Set()); }, 1600);
   }
 
-  /* ---------- AI ile düzenle (yalnız defter kapsamı: uç /collections/{id}/draft-assist) ---------- */
-  type Assist = { idx: number; action: string; busy: boolean; text?: string; error?: string; menu?: boolean };
-  const [assist, setAssist] = useState<Assist | null>(null);
-  const [customInstr, setCustomInstr] = useState("");
-  const canAssist = isCol;
-  const ACTIONS: [string, string, string][] = [
-    ["shorten", "Kısalt", "Yarı uzunluğa indir, özü koru"],
-    ["paraphrase", "Kendi cümlelerinle", "Aynı fikri farklı sözcüklerle yeniden yaz"],
-    ["custom", "Serbest talimat…", "Kendi isteğini yaz"],
-  ];
-  async function runAssist(idx: number, action: string, instruction?: string) {
-    const b = blocks[idx]; if (!b || !canAssist) return;
-    const text = b.type === "quote" ? b.text : b.type === "answer" ? b.text : (b as any).text;
-    if (!text || text.trim().length < 8) { setAssist({ idx, action, busy: false, error: "Önce biraz metin yaz." }); return; }
-    setAssist({ idx, action, busy: true });
-    try {
-      const r = await api(`/collections/${scope.id}/draft-assist`, { method: "POST", body: JSON.stringify({ action, text, instruction }) });
-      setAssist({ idx, action, busy: false, text: r.text });
-    } catch (e: any) {
-      setAssist({ idx, action, busy: false, error: isUsageLimit(e) ? (e?.message || "Bugünkü yapay zekâ kullanımın doldu.")
-        : (e?.message || "Öneri hazırlanamadı; birazdan tekrar dene.") });
-    }
-  }
-  function applyAssist() {
-    if (!assist || !assist.text) return;
-    const b = blocks[assist.idx];
-    if (b.type === "quote" && assist.action === "paraphrase") {
-      // parafraz: alıntının ALTINA senin paragrafın olarak girer; alıntı kartı kalır (kaynak belli olsun)
-      insertAfter(assist.idx, { id: uid(), type: "p", text: assist.text });
-    } else if (b.type === "p" || b.type === "h") {
-      setText(assist.idx, assist.text);
-    }
-    setAssist(null);
+  /* ---------- "Sor": alıntıyı Sor paneline/sekmesine gönderir (window olayı; dinleyici Sor bileşeninde) ---------- */
+  function askQuote(b: Extract<Block, { type: "quote" }>) {
+    const text = (b.text || "").trim() || (b.note || "").trim();
+    if (!text) { toast.info("Bu notun metni yok; kaynakta sayfayı açıp seçerek sorabilirsin."); return; }
+    window.dispatchEvent(new CustomEvent("typdf:ask", { detail: { text, page: b.page, document_id: b.document_id, source: b.source } }));
+    sayFlash("Soruya eklendi", 1200);
   }
 
   /* ---------- kayıt ---------- */
@@ -441,15 +415,18 @@ function DraftBody({ scope, title, compact, onOpenPage, initial, initialRev }: D
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [scope.id, isCol]);
 
-  // "Dışa aktar" menüsü: dışarı tıklayınca / Esc ile kapanır
+  // "Dışa aktar" ve "⋯" menüleri: dışarı tıklayınca / Esc ile kapanır
   useEffect(() => {
-    if (!exportOpen) return;
-    const onDown = (e: PointerEvent) => { if (!exportRef.current?.contains(e.target as Node)) setExportOpen(false); };
-    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") setExportOpen(false); };
+    if (!exportOpen && !moreOpen) return;
+    const onDown = (e: PointerEvent) => {
+      if (exportOpen && !exportRef.current?.contains(e.target as Node)) setExportOpen(false);
+      if (moreOpen && !moreRef.current?.contains(e.target as Node)) setMoreOpen(false);
+    };
+    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") { setExportOpen(false); setMoreOpen(false); } };
     document.addEventListener("pointerdown", onDown);
     document.addEventListener("keydown", onKey);
     return () => { document.removeEventListener("pointerdown", onDown); document.removeEventListener("keydown", onKey); };
-  }, [exportOpen]);
+  }, [exportOpen, moreOpen]);
 
   // Sunucudaki taslak daha yeniyse ve bekleyen yerel değişiklik yoksa sunucudakini göster.
   // Bekleyen değişiklik varsa bir şey yapma: sıradaki kayıt koşullu gider ve birleştirir.
@@ -473,8 +450,7 @@ function DraftBody({ scope, title, compact, onOpenPage, initial, initialRev }: D
       markGild(fresh.map((b) => b.id));
       const autoN = fresh.filter((b) => b.type === "quote" && b.auto).length;
       if (fresh.length && autoN === fresh.length) sayFlash(autoN === 1 ? "Yeni bir vurgu düştü" : `${autoN} yeni vurgu düştü`, 3000);
-      else if (!force) toast.info("Taslak başka yerden güncellendi, yenilendi.");
-      setCountKey((k) => k + 1);
+      else if (!force) toast.info("Notun başka yerden güncellendi, yenilendi.");
       return fresh.length;
     } catch { return 0; /* sessiz: bir sonraki kayıt zaten birleştirir */ }
     finally { refreshing.current = false; }
@@ -491,9 +467,9 @@ function DraftBody({ scope, title, compact, onOpenPage, initial, initialRev }: D
       setImportDone(true);
       if (added > 0) {
         await refreshRemote(true);
-        toast(added === 1 ? "1 vurgu taslağa getirildi" : `${added} vurgu taslağa getirildi`);
+        toast(added === 1 ? "1 vurgu notuna getirildi" : `${added} vurgu notuna getirildi`);
       } else {
-        toast.info("Bütün vurguların zaten taslakta.");
+        toast.info("Bütün vurguların zaten burada.");
       }
     } catch (e) {
       toast.error(errorMessage(e, "Vurgular getirilemedi; birazdan tekrar dene."));
@@ -503,6 +479,7 @@ function DraftBody({ scope, title, compact, onOpenPage, initial, initialRev }: D
   /* ---------- Önceki sürümler (yalnız defter) ---------- */
   const [versions, setVersions] = useState<{ open: boolean; list: Version[] | null; error?: string; busy?: number } | null>(null);
   async function openVersions() {
+    setMoreOpen(false);
     setVersions({ open: true, list: null });
     try {
       const r = await api(`/collections/${scope.id}/draft/versions`, {}, 1);
@@ -725,7 +702,7 @@ function DraftBody({ scope, title, compact, onOpenPage, initial, initialRev }: D
 
   const outlinePanel = (
     <div className="vellum rounded-2xl border p-4">
-      <p className="eyebrow">Bu taslakta</p>
+      <p className="eyebrow">Bu notta</p>
       <p className="mt-1 text-sm text-text-secondary">
         <b className="text-text-primary">{quoteBlocks.length}</b> alıntı · <b className="text-text-primary">{words}</b> kelime senin
       </p>
@@ -747,7 +724,7 @@ function DraftBody({ scope, title, compact, onOpenPage, initial, initialRev }: D
       <div className="rule-gold my-4" aria-hidden />
       <p className="text-xs leading-relaxed text-text-secondary">
         Okurken yaptığın her vurgu, alt çizgi ve kenar notu buraya kendiliğinden düşer. Aralarına kendi cümlelerini yaz;
-        boş satırda Enter yeni paragraf açar. Kaldırdığın bloğu 10 saniye içinde “Geri al” ile geri getirebilirsin.
+        boş satırda Enter yeni paragraf açar. Bir alıntının yanındaki “Sor” onu soruya ekler. Kaldırdığın bloğu 10 saniye içinde “Geri al” ile geri getirebilirsin.
       </p>
     </div>
   );
@@ -757,48 +734,59 @@ function DraftBody({ scope, title, compact, onOpenPage, initial, initialRev }: D
   return (
     <div className={cx("grid grid-cols-1 gap-5", !compact && "md:grid-cols-[1fr_260px] lg:grid-cols-[1fr_300px]")}>
       <div className="min-w-0">
-        {/* araç çubuğu */}
+        {/* araç çubuğu: Vurguları getir · Sayfa sırasına diz · renk süzgeci · Dışa aktar ▾ · ⋯ */}
         <div className={cx("mb-3 flex flex-wrap items-center gap-2", compact && "gap-1.5")}>
-          <AtelierButton scope={scope} compact={compact} refreshKey={countKey} />
           {importBtn}
-          {!compact && quoteBlocks.length > 1 && (
+          {quoteBlocks.length > 1 && (
             <button type="button" onClick={sortByPage} className={tbtn} title="Ardışık alıntıları kaynak ve sayfa sırasına dizer; paragrafların yerinde kalır">
-              <ListOrdered size={14} aria-hidden /> Sayfa sırasına diz
+              <ListOrdered size={14} aria-hidden /> {compact ? "Sırala" : "Sayfa sırasına diz"}
             </button>
           )}
           {filterChips}
-          {!compact && (
-            <span className="flex flex-wrap items-center gap-2 sm:ml-auto">
-              {isCol && (
-                <button type="button" onClick={openVersions} title="Taslağın önceki kayıtlı sürümleri" className={tbtn}>
-                  <History size={14} aria-hidden /> <span className="sm:hidden">Sürümler</span><span className="hidden sm:inline">Önceki sürümler</span>
-                </button>
+          <span className="flex flex-wrap items-center gap-2 sm:ml-auto">
+            <div ref={exportRef} className="relative">
+              <button type="button" onClick={() => setExportOpen((o) => !o)} aria-haspopup="menu" aria-expanded={exportOpen} disabled={docxBusy} className={tbtn}>
+                {docxBusy ? <Loader2 size={14} className="animate-spin" aria-hidden /> : <Download size={14} aria-hidden />} Dışa aktar <ChevronDown size={14} aria-hidden />
+              </button>
+              {exportOpen && (
+                <div role="menu" aria-label="Dışa aktar" className="absolute right-0 top-full z-20 mt-1 w-56 overflow-hidden rounded-xl border bg-surface p-1 text-sm text-text-primary shadow-medium">
+                  <button role="menuitem" onClick={downloadDocx} className="flex min-h-[44px] w-full items-center gap-2 rounded-lg px-3 text-left hover:bg-surface-muted">
+                    <Download size={14} className="text-text-secondary" aria-hidden /> Word ({isCol ? ".docx" : ".doc"})
+                  </button>
+                  <button role="menuitem" onClick={downloadMd} className="flex min-h-[44px] w-full items-center gap-2 rounded-lg px-3 text-left hover:bg-surface-muted">
+                    <Download size={14} className="text-text-secondary" aria-hidden /> Markdown (.md)
+                  </button>
+                  {canShare && (
+                    <button role="menuitem" onClick={shareDraft} className="flex min-h-[44px] w-full items-center gap-2 rounded-lg px-3 text-left hover:bg-surface-muted">
+                      <Share2 size={14} className="text-text-secondary" aria-hidden /> Paylaş…
+                    </button>
+                  )}
+                </div>
               )}
-              <div ref={exportRef} className="relative">
-                <button type="button" onClick={() => setExportOpen((o) => !o)} aria-haspopup="menu" aria-expanded={exportOpen} disabled={docxBusy} className={tbtn}>
-                  {docxBusy ? <Loader2 size={14} className="animate-spin" aria-hidden /> : <Download size={14} aria-hidden />} Dışa aktar <ChevronDown size={14} aria-hidden />
+            </div>
+            {(isCol || !compact) && (
+              <div ref={moreRef} className="relative">
+                <button type="button" onClick={() => setMoreOpen((o) => !o)} aria-haspopup="menu" aria-expanded={moreOpen} aria-label="Diğer işlemler" title="Diğer işlemler"
+                        className="flex h-10 w-10 items-center justify-center rounded-xl border bg-surface text-text-secondary hover:border-accent-purple/50 hover:text-text-primary">
+                  <MoreHorizontal size={16} aria-hidden />
                 </button>
-                {exportOpen && (
-                  <div role="menu" aria-label="Dışa aktar" className="absolute right-0 top-full z-20 mt-1 w-56 overflow-hidden rounded-xl border bg-surface p-1 text-sm text-text-primary shadow-medium">
-                    <button role="menuitem" onClick={downloadDocx} className="flex min-h-[44px] w-full items-center gap-2 rounded-lg px-3 text-left hover:bg-surface-muted">
-                      <Download size={14} className="text-text-secondary" aria-hidden /> Word ({isCol ? ".docx" : ".doc"})
-                    </button>
-                    <button role="menuitem" onClick={downloadMd} className="flex min-h-[44px] w-full items-center gap-2 rounded-lg px-3 text-left hover:bg-surface-muted">
-                      <Download size={14} className="text-text-secondary" aria-hidden /> Markdown (.md)
-                    </button>
-                    {canShare && (
-                      <button role="menuitem" onClick={shareDraft} className="flex min-h-[44px] w-full items-center gap-2 rounded-lg px-3 text-left hover:bg-surface-muted">
-                        <Share2 size={14} className="text-text-secondary" aria-hidden /> Paylaş…
+                {moreOpen && (
+                  <div role="menu" aria-label="Diğer işlemler" className="absolute right-0 top-full z-20 mt-1 w-56 overflow-hidden rounded-xl border bg-surface p-1 text-sm text-text-primary shadow-medium">
+                    {isCol && (
+                      <button role="menuitem" onClick={openVersions} className="flex min-h-[44px] w-full items-center gap-2 rounded-lg px-3 text-left hover:bg-surface-muted">
+                        <History size={14} className="text-text-secondary" aria-hidden /> Önceki sürümler
+                      </button>
+                    )}
+                    {!compact && (
+                      <button role="menuitem" onClick={() => { setMoreOpen(false); setOutlineOpen(true); }} className="flex min-h-[44px] w-full items-center gap-2 rounded-lg px-3 text-left hover:bg-surface-muted md:hidden">
+                        <BookOpen size={14} className="text-text-secondary" aria-hidden /> İçindekiler
                       </button>
                     )}
                   </div>
                 )}
               </div>
-              <button type="button" onClick={() => setOutlineOpen(true)} className={cx(tbtn, "md:hidden")} aria-haspopup="dialog">
-                <BookOpen size={14} aria-hidden /> İçindekiler
-              </button>
-            </span>
-          )}
+            )}
+          </span>
         </div>
 
         {/* durum satırı */}
@@ -870,37 +858,6 @@ function DraftBody({ scope, title, compact, onOpenPage, initial, initialRev }: D
               <div key={b.id}>
                 {divider}
                 <div id={"blk-" + b.id} className="group relative" onFocus={() => setFocusIdx(i)} onClick={() => setFocusIdx(i)}>
-                  {/* Yapay zekâyla düzenle (sağ üst): yalnız defter kapsamında */}
-                  {canAssist && !compact && (b.type === "p" || b.type === "h" || (b.type === "quote" && !!b.text.trim())) && (
-                    <div className={cx("absolute right-0 top-1 z-10 transition",
-                      focusIdx === i || (assist?.idx === i && assist.menu) ? "opacity-100"
-                        : "pointer-events-none opacity-0 focus-within:pointer-events-auto focus-within:opacity-100 md:pointer-events-auto md:group-hover:opacity-100 md:group-focus-within:opacity-100")}>
-                      <button onClick={(e) => { e.stopPropagation(); setAssist(assist?.idx === i && assist.menu ? null : { idx: i, action: "", busy: false, menu: true }); }}
-                              aria-haspopup="menu" aria-expanded={assist?.idx === i && !!assist.menu}
-                              title={"Yapay zekâyla düzenle · " + costTitle(1)}
-                              className="flex min-h-[40px] items-center gap-1 rounded-full border bg-surface px-3 text-xs text-text-secondary hover:border-accent-purple/50 hover:text-accent-purple">
-                        <Wand2 size={12} aria-hidden /> Düzenle <Cost n={1} />
-                      </button>
-                      {assist?.idx === i && assist.menu && (
-                        <div role="menu" onClick={(e) => e.stopPropagation()}
-                             onKeyDown={(e) => { if (e.key === "Escape") setAssist(null); }}
-                             className="absolute right-0 top-11 w-64 overflow-hidden rounded-xl border bg-surface shadow-medium">
-                          {(b.type === "quote"
-                            ? [["paraphrase", "Kendi cümlelerinle yaz", "Alıntının altına senin paragrafın olarak girer"]]
-                            : ACTIONS).map(([k, label, desc], mi) => (
-                            <button key={k} role="menuitem" autoFocus={mi === 0}
-                                    onClick={() => { if (k === "custom") setAssist({ idx: i, action: "custom", busy: false, menu: false }); else runAssist(i, k); }}
-                                    title={costTitle(1)}
-                                    className="block min-h-[44px] w-full px-3 py-2 text-left hover:bg-surface-muted focus-visible:bg-surface-muted">
-                              <span className="flex items-center text-sm">{label} <Cost n={1} /></span>
-                              <span className="block text-xs text-text-secondary">{desc}</span>
-                            </button>
-                          ))}
-                        </div>
-                      )}
-                    </div>
-                  )}
-
                   {b.type === "p" && (dropCap ? (
                     <div role="textbox" tabIndex={0} aria-label="İlk paragraf (düzenlemek için dokun)" aria-multiline
                          className="cursor-text py-1.5 font-reading text-[16px] leading-[1.85] text-text-primary outline-none focus-visible:ring-2 focus-visible:ring-accent-purple/30">
@@ -910,15 +867,15 @@ function DraftBody({ scope, title, compact, onOpenPage, initial, initialRev }: D
                     <AutoTextarea value={b.text} focus={focusIdx === i} grab={i === firstP}
                                   onChange={(v) => setText(i, v)}
                                   onEnterNew={(clean) => addParagraph(i, "p", clean)}
-                                  placeholder={i === 0 && blocks.length === 1 ? "Buraya yaz… Boş satırda Enter yeni paragraf açar." : "Yaz…"}
-                                  className={cx("w-full resize-none bg-transparent py-1.5 font-reading text-[16px] leading-[1.85] outline-none placeholder:text-text-secondary/60", canAssist && !compact && focusIdx === i && "pr-32")} />
+                                  placeholder={i === 0 && blocks.length === 1 ? "Kendi cümlelerini buraya yaz… Boş satırda Enter yeni paragraf açar." : "Yaz…"}
+                                  className={cx("w-full resize-none bg-transparent py-1.5 font-reading text-[16px] leading-[1.85] outline-none placeholder:text-text-secondary/60")} />
                   ))}
                   {b.type === "h" && (
                     <AutoTextarea value={b.text} focus={focusIdx === i} onChange={(v) => setText(i, v)} onEnterNew={(clean) => addParagraph(i, "p", clean)}
-                                  placeholder="Başlık" className={cx("w-full resize-none bg-transparent pb-1 pt-4 font-heading text-2xl leading-tight outline-none placeholder:text-text-secondary/60", canAssist && !compact && focusIdx === i && "pr-32")} />
+                                  placeholder="Başlık" className={cx("w-full resize-none bg-transparent pb-1 pt-4 font-heading text-2xl leading-tight outline-none placeholder:text-text-secondary/60")} />
                   )}
                   {b.type === "quote" && (
-                    <QuoteCard b={b} compact={compact} gilded={gild.has(b.id)} onOpen={() => openDoc(b.document_id, b.page)} />
+                    <QuoteCard b={b} compact={compact} gilded={gild.has(b.id)} onOpen={() => openDoc(b.document_id, b.page)} onAsk={() => askQuote(b)} />
                   )}
                   {b.type === "answer" && (
                     <div className={cx("my-3 rounded-xl border border-accent-purple/30 bg-accent-purple/5 p-3", gild.has(b.id) && "gilded")}>
@@ -939,35 +896,6 @@ function DraftBody({ scope, title, compact, onOpenPage, initial, initialRev }: D
                           <TextCursorInput size={13} aria-hidden /> Metne dönüştür
                         </button>
                       </div>
-                    </div>
-                  )}
-
-                  {/* AI önerisi */}
-                  {assist && assist.idx === i && !assist.menu && (
-                    <div className="my-2 rounded-xl border border-accent-purple/40 bg-accent-purple/5 p-3 text-sm">
-                      {assist.action === "custom" && assist.text === undefined && !assist.busy && !assist.error && (
-                        <div className="flex flex-wrap gap-2">
-                          <input autoFocus value={customInstr} aria-label="Düzenleme talimatı" onChange={(e) => setCustomInstr(e.target.value)}
-                                 onKeyDown={(e) => { if (e.key === "Enter" && customInstr.trim()) runAssist(i, "custom", customInstr.trim()); if (e.key === "Escape") setAssist(null); }}
-                                 placeholder="Örn: iki cümleye indir"
-                                 className="min-h-[40px] min-w-0 flex-1 rounded-lg border bg-surface px-3 outline-none focus:border-accent-purple" />
-                          <button onClick={() => customInstr.trim() && runAssist(i, "custom", customInstr.trim())} title={costTitle(1)} className="flex min-h-[40px] items-center rounded-lg bg-accent-purple px-3 text-on-accent">Uygula <Cost n={1} className="bg-white/20" /></button>
-                          <button onClick={() => setAssist(null)} className="min-h-[40px] rounded-lg border px-3 text-text-secondary">Vazgeç</button>
-                        </div>
-                      )}
-                      {assist.busy && <p className="flex items-center gap-2 text-text-secondary" role="status"><Loader2 size={14} className="animate-spin" aria-hidden /> Hazırlanıyor…</p>}
-                      {assist.error && <p className="text-danger">{assist.error} <button onClick={() => setAssist(null)} className="ml-2 min-h-[40px] underline">kapat</button></p>}
-                      {assist.text !== undefined && !assist.busy && (
-                        <>
-                          <p className="mb-1 flex items-center gap-1 text-xs uppercase tracking-wide text-accent-purple"><Sparkles size={11} aria-hidden /> Öneri — {assist.action === "paraphrase" ? "kendi cümlelerinle" : assist.action === "shorten" ? "kısaltılmış" : "düzenlenmiş"}</p>
-                          <p className="whitespace-pre-wrap leading-relaxed">{assist.text}</p>
-                          <div className="mt-2 flex flex-wrap gap-2">
-                            <button onClick={applyAssist} className="flex min-h-[40px] items-center gap-1 rounded-lg bg-accent-purple px-3 text-on-accent"><Check size={13} aria-hidden /> {blocks[assist.idx]?.type === "quote" ? "Altına paragraf olarak ekle" : "Paragrafın yerine koy"}</button>
-                            <button onClick={() => runAssist(i, assist.action, customInstr.trim() || undefined)} title={costTitle(1)} className="flex min-h-[40px] items-center rounded-lg border px-3 text-text-secondary">Tekrar dene <Cost n={1} /></button>
-                            <button onClick={() => setAssist(null)} className="min-h-[40px] rounded-lg border px-3 text-text-secondary">Vazgeç</button>
-                          </div>
-                        </>
-                      )}
                     </div>
                   )}
 

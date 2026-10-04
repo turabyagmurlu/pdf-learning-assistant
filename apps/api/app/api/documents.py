@@ -1,4 +1,5 @@
 import hashlib
+import json
 import uuid
 from fastapi import APIRouter, Depends, UploadFile, File, Form, BackgroundTasks
 from pydantic import BaseModel
@@ -462,6 +463,32 @@ async def get_doc(doc_id: str, conn=Depends(db), user=Depends(current_user)):
     out["collections"] = [{"id": str(c["id"]), "title": c["title"]} for c in cols]
     # okuma konumu (cihazlar arasi): {page, num_pages, pct, media_pos, device, updated_at} ya da None
     out["reading"] = _reading_of(row)
+    # Calisma notu L1 alanlari (kota 0): Turkce zorluk, okuma suresi (dk), ogrenme hedefleri, ders notu var mi
+    from app.services.analysis_service import difficulty_tr, reading_minutes
+    out["difficulty_tr"] = difficulty_tr(out.get("difficulty_level"))
+    try:
+        tok = await conn.fetchval("SELECT coalesce(sum(token_count),0) FROM document_chunks WHERE document_id=$1", doc_id)
+    except Exception:  # noqa
+        tok = 0
+    media = out.get("media")
+    if isinstance(media, str):
+        try:
+            media = json.loads(media)
+        except Exception:  # noqa
+            media = None
+    out["reading_minutes"] = reading_minutes(int(tok or 0), media if isinstance(media, dict) else None)
+    goals = out.get("learn_goals")
+    if isinstance(goals, str):
+        try:
+            goals = json.loads(goals)
+        except Exception:  # noqa
+            goals = None
+    out["learn_goals"] = [str(g) for g in goals] if isinstance(goals, list) else []
+    try:
+        out["has_study_note"] = bool(await conn.fetchval(
+            "SELECT 1 FROM doc_extracts WHERE document_id=$1 AND kind='study_note' AND payload IS NOT NULL", doc_id))
+    except Exception:  # noqa
+        out["has_study_note"] = False
     for k in ("reading_at",):
         if out.get(k) is not None and hasattr(out[k], "isoformat"):
             out[k] = out[k].isoformat()

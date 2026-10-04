@@ -111,7 +111,7 @@ export default function TrashPage() {
       title: `“${it.title}” kalıcı olarak silinsin mi?`,
       description: "Bu işlem geri alınamaz; çöp kutusundan da kalkar.",
       losses: it.kind === "document" ? ["Dosya, notların, vurguların ve sohbet geçmişi tamamen silinir"]
-        : it.kind === "collection" ? ["Defterin sohbetleri, taslağı, sözlüğü, haritası ve zaman çizelgesi tamamen silinir"]
+        : it.kind === "collection" ? ["Defterin sohbetleri, çalışma notu, sözlüğü ve sesli özeti tamamen silinir"]
         : it.kind === "chat" ? [`${it.message_count || 0} mesaj tamamen silinir`]
         : ["Not tamamen silinir"],
       keeps: it.kind === "collection" && it.with_sources
