@@ -8,11 +8,12 @@
  *  - Belge: L0 tek cümle (Markdown) · L1 kartı (paragraf, "Ne öğreneceksin", okuma süresi, zorluk, zor noktalar) — mevcut
  *    analizden, kota 0 · L2 "Ders notunu hazırla ⚡1/⚡2" → bölüm bölüm not, [s.N] rozetleri tıklanır (onOpenPage ya da docHref).
  *  - Defter: kaynak listesi (L0'lar) · "Sentezle ⚡1" → ortak kavramlar, çelişkiler, tamamlayıcı noktalar; [K2 s.4] rozetleri.
- *  - "Kendi sözlerinle anlat" → Geri bildirim al ⚡1.
  * Alt ("Biriktirdiklerin"): mevcut DraftEditor sade araç çubuğuyla; her alıntının yanında "Sor".
+ * variant="summary" (okuyucunun "Özet" sekmesi, Ajan T6): yalnız üst kısım; "Biriktirdiklerin" editörü yok,
+ *   katman adları (L0/L1/L2, "Ders notu") görünmez; başlık "Özet", düğme "Bölüm bölüm özet çıkar ⚡".
  * Kart tekrarı, perde, puan, rozet, seri YOK. Her ⚡ düğme maliyetini gösterir; önbellekten gelen her şey ücretsiz.
  *
- * Uçlar: GET/POST /documents/{id}/study-note(/feedback), GET/POST /collections/{cid}/study-note(/feedback) — app/api/study_notes.py
+ * Uçlar: GET/POST /documents/{id}/study-note, GET/POST /collections/{cid}/study-note — app/api/study_notes.py
  */
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
@@ -27,7 +28,6 @@ import DraftEditor, { DRAFT_CHANGED_EVENT, type DraftEditorHandle } from "@/comp
 import { fmtMinutes } from "./cites";
 import LessonNote from "./LessonNote";
 import SynthesisNote from "./SynthesisNote";
-import FeedbackBox from "./FeedbackBox";
 import type { ColNote, DocNote, NoteData, OpenPage, StudyScope } from "./types";
 
 const cx = (...a: (string | false | null | undefined)[]) => a.filter(Boolean).join(" ");
@@ -48,9 +48,12 @@ export type StudyNoteProps = {
   onOpenPage?: OpenPage;
   /** dışa aktarma başlığı; verilmezse sunucudan gelen ad */
   title?: string;
+  /** "summary": okuyucunun Özet sekmesi — yalnız özet, "Biriktirdiklerin" editörü yok */
+  variant?: "full" | "summary";
 };
 
-export default function StudyNote({ scope, compact, onOpenPage, title }: StudyNoteProps) {
+export default function StudyNote({ scope, compact, onOpenPage, title, variant = "full" }: StudyNoteProps) {
+  const summary = variant === "summary";
   const router = useRouter();
   const [data, setData] = useState<NoteData | null>(null);
   const [err, setErr] = useState<string | null>(null);
@@ -62,8 +65,9 @@ export default function StudyNote({ scope, compact, onOpenPage, title }: StudyNo
     setData(null); setErr(null);
     api(`${base}/study-note`, {}, 2)
       .then((r) => { if (!off) setData(r); })
-      .catch((e) => { if (!off) setErr(errorMessage(e, "Çalışma notu alınamadı. Birkaç saniye sonra tekrar dene.")); });
+      .catch((e) => { if (!off) setErr(errorMessage(e, summary ? "Özet alınamadı. Birkaç saniye sonra tekrar dene." : "Çalışma notu alınamadı. Birkaç saniye sonra tekrar dene.")); });
     return () => { off = true; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [base, nonce]);
 
   const openPage: OpenPage = useCallback((docId, page) => {
@@ -142,7 +146,7 @@ export default function StudyNote({ scope, compact, onOpenPage, title }: StudyNo
   }
   if (!data) {
     return (
-      <div role="status" aria-label="Çalışma notu yükleniyor" className={cx("space-y-3", compact ? "p-3" : "")}>
+      <div role="status" aria-label={summary ? "Özet yükleniyor" : "Çalışma notu yükleniyor"} className={cx("space-y-3", compact ? "p-3" : "")}>
         <Skeleton className="h-6 w-3/4" />
         <Skeleton className="h-28 w-full rounded-2xl" />
         <Skeleton className="h-12 w-1/2 rounded-xl" />
@@ -151,22 +155,17 @@ export default function StudyNote({ scope, compact, onOpenPage, title }: StudyNo
   }
 
   const heading = title || data.title || (scope.kind === "collection" ? "Defter" : "Kaynak");
-  const hasL2 = !!data.l2;
 
   return (
     <div className={cx("min-w-0", compact ? "space-y-5 p-3" : "space-y-8")}>
-      {/* ====== ÜST: Ders notu ====== */}
+      {summary && <h2 className={cx("font-heading text-text-primary", compact ? "text-lg" : "text-xl")}>Özet</h2>}
+      {/* ====== ÜST: Ders notu (summary: Özet) ====== */}
       {data.scope === "document"
-        ? <DocTop d={data} compact={compact} busy={busy} genErr={genErr} onGenerate={generate} openPage={openPage} />
+        ? <DocTop d={data} compact={compact} busy={busy} genErr={genErr} onGenerate={generate} openPage={openPage} summary={summary} />
         : <ColTop d={data} compact={compact} busy={busy} genErr={genErr} onGenerate={generate} openPage={openPage} />}
 
-      {/* ====== Kendi sözlerinle anlat (⚡1) ====== */}
-      {(data.scope === "collection" ? data.ready > 0 : data.status === "ready") && (
-        <FeedbackBox scope={scope} docId={data.scope === "document" ? data.id : undefined} onOpen={openPage} compact={compact} hasNote={hasL2} />
-      )}
-
-      {/* ====== ALT: Biriktirdiklerin ====== */}
-      <section aria-label="Biriktirdiklerin">
+      {/* ====== ALT: Biriktirdiklerin (Özet sekmesinde yok) ====== */}
+      {!summary && <section aria-label="Biriktirdiklerin">
         <div className="mb-2 flex flex-wrap items-baseline gap-2">
           <h2 className={cx("font-heading text-text-primary", compact ? "text-base" : "text-xl")}>Biriktirdiklerin</h2>
           <span className="text-xs text-text-secondary">
@@ -174,15 +173,17 @@ export default function StudyNote({ scope, compact, onOpenPage, title }: StudyNo
           </span>
         </div>
         <DraftEditor ref={draftRef} scope={scope} title={heading} compact={compact} onOpenPage={openPage} />
-      </section>
+      </section>}
     </div>
   );
 }
 
 /* =================================================================== belge üstü */
 
-function DocTop({ d, compact, busy, genErr, onGenerate, openPage }: {
+function DocTop({ d, compact, busy, genErr, onGenerate, openPage, summary }: {
   d: DocNote; compact?: boolean; busy: boolean; genErr: Err; onGenerate: (force?: boolean) => void; openPage: OpenPage;
+  /** okuyucunun Özet sekmesi: katman adları yerine "Özet" / "Bölüm bölüm özet" */
+  summary?: boolean;
 }) {
   const l1 = d.l1;
   const ready = d.status === "ready";
@@ -195,11 +196,14 @@ function DocTop({ d, compact, busy, genErr, onGenerate, openPage }: {
   const hasL1 = !!(l1.paragraph || goals.length || hard.length || time || difficulty);
 
   return (
-    <section aria-label="Ders notu" className={compact ? "space-y-3" : "space-y-4"}>
+    <section aria-label={summary ? "Özet" : "Ders notu"} className={compact ? "space-y-3" : "space-y-4"}>
       {!ready ? (
         <p className="rounded-2xl border bg-surface p-4 text-sm text-text-secondary" role="status">
-          {d.status === "failed" ? "Bu kaynak işlenemedi; “Yeniden işle” ile tekrar dene. İşlenince özet ve ders notu burada olur."
-            : "Kaynak hazırlanıyor. İşlenmesi bitince özeti, öğrenme hedefleri ve ders notu burada belirir."}
+          {summary
+            ? (d.status === "failed" ? "Bu kaynak işlenemedi; “Yeniden işle” ile tekrar dene. İşlenince özeti burada olur."
+                : "Kaynak hazırlanıyor. İşlenmesi bitince kısa özeti ve öğrenme hedefleri burada belirir.")
+            : (d.status === "failed" ? "Bu kaynak işlenemedi; “Yeniden işle” ile tekrar dene. İşlenince özet ve ders notu burada olur."
+                : "Kaynak hazırlanıyor. İşlenmesi bitince özeti, öğrenme hedefleri ve ders notu burada belirir.")}
         </p>
       ) : (
         <>
@@ -255,19 +259,21 @@ function DocTop({ d, compact, busy, genErr, onGenerate, openPage }: {
           {/* L2 */}
           {d.l2 ? (
             <LessonNote note={d.l2} docId={d.id} sections={d.media_sections} onOpen={openPage} compact={compact}
+                        label={summary ? "Bölüm bölüm özet" : undefined}
                         stale={d.l2_stale} at={d.l2_at} refreshCalls={d.plan.calls} onRefresh={() => onGenerate(true)} busy={busy} />
           ) : (
             <div className={cx("rounded-2xl border border-dashed bg-surface", compact ? "p-3" : "p-4 md:p-5")}>
-              <p className="eyebrow">Ders notu</p>
+              <p className="eyebrow">{summary ? "Bölüm bölüm özet" : "Ders notu"}</p>
               <p className="mt-1 text-sm text-text-secondary">
-                Bölüm bölüm, sayfa atıflı bir ders notu: her bölüm ne anlatıyor, kavramlar nasıl bağlanıyor, sık yanlış anlamalar ve
-                kendini sınayacağın 5 soru. Bir kez hazırlanır ve saklanır; sonra açmak ücretsiz.
+                {summary
+                  ? "Her bölüm ne anlatıyor, sayfa numaralarıyla; kavramlar nasıl bağlanıyor, sık karıştırılanlar ve kendine soracağın 5 soru. Bir kez hazırlanır ve saklanır; sonra açmak ücretsiz."
+                  : "Bölüm bölüm, sayfa atıflı bir ders notu: her bölüm ne anlatıyor, kavramlar nasıl bağlanıyor, sık yanlış anlamalar ve kendini sınayacağın 5 soru. Bir kez hazırlanır ve saklanır; sonra açmak ücretsiz."}
                 {d.plan.sections > 0 && ` ${d.plan.sections} bölüm${d.plan.calls > 1 ? " · uzun kaynak: iki adımda hazırlanır" : ""}.`}
               </p>
               <button type="button" onClick={() => onGenerate(false)} disabled={busy} title={costTitle(d.plan.calls)}
                       className="mt-3 flex min-h-[44px] items-center gap-1.5 rounded-xl bg-accent-purple px-4 text-sm font-medium text-on-accent disabled:opacity-60">
                 {busy ? <Loader2 size={15} className="animate-spin" aria-hidden /> : <Sparkles size={15} aria-hidden />}
-                {busy ? "Hazırlanıyor… bu birkaç dakika sürebilir" : "Ders notunu hazırla"} {!busy && <Cost n={d.plan.calls} className="bg-on-accent/15" />}
+                {busy ? "Hazırlanıyor… bu birkaç dakika sürebilir" : summary ? "Bölüm bölüm özet çıkar" : "Ders notunu hazırla"} {!busy && <Cost n={d.plan.calls} className="bg-on-accent/15" />}
               </button>
               <ErrNote err={genErr} className="mt-2" />
             </div>

@@ -28,6 +28,13 @@ export type InkDraft = { key: string; page: number; strokes: InkStroke[] };
 const SVGNS = "http://www.w3.org/2000/svg";
 const PEN_DOUBLE_TAP = false as boolean;  // hizli iki kalem dokunusuyla arac degistirme (kapali)
 const MIN_MARK_PX = 8;      // bundan kisa fosforlu darbe yok sayilir (dokunus = mevcut vurguyu ac)
+// Kenar notu tek hamle (Ajan T6): kalemle sayfanin BOS bir yerine (metin yok) ~500 ms kipirdamadan basinca
+// orada kenar notu olusur. Yalniz kalem (parmakla uzun basma iOS secimine birakilir).
+const LONG_PRESS_MS = 500;
+const LONG_PRESS_PX = 8;
+const LONG_PRESS_INK_MS = 700;   // Kalem (el yazisi) acikken biraz daha uzun: yazmaya baslamadan once duraksama not acmasin
+/** Not balonu / satir ici kutu: bu ogelerin icindeki dokunuslar cizim ya da secim baslatmaz */
+const UI_SEL = '[role="toolbar"], button, a, input, textarea, .note-pop';
 
 /** Sayfanin metin katmanindaki yaprak span'ler; koordinatlar sayfa GENISLIGINE gore oran. */
 function pageSpans(pageEl: HTMLElement, pr: DOMRect): Span[] {
@@ -88,6 +95,11 @@ interface Props {
   paper?: PaperTone;
   /** Yeni biriken vurgu (2.0): bu kimlikli vurgu .ink-bloom ile belirir */
   bloomId?: string | null;
+  /** Notlarim listesinden gelinince bu kimlikli vurgu / not kisa sure parlar (.hl-flash) */
+  flashId?: string | null;
+  /** Sayfa ustu not balonu (Ajan T6): bu kimlikli notun yaninda renderPop ciktisi gosterilir */
+  popId?: string | null;
+  renderPop?: (a: Annotation) => React.ReactNode;
 }
 
 const PAGE_MAX = 820;   // genis ekranda sayfa genisligi (px, olcek 1)
@@ -97,7 +109,7 @@ const WINDOW = 2;       // gorunen sayfanin +-2 komsusu cizilir; digerleri yer t
 type Sel = { page: number; rects: Rect[]; text: string; top: number; left: number };
 
 export default function PdfReader(props: Props) {
-  const { fileUrl, page, scale, spread, tool, annotations, pen: penState, paper, bloomId } = props;
+  const { fileUrl, page, scale, spread, tool, annotations, pen: penState, paper, bloomId, flashId, popId, renderPop } = props;
   const penHex = pigmentOf(penState.color);
   // vurgu haritasi isaretleri (sayfa + sayfa ici y + renk + ipucu)
   const marks = useMemo(() => annotationMarks(annotations), [annotations]);
@@ -206,6 +218,9 @@ export default function PdfReader(props: Props) {
   const readSelection = useCallback((autoCommit = false) => {
     const c = scrollRef.current;
     const s = window.getSelection();
+    // not kutusunda yazarken / secerken vurgu balonu acilmasin
+    const ae = document.activeElement as HTMLElement | null;
+    if (ae && (ae.tagName === "TEXTAREA" || ae.tagName === "INPUT") && c?.contains(ae)) return;
     if (!c || !s || s.isCollapsed || !s.rangeCount) {
       // balona dokunurken secim kapanabilir (mobil): balonu hemen silme
       if (Date.now() - bubbleDownAt.current < 900) return;
@@ -291,6 +306,8 @@ export default function PdfReader(props: Props) {
     if (!el) return;
     const guard = (e: TouchEvent) => {
       if (!drawRef.current || !e.cancelable) return;
+      // not kutusu / balon: kalemle dokununca odak alsin, Scribble calissin
+      if ((e.target as Element | null)?.closest?.(UI_SEL)) return;
       const touches = Array.from(e.changedTouches) as (Touch & { touchType?: string })[];
       if (touches.some((t) => t.touchType === "stylus") || (e.type === "touchmove" && stroke.current)) e.preventDefault();
     };
@@ -350,12 +367,67 @@ export default function PdfReader(props: Props) {
     return [Math.min(1, Math.max(0, x)), Math.min(maxY, Math.max(0, y)), p];
   };
 
+  // ===== Kenar notu: kalemle bos yere uzun basma =====
+  const longPress = useRef<{ id: number; x: number; y: number; timer: ReturnType<typeof setTimeout> } | null>(null);
+  const lpFired = useRef<number | null>(null);      // uzun basma tetiklendi: bu kalem kalkana dek baska is yok
+  const lpAt = useRef(0);                           // son uzun basma zamani (ardindan gelen tiklama yeni not acmasin)
+  const idlePending = useRef<number | null>(null);  // arac kapaliyken kalem degdi: kalkinca onPenIdle
+  const cancelLongPress = () => {
+    const lp = longPress.current;
+    if (lp) { clearTimeout(lp.timer); longPress.current = null; }
+  };
+  useEffect(() => () => cancelLongPress(), []);
+  /** Kalem ucunun altinda metin, vurgu, not ya da dugme yoksa sayfa + oransal konum; yoksa null */
+  const blankSpot = (x: number, y: number): { page: number; x: number; y: number } | null => {
+    const el = document.elementFromPoint(x, y) as HTMLElement | null;
+    if (!el || el.closest?.(`[data-ann], ${UI_SEL}`)) return null;
+    const pageEl = el.closest?.("[data-page]") as HTMLElement | null;
+    if (!pageEl || !pageEl.classList.contains("is-live")) return null;
+    const pr = pageEl.getBoundingClientRect();
+    const PAD = 4;
+    const spans = Array.from(pageEl.querySelectorAll(".react-pdf__Page__textContent span"));
+    for (const sp of spans) {
+      if (sp.querySelector("span") || !(sp.textContent || "").trim()) continue;
+      const r = sp.getBoundingClientRect();
+      if (x >= r.left - PAD && x <= r.right + PAD && y >= r.top - PAD && y <= r.bottom + PAD) return null;
+    }
+    return { page: Number(pageEl.dataset.page), x: (x - pr.left) / pr.width, y: (y - pr.top) / pr.height };
+  };
+  const fireLongPress = (pointerId: number, spot: { page: number; x: number; y: number }) => {
+    longPress.current = null;
+    lpFired.current = pointerId;
+    lpAt.current = Date.now();
+    idlePending.current = null;
+    // baslamis cizgi / silgi hareketi iptal (kenar notu yerine gecer)
+    const st = stroke.current;
+    if (st && st.id === pointerId) {
+      stroke.current = null;
+      if (st.raf) cancelAnimationFrame(st.raf);
+      st.svg.remove();
+    }
+    if (penErase.current?.id === pointerId) penErase.current = null;
+    setDrawing(false);
+    lastPenTap.current = null;
+    try { navigator.vibrate?.(10); } catch {}
+    props.onCreateSticky({ page: spot.page, x: Math.min(0.98, Math.max(0.02, spot.x)), y: Math.min(0.98, Math.max(0.02, spot.y)) });
+  };
+
   const onPenDown = (e: React.PointerEvent) => {
     const isPen = e.pointerType === "pen";
     const isMouse = e.pointerType === "mouse";
     if (!isPen && !isMouse) return;                 // parmak: kaydirma / secim (avuc ici reddi)
     if (isMouse && e.button !== 0) return;
-    if ((e.target as HTMLElement).closest?.('[role="toolbar"], button, a, input, textarea')) return;
+    if ((e.target as HTMLElement).closest?.(UI_SEL)) return;
+    if (isPen) {
+      // kenar notu: bos yerde kipirdamadan basili tutma (her aracta; arac kapaliyken de)
+      cancelLongPress();
+      lpFired.current = null;
+      const spot = blankSpot(e.clientX, e.clientY);
+      if (spot) {
+        const id = e.pointerId;
+        longPress.current = { id, x: e.clientX, y: e.clientY, timer: setTimeout(() => fireLongPress(id, spot), tool === "ink" ? LONG_PRESS_INK_MS : LONG_PRESS_MS) };
+      }
+    }
     if (isPen) {
       const now = Date.now();
       const lt = lastPenTap.current;
@@ -380,7 +452,8 @@ export default function PdfReader(props: Props) {
       return;
     }
     if (!drawTool) {
-      if (isPen && tool === "none") props.onPenIdle?.();
+      // arac kapali: kalem kalkinca (uzun basma degilse) palet acilir
+      if (isPen && tool === "none") idlePending.current = e.pointerId;
       return;
     }
     const pageEl = (document.elementFromPoint(e.clientX, e.clientY) as HTMLElement | null)?.closest?.("[data-page]") as HTMLElement | null;
@@ -415,6 +488,8 @@ export default function PdfReader(props: Props) {
   };
 
   const onPenMove = (e: React.PointerEvent) => {
+    const lp = longPress.current;
+    if (lp && e.pointerId === lp.id && Math.hypot(e.clientX - lp.x, e.clientY - lp.y) > LONG_PRESS_PX) cancelLongPress();
     if (penErase.current && e.pointerId === penErase.current.id) { e.preventDefault(); eraseAt(e.clientX, e.clientY); return; }
     const st = stroke.current;
     if (!st || e.pointerId !== st.id) return;
@@ -493,6 +568,15 @@ export default function PdfReader(props: Props) {
 
   const onPenUp = (e: React.PointerEvent) => {
     const c = scrollRef.current;
+    if (longPress.current?.id === e.pointerId) cancelLongPress();
+    if (lpFired.current === e.pointerId) {
+      // uzun basma kenar notu acti: bu kalkis baska bir sey yapmasin
+      lpFired.current = null;
+      try { (e.currentTarget as HTMLElement).releasePointerCapture(e.pointerId); } catch {}
+      return;
+    }
+    if (idlePending.current === e.pointerId) { idlePending.current = null; props.onPenIdle?.(); }
+    if ((e.target as HTMLElement).closest?.(".note-pop")) return;
     if (penErase.current && e.pointerId === penErase.current.id) {
       penErase.current = null;
       setDrawing(false);
@@ -539,8 +623,9 @@ export default function PdfReader(props: Props) {
 
   const onPageClick = (pageNum: number, e: React.MouseEvent) => {
     if (tool !== "note") return;
+    if (Date.now() - lpAt.current < 800) return;     // kalemle uzun basma zaten kenar notu acti
     // balondan / vurgudan gelen tiklama degil, sayfanin kendisi
-    if ((e.target as HTMLElement).closest?.("[data-ann], [role=toolbar]")) return;
+    if ((e.target as HTMLElement).closest?.("[data-ann], [role=toolbar], .note-pop")) return;
     const el = e.currentTarget as HTMLElement;
     const r = el.getBoundingClientRect();
     props.onCreateSticky({ page: pageNum, x: (e.clientX - r.left) / r.width, y: (e.clientY - r.top) / r.height });
@@ -553,6 +638,7 @@ export default function PdfReader(props: Props) {
   const block = (n: number) => (
     <PageBlock key={n} n={n} width={width} live={isLive(n)} ratio={ratios[n] || ratio} onRatio={onRatio}
                annotations={annotations} onClick={onPageClick} eraser={tool === "eraser"} paper={paper} bloomId={bloomId}
+               flashId={flashId} popId={popId} renderPop={renderPop}
                drafts={inkDrafts?.filter((d) => d.page === n)}
                onSelectAnnotation={props.onSelectAnnotation} onErase={props.onErase} />
   );
@@ -640,7 +726,7 @@ export default function PdfReader(props: Props) {
   );
 }
 
-function PageBlock({ n, width, live, ratio, onRatio, annotations, onClick, onSelectAnnotation, onErase, eraser, paper, bloomId, drafts }: {
+function PageBlock({ n, width, live, ratio, onRatio, annotations, onClick, onSelectAnnotation, onErase, eraser, paper, bloomId, flashId, popId, renderPop, drafts }: {
   n: number; width: number; live: boolean; ratio: number; onRatio: (n: number, r: number) => void;
   annotations: Annotation[];
   onClick: (n: number, e: React.MouseEvent) => void;
@@ -654,6 +740,11 @@ function PageBlock({ n, width, live, ratio, onRatio, annotations, onClick, onSel
   bloomId?: string | null;
   /** Bu sayfada kaydedilmeyi bekleyen el yazisi */
   drafts?: InkDraft[];
+  /** Notlarim'dan gelinince kisa sure parlayan not */
+  flashId?: string | null;
+  /** Not balonu: bu kimlikli notun yaninda */
+  popId?: string | null;
+  renderPop?: (a: Annotation) => React.ReactNode;
 }) {
   const h = Math.round(width * ratio);
   if (!live) {
@@ -666,6 +757,7 @@ function PageBlock({ n, width, live, ratio, onRatio, annotations, onClick, onSel
   }
   const anns = annotations.filter((a) => a.page_number === n && a.anchor.type !== "ink");
   const inks = annotations.filter((a) => a.page_number === n && a.anchor.type === "ink");
+  const popAnn = popId && renderPop ? annotations.find((a) => a.id === popId && a.page_number === n) : undefined;
   return (
     <div className="paper-page reader-page is-live" data-page={n} style={{ width, minHeight: h }} onClick={(e) => onClick(n, e)}>
       <Page pageNumber={n} width={width} renderAnnotationLayer={false} renderTextLayer
@@ -674,7 +766,7 @@ function PageBlock({ n, width, live, ratio, onRatio, annotations, onClick, onSel
       <div className="hl-layer">
         {anns.map((a) =>
           a.anchor.type === "sticky" ? (
-            <button key={a.id} type="button" className={`hl-note-dot ${eraser ? "hl-erasable" : ""}`} data-ann={a.id}
+            <button key={a.id} type="button" className={`hl-note-dot ${eraser ? "hl-erasable" : ""} ${a.id === flashId ? "hl-flash" : ""}`} data-ann={a.id}
                     aria-label={`Kenar notu, sayfa ${n}${a.note_content ? ": " + a.note_content.slice(0, 60) : ""}${eraser ? " (silmek için dokun)" : ""}`}
                     style={{ left: `${(a.anchor.x ?? 0.95) * 100}%`, top: `${(a.anchor.y ?? 0.04) * 100}%` }}
                     onClick={(e) => { e.stopPropagation(); if (eraser) onErase(a); else onSelectAnnotation(a); }}>
@@ -685,7 +777,7 @@ function PageBlock({ n, width, live, ratio, onRatio, annotations, onClick, onSel
               // pigment: eski kayitli hex'ler de yeni pigmentle cizilir
               const hs = highlightStyle({ ...a, highlight_color: pigmentOf(a.highlight_color || HIGHLIGHT_COLORS[0].value) }, paper);
               return (
-                <div key={a.id + i} className={`hl-rect ${hs.underline ? "hl-underline" : ""} ${eraser ? "hl-erasable" : ""} ${a.id === bloomId ? "ink-bloom" : ""}`}
+                <div key={a.id + i} className={`hl-rect ${hs.underline ? "hl-underline" : ""} ${eraser ? "hl-erasable" : ""} ${a.id === bloomId ? "ink-bloom" : ""} ${a.id === flashId ? "hl-flash" : ""}`}
                      data-ann={a.id}
                      style={{
                        left: `${r.x * 100}%`, top: `${r.y * 100}%`,
@@ -703,12 +795,15 @@ function PageBlock({ n, width, live, ratio, onRatio, annotations, onClick, onSel
       {(inks.length > 0 || (drafts && drafts.length > 0)) && (
         <svg className="ink-layer" viewBox={`0 0 1000 ${Math.round(1000 * ratio)}`} aria-hidden={inks.length === 0 ? true : undefined}>
           {inks.map((a) => (
-            <InkShape key={a.id} id={a.id} strokes={a.anchor.strokes || []}
+            <InkShape key={a.id} id={a.id} strokes={a.anchor.strokes || []} flash={a.id === flashId}
                       label={`El yazısı notu, sayfa ${n}${eraser ? " (silmek için dokun)" : ""}`}
                       onPick={() => { if (eraser) onErase(a); else onSelectAnnotation(a); }} />
           ))}
           {drafts?.map((d) => <InkShape key={d.key} strokes={d.strokes} />)}
         </svg>
+      )}
+      {popAnn && renderPop && (
+        <div key={popAnn.id} className="note-pop" style={popPosition(popAnn, ratio)}>{renderPop(popAnn)}</div>
       )}
       <div className="page-num absolute -bottom-6 left-0 right-0 text-center text-xs" style={{ color: "var(--r-ink-2)" }}>
         {n}
@@ -719,15 +814,15 @@ function PageBlock({ n, width, live, ratio, onRatio, annotations, onClick, onSel
 
 /** El yazisi cizimi: her darbe basinca gore kalinlasan dolgulu yol; kayitli notta genis gorunmez dokunma yolu
  *  (silgi / secim icin, .ink-hit). Yollar yalniz darbeler degisince yeniden hesaplanir. */
-const InkShape = memo(function InkShape({ id, strokes, label, onPick }: {
-  id?: string; strokes: InkStroke[]; label?: string; onPick?: () => void;
+const InkShape = memo(function InkShape({ id, strokes, label, onPick, flash }: {
+  id?: string; strokes: InkStroke[]; label?: string; onPick?: () => void; flash?: boolean;
 }) {
   const paths = useMemo(() => strokes.map((st) => ({
     c: st.c, d: strokePath(st.p, st.w),
     hit: st.p.map((q, i) => `${i ? "L" : "M"}${(q[0] * 1000).toFixed(1)},${(q[1] * 1000).toFixed(1)}`).join("") + (st.p.length === 1 ? "l0.1,0" : ""),
   })), [strokes]);
   return (
-    <g data-ann={id} role={id ? "img" : undefined} aria-label={label}>
+    <g data-ann={id} role={id ? "img" : undefined} aria-label={label} className={flash ? "ink-flash" : undefined}>
       {paths.map((p, i) => <path key={i} d={p.d} fill={p.c} />)}
       {id && paths.map((p, i) => (
         <path key={"h" + i} d={p.hit} className="ink-hit" data-ann={id}
@@ -736,6 +831,29 @@ const InkShape = memo(function InkShape({ id, strokes, label, onPick }: {
     </g>
   );
 });
+
+/** Not balonunun sayfa uzerindeki yeri: vurgunun son satirinin hemen alti (sagdaysa saga, soldaysa sola yasli);
+ *  kenar notunda notun yani; el yazisinda kutunun alti. */
+function popPosition(a: Annotation, ratio: number): React.CSSProperties {
+  let x0 = 0.5, x1 = 0.5, y = 0.1;
+  if (a.anchor.type === "sticky") {
+    x0 = x1 = a.anchor.x ?? 0.95;
+    y = (a.anchor.y ?? 0.04) + 18 / 1000;
+  } else if (a.anchor.type === "ink" && a.anchor.box) {
+    const [bx, by, bw, bh] = a.anchor.box;
+    const r = a.anchor.r || ratio || 1.294;
+    x0 = bx; x1 = bx + bw; y = (by + bh) / r;
+  } else {
+    const rects = a.anchor.rects || [];
+    const last = rects[rects.length - 1];
+    if (last) { x0 = last.x; x1 = last.x + last.w; y = last.y + last.h; }
+  }
+  const top = `calc(${(Math.min(0.97, Math.max(0, y)) * 100).toFixed(2)}% + 6px)`;
+  // sayfanin sag yarisinda biten vurgu: balon sag kenari vurgunun sonuna hizalanir
+  return x1 > 0.5
+    ? { top, right: `${(Math.max(0, 1 - x1) * 100).toFixed(2)}%` }
+    : { top, left: `${(Math.max(0, x0) * 100).toFixed(2)}%` };
+}
 
 function Centered({ children }: { children: React.ReactNode }) {
   return <div className="flex h-full flex-col items-center justify-center p-10 text-sm" style={{ color: "var(--paper-surround-ink, var(--r-ink-2))" }}>{children}</div>;

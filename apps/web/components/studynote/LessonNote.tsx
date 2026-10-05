@@ -11,8 +11,10 @@ import { fmtWhen, type Lesson, type MediaSection, type OpenPage } from "./types"
 
 const cx = (...a: (string | false | null | undefined)[]) => a.filter(Boolean).join(" ");
 
-export default function LessonNote({ note, docId, sections, onOpen, compact, stale, at, refreshCalls, onRefresh, busy }: {
+export default function LessonNote({ note, docId, sections, onOpen, compact, stale, at, refreshCalls, onRefresh, busy, label = "Ders notu" }: {
   note: Lesson;
+  /** bölge adı (okuyucunun Özet sekmesinde "Bölüm bölüm özet") */
+  label?: string;
   docId: string;
   sections?: MediaSection[] | null;
   onOpen: OpenPage;
@@ -31,7 +33,7 @@ export default function LessonNote({ note, docId, sections, onOpen, compact, sta
   const body = compact ? "text-[14px] leading-[1.75]" : "text-[15px] leading-[1.8]";
 
   return (
-    <section aria-label="Ders notu" className="space-y-4">
+    <section aria-label={label} className="space-y-4">
       <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-text-secondary">
         <span>{note.sections.length} bölüm · {note.words} kelime{at ? ` · hazırlandı ${fmtWhen(at)}` : ""}</span>
         {note.sections.length > 1 && (
@@ -97,7 +99,7 @@ export default function LessonNote({ note, docId, sections, onOpen, compact, sta
       {note.questions.length > 0 && (
         <div className="rounded-2xl border bg-surface p-4">
           <p className="eyebrow">Kendini sına</p>
-          <p className="mt-1 text-xs text-text-secondary">Önce kendin cevapla; sonra sayfayı açıp karşılaştır. Cevabını aşağıda “Kendi sözlerinle anlat” kutusuna da yazabilirsin.</p>
+          <p className="mt-1 text-xs text-text-secondary">Önce kendin cevapla; sonra sayfayı açıp karşılaştır.</p>
           <ol className={cx("mt-2 list-decimal space-y-2 pl-5 font-reading text-text-primary", body)}>
             {note.questions.map((q, i) => (
               <li key={i}>
@@ -115,7 +117,7 @@ export default function LessonNote({ note, docId, sections, onOpen, compact, sta
       )}
 
       <div className="flex flex-wrap items-center gap-2 text-xs text-text-secondary">
-        <span>Bu not bir kez hazırlandı ve saklandı; tekrar açmak ücretsiz.</span>
+        <span>Bir kez hazırlandı ve saklandı; tekrar açmak ücretsiz.</span>
         <button type="button" onClick={onRefresh} disabled={busy} title={"Yeniden hazırla · " + costTitle(refreshCalls)}
                 className="ml-auto flex min-h-[36px] items-center gap-1 rounded-lg border bg-surface px-2.5 text-xs text-text-secondary hover:border-accent-purple/50 hover:text-text-primary disabled:opacity-60">
           <RefreshCw size={12} aria-hidden className={busy ? "animate-spin" : ""} /> Yeniden hazırla <Cost n={refreshCalls} />

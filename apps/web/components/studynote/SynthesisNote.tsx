@@ -62,7 +62,7 @@ export default function SynthesisNote({ note, sources, onOpen, compact, stale, a
       {note.questions.length > 0 && (
         <div className="rounded-2xl border bg-surface p-4">
           <p className="eyebrow">Kaynaklar arası sorular</p>
-          <p className="mt-1 text-xs text-text-secondary">Önce kendin cevapla; sonra “Kendi sözlerinle anlat” kutusuna yazıp geri bildirim al ya da Sor’a taşı.</p>
+          <p className="mt-1 text-xs text-text-secondary">Önce kendin düşün; istersen soruyu Sor’a taşı.</p>
           <ol className={cx("mt-2 list-decimal space-y-1.5 pl-5 font-reading text-text-primary", body)}>
             {note.questions.map((q, i) => <li key={i}><CitedMarkdown text={q} sources={srcs} onOpen={onOpen} /></li>)}
           </ol>
