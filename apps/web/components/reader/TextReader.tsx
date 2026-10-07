@@ -5,6 +5,7 @@
  * ya da tablo, sagda kaynakli sohbet. Atif "sayfa"si = bolum / slayt / tablo blogu.
  */
 import { useEffect, useRef, useState } from "react";
+import type React from "react";
 import { api } from "@/lib/api";
 import { usePoll } from "@/hooks/usePoll";
 import { ChatPanel } from "@/components/chat/ChatPanel";
@@ -23,28 +24,78 @@ type Page = { page_number: number; title?: string | null; text: string;
 
 const UNIT: Record<string, string> = { pptx: "Slayt", xlsx: "Tablo", csv: "Tablo" };
 
+/* ---------- Markdown (satir ici) ----------
+ * .md ve web/yapistirilan metinlerde **kalin**, *italik*, `kod`, [baglanti](https://..) islenir.
+ * Arama vurgusu (needle) yalniz duz metin parcalarina uygulanir. Lookbehind kullanilmaz (eski iOS Safari). */
+const INLINE_RE = /(\*\*[^*\n]+?\*\*|__[^_\n]+?__|`[^`\n]+`|\[[^\]\n]+\]\(https?:\/\/[^)\s]+\)|\*(?!\s)[^*\n]+?\*)/g;
+
+function inlineMd(s: string, mark: (x: string) => React.ReactNode, keyBase: string): React.ReactNode[] {
+  const out: React.ReactNode[] = [];
+  let last = 0, k = 0;
+  s.replace(INLINE_RE, (m: string, _g: string, idx: number) => {
+    if (idx > last) out.push(<span key={keyBase + "t" + k++}>{mark(s.slice(last, idx))}</span>);
+    if (m.startsWith("**") || m.startsWith("__")) out.push(<strong key={keyBase + "b" + k++} className="font-semibold">{mark(m.slice(2, -2))}</strong>);
+    else if (m.startsWith("`")) out.push(<code key={keyBase + "c" + k++} className="rounded bg-surface-muted px-1 font-mono text-[0.9em]">{m.slice(1, -1)}</code>);
+    else if (m.startsWith("[")) {
+      const mm = /^\[([^\]]+)\]\((https?:\/\/[^)\s]+)\)$/.exec(m);
+      if (mm) out.push(<a key={keyBase + "a" + k++} href={mm[2]} target="_blank" rel="noopener noreferrer" className="text-accent-purple underline underline-offset-2">{mark(mm[1])}</a>);
+      else out.push(<span key={keyBase + "t" + k++}>{mark(m)}</span>);
+    } else out.push(<em key={keyBase + "i" + k++}>{mark(m.slice(1, -1))}</em>);
+    last = idx + m.length;
+    return m;
+  });
+  if (last < s.length) out.push(<span key={keyBase + "t" + k++}>{mark(s.slice(last))}</span>);
+  return out;
+}
+const hasInline = (t: string) => /\*\*|__|`|\]\(http|\*\S/.test(t);
+
 function Para({ text, needle, drop }: { text: string; needle: string; drop?: boolean }) {
   const lines = text.split("\n");
-  // ilk bolumun ilk duz paragrafi DropCap ile acilir (aramada vurgu gerekiyorsa acilmaz)
-  const dropAt = drop && !needle
-    ? lines.findIndex((l) => { const t = l.trim(); return t.length >= 40 && !/^[-*•]\s+/.test(t) && !t.startsWith("[Konuşmacı notu]") && !t.includes(" | "); })
-    : -1;
-  const mark = (s: string) => {
+  const mark = (s: string): React.ReactNode => {
     if (!needle) return s;
     const i = s.toLowerCase().indexOf(needle);
     if (i < 0) return s;
     return <>{s.slice(0, i)}<mark className="rounded bg-warning-bg px-0.5 text-text-primary">{s.slice(i, i + needle.length)}</mark>{s.slice(i + needle.length)}</>;
   };
+  // satirlari bloklara ayir: kod citi (```) icindekiler oldugu gibi kalir
+  type Blk = { kind: "line"; t: string; i: number } | { kind: "code"; t: string; i: number };
+  const blocks: Blk[] = [];
+  let inCode = false, buf: string[] = [], codeAt = 0;
+  lines.forEach((l, i) => {
+    if (/^\s*```/.test(l)) {
+      if (inCode) { blocks.push({ kind: "code", t: buf.join("\n"), i: codeAt }); buf = []; inCode = false; }
+      else { inCode = true; codeAt = i; }
+      return;
+    }
+    if (inCode) buf.push(l); else blocks.push({ kind: "line", t: l, i });
+  });
+  if (inCode && buf.length) blocks.push({ kind: "code", t: buf.join("\n"), i: codeAt });
+  // ilk bolumun ilk duz paragrafi DropCap ile acilir (aramada ya da satir ici bicim varsa acilmaz)
+  const plain = (t: string) => t.length >= 40 && !/^([-*•]|\d+[.)]|#{1,6}|>|\|)\s*/.test(t) && !t.startsWith("[Konuşmacı notu]") && !t.includes(" | ") && !hasInline(t);
+  const dropAt = drop && !needle ? (blocks.find((b) => b.kind === "line" && plain(b.t.trim()))?.i ?? -1) : -1;
   return (
     <div className="font-reading space-y-2">
-      {lines.map((l, i) => {
-        const t = l.trim();
+      {blocks.map((b) => {
+        const key = String(b.i);
+        if (b.kind === "code") return <pre key={key} className="overflow-x-auto rounded-lg bg-surface-muted p-3 font-mono text-small leading-relaxed text-text-primary">{b.t}</pre>;
+        const t = b.t.trim();
         if (!t) return null;
-        if (/^[-*•]\s+/.test(t)) return <p key={i} className="pl-4 before:-ml-3 before:mr-1.5 before:content-['•']">{mark(t.replace(/^[-*•]\s+/, ""))}</p>;
-        if (t.startsWith("[Konuşmacı notu]")) return <p key={i} className="rounded-lg bg-surface-muted px-3 py-2 text-sm italic text-text-secondary">{mark(t)}</p>;
-        if (t.includes(" | ")) return <p key={i} className="font-mono text-small text-text-secondary">{mark(t)}</p>;
-        if (i === dropAt) return <DropCap key={i} text={t} />;
-        return <p key={i}>{mark(t)}</p>;
+        if (/^(-{3,}|\*{3,}|_{3,})$/.test(t)) return <hr key={key} className="my-3 border-border" />;
+        const h = /^(#{1,6})\s+(.*)$/.exec(t);
+        if (h) {
+          const lvl = h[1].length;
+          const cls = lvl <= 1 ? "text-xl" : lvl === 2 ? "text-lg" : "text-base";
+          return <p key={key} role="heading" aria-level={Math.min(6, lvl + 1)} className={`font-heading ${cls} pt-2 text-text-primary`}>{inlineMd(h[2].replace(/\s*#+\s*$/, ""), mark, key)}</p>;
+        }
+        if (/^>\s?/.test(t)) return <blockquote key={key} className="border-l-2 border-accent-purple/40 pl-3 italic text-text-secondary">{inlineMd(t.replace(/^>\s?/, ""), mark, key)}</blockquote>;
+        if (/^\|?\s*:?-{3,}:?\s*(\|\s*:?-{3,}:?\s*)*\|?$/.test(t)) return null;   // Markdown tablo ayirici satiri
+        if (/^[-*•]\s+/.test(t)) return <p key={key} className="pl-4 before:-ml-3 before:mr-1.5 before:content-['•']">{inlineMd(t.replace(/^[-*•]\s+/, ""), mark, key)}</p>;
+        const ol = /^(\d+)[.)]\s+(.*)$/.exec(t);
+        if (ol) return <p key={key} className="pl-6 -indent-5"><span className="mr-1.5 tabular-nums text-text-secondary">{ol[1]}.</span>{inlineMd(ol[2], mark, key)}</p>;
+        if (t.startsWith("[Konuşmacı notu]")) return <p key={key} className="rounded-lg bg-surface-muted px-3 py-2 text-sm italic text-text-secondary">{mark(t)}</p>;
+        if (t.startsWith("|") || t.includes(" | ")) return <p key={key} className="font-mono text-small text-text-secondary">{inlineMd(t, mark, key)}</p>;
+        if (b.i === dropAt) return <DropCap key={key} text={t} />;
+        return <p key={key}>{inlineMd(t, mark, key)}</p>;
       })}
     </div>
   );
