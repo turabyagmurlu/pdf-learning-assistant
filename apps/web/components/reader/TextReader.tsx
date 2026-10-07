@@ -58,7 +58,7 @@ function Para({ text, needle, drop }: { text: string; needle: string; drop?: boo
     return <>{s.slice(0, i)}<mark className="rounded bg-warning-bg px-0.5 text-text-primary">{s.slice(i, i + needle.length)}</mark>{s.slice(i + needle.length)}</>;
   };
   // satirlari bloklara ayir: kod citi (```) icindekiler oldugu gibi kalir
-  type Blk = { kind: "line"; t: string; i: number } | { kind: "code"; t: string; i: number };
+  type Blk = { kind: "line"; t: string; i: number } | { kind: "code"; t: string; i: number } | { kind: "table"; rows: string[][]; head: boolean; i: number };
   const blocks: Blk[] = [];
   let inCode = false, buf: string[] = [], codeAt = 0;
   lines.forEach((l, i) => {
@@ -67,7 +67,20 @@ function Para({ text, needle, drop }: { text: string; needle: string; drop?: boo
       else { inCode = true; codeAt = i; }
       return;
     }
-    if (inCode) buf.push(l); else blocks.push({ kind: "line", t: l, i });
+    if (inCode) { buf.push(l); return; }
+    // Markdown tablosu: art arda "|" ile baslayan satirlar tek tabloda toplanir
+    if (/^\s*\|.*\|\s*$/.test(l)) {
+      const prev = blocks[blocks.length - 1];
+      const isSep = /^\s*\|?\s*:?-{3,}:?\s*(\|\s*:?-{3,}:?\s*)*\|?\s*$/.test(l);
+      const cells = l.trim().replace(/^\|/, "").replace(/\|$/, "").split("|").map((c) => c.trim());
+      if (prev && prev.kind === "table" && prev.i + prev.rows.length + (prev.head ? 1 : 0) === i) {
+        if (isSep) { if (prev.rows.length === 1) prev.head = true; }
+        else prev.rows.push(cells);
+        return;
+      }
+      if (!isSep) { blocks.push({ kind: "table", rows: [cells], head: false, i }); return; }
+    }
+    blocks.push({ kind: "line", t: l, i });
   });
   if (inCode && buf.length) blocks.push({ kind: "code", t: buf.join("\n"), i: codeAt });
   // ilk bolumun ilk duz paragrafi DropCap ile acilir (aramada ya da satir ici bicim varsa acilmaz)
@@ -77,6 +90,28 @@ function Para({ text, needle, drop }: { text: string; needle: string; drop?: boo
     <div className="font-reading space-y-2">
       {blocks.map((b) => {
         const key = String(b.i);
+        if (b.kind === "table") {
+          const [first, ...rest] = b.rows;
+          const body = b.head ? rest : b.rows;
+          return (
+            <div key={key} className="overflow-x-auto rounded-lg border">
+              <table className="w-full border-collapse font-body text-small">
+                {b.head && first && (
+                  <thead className="bg-surface-muted">
+                    <tr>{first.map((c, j) => <th key={j} className="border-b px-2.5 py-1.5 text-left font-semibold text-text-primary">{inlineMd(c, mark, key + "h" + j)}</th>)}</tr>
+                  </thead>
+                )}
+                <tbody>
+                  {body.map((r, ri) => (
+                    <tr key={ri} className="align-top even:bg-surface-muted/50">
+                      {r.map((c, j) => <td key={j} className="border-b px-2.5 py-1.5 text-text-primary">{inlineMd(c, mark, key + "r" + ri + "c" + j)}</td>)}
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          );
+        }
         if (b.kind === "code") return <pre key={key} className="overflow-x-auto rounded-lg bg-surface-muted p-3 font-mono text-small leading-relaxed text-text-primary">{b.t}</pre>;
         const t = b.t.trim();
         if (!t) return null;
