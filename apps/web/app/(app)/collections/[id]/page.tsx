@@ -13,7 +13,7 @@ import Link from "next/link";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import {
   BookOpen, Loader2, Pencil, Check, Plus, X, Trash2, Download, Palette,
-  RefreshCw, Tags, Link2, MessageSquare, StickyNote, Library,
+  RefreshCw, Tags, Link2, MessageSquare, StickyNote, Library, Headphones,
 } from "lucide-react";
 import { api, errorMessage } from "@/lib/api";
 import { docHref } from "@/lib/links";
@@ -441,6 +441,17 @@ function CollectionPage({ id }: { id: string }) {
             {processingN > 0 ? ` · ${processingN} kaynak hazırlanıyor` : ""}
           </p>
         </div>
+        {/* Baş özellik: Sesli özet (podcast) tek dokunuşla — menüye girmeden */}
+        {(() => {
+          const why = lockReason("sesli", readyN, processingN);
+          return (
+            <button type="button" disabled={!!why} title={why || "Bu defterin sesli özetini dinle"}
+                    onClick={() => { setTab("sesli"); requestAnimationFrame(() => tabBarRef.current?.scrollIntoView({ behavior: "smooth", block: "start" })); }}
+                    className="flex min-h-[44px] shrink-0 items-center gap-2 rounded-full bg-accent-purple px-4 text-sm font-semibold text-white shadow-soft transition hover:opacity-90 disabled:opacity-50 md:min-h-[48px] md:px-5 md:text-base">
+              <Headphones size={18} aria-hidden /> Dinle
+            </button>
+          );
+        })()}
         <CoverPicker open={coverOpen} onClose={() => setCoverOpen(false)} id={String(col.id)} title={col.title || ""}
                      color={col.cover_color} icon={col.cover_icon}
                      onSaved={(c, i) => setData((d: any) => d ? { ...d, collection: { ...d.collection, cover_color: c, cover_icon: i } } : d)} />

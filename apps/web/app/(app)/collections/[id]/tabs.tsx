@@ -15,16 +15,16 @@ import { Cost, costTitle } from "@/components/CostBadge";
 
 export type TabKey = "kaynaklar" | "sor" | "not" | "sozluk" | "sesli";
 
-/** Ana sekmeler (3). */
+/** Ana sekmeler (4). Sesli özet (podcast) uygulamanın baş özelliği: menüde saklanmaz, ana sekmedir. */
 export const TABS: [TabKey, string, typeof FileText][] = [
   ["kaynaklar", "Kaynaklar", FileText],
   ["sor", "Sor", MessageSquare],
   ["not", "Çalışma notu", PenLine],
+  ["sesli", "Dinle", Headphones],
 ];
 /** "Daha fazla" içindeki görünümler (ana sekme değil; seçilince şeritte "Daha fazla · Sözlük" olarak görünür). */
 export const MORE_VIEWS: [TabKey, string, typeof FileText][] = [
   ["sozluk", "Sözlük", BookMarked],
-  ["sesli", "Sesli özet", Headphones],
 ];
 const ALL: TabKey[] = [...TABS.map((t) => t[0]), ...MORE_VIEWS.map((t) => t[0])];
 const LEGACY: Record<string, TabKey> = {
