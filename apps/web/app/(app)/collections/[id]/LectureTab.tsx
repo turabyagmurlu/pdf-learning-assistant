@@ -153,6 +153,9 @@ export default function LectureTab({ id, title, readyN, confirm, coverColor, cov
   const runId = useRef(0);
   const textAbort = useRef<AbortController | null>(null);
   const headRef = useRef<string>("");
+  /** Erken dinleme: metin hâlâ yazılırken ilk parçanın sesi hazırsa çalmaya başlanır; tam iş aynı oturumu sürdürür. */
+  const earlyRef = useRef<{ key: number; signal: AbortSignal; text: string; url: string; blob: Blob; duration?: number } | null>(null);
+  const streamingRef = useRef(false);
   const [headOn, setHeadOn] = useState(false);
   const playedKey = useRef("");
 
@@ -251,7 +254,7 @@ export default function LectureTab({ id, title, readyN, confirm, coverColor, cov
   }, [hasReady, emphasize]);
   useEffect(() => { if (live) setEmphasize(false); }, [live]);
 
-  function stopAudio() { audio.stopIf(id); setHeadOn(false); }
+  function stopAudio() { audio.stopIf(id); setHeadOn(false); earlyRef.current = null; }
   function stopText() { runId.current++; try { textAbort.current?.abort(); } catch {} }
   useEffect(() => () => { stopText(); }, []);   // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -272,7 +275,7 @@ export default function LectureTab({ id, title, readyN, confirm, coverColor, cov
     setLecBusy(true); setLecErr(""); setLecNote(""); stopAudio();
     setUseBrowserVoice(false); setQuotaOut(false); setPrepCost(null);
     if (refresh || !lecture) { setLecture(""); saveHints([]); }
-    headRef.current = "";
+    headRef.current = ""; earlyRef.current = null; streamingRef.current = true;
     stopText();
     const myRun = ++runId.current;
     const ac = new AbortController(); textAbort.current = ac;
@@ -307,7 +310,7 @@ export default function LectureTab({ id, title, readyN, confirm, coverColor, cov
             full += data.text || ""; setLecture(full);
             if (!headStarted && !isCached && runId.current === myRun) {
               const head = pickHead(full, fmt === "dialog");
-              if (head) { headStarted = true; headRef.current = head; setHeadOn(true); void startHeadJob(head); }
+              if (head) { headStarted = true; headRef.current = head; setHeadOn(true); void startHeadJob(head, myRun); }
             }
           } else if (type === "meta") {
             isCached = !!data.cached;
@@ -323,6 +326,7 @@ export default function LectureTab({ id, title, readyN, confirm, coverColor, cov
           }
         }
       }
+      streamingRef.current = false;
       if (runId.current !== myRun) return;
       const s = (finalText || full).trim();
       if (!s) throw new Error("Sesli özet hazırlanamadı; birazdan tekrar dene.");
@@ -348,15 +352,40 @@ export default function LectureTab({ id, title, readyN, confirm, coverColor, cov
       if (isUsageLimit(e)) setQuotaOut(true);
       setLecture(lsGet(LEC_KEY) || "");          // yarım metin oynatıcıya düşmesin: kayıtlı metne dön
       setLecErr(e?.message || "Sesli özet hazırlanamadı; birazdan tekrar dene.");
-    } finally { if (runId.current === myRun) { setLecBusy(false); setHeadOn(false); } }
+    } finally { if (runId.current === myRun) { streamingRef.current = false; setLecBusy(false); setHeadOn(false); } }
   }
 
   /** Ön parça: ilk kısmın sesi metin yazılırken sunucuda hazırlanır; tam iş onu aynen kullanır. */
-  async function startHeadJob(head: string) {
+  async function startHeadJob(head: string, myRun: number) {
     try {
-      await api(`/collections/${id}/lecture/tts`, {
+      let st: JobState = await api(`/collections/${id}/lecture/tts`, {
         method: "POST", body: JSON.stringify({ text: head, voice: voice || undefined, voice2: voice2 || undefined, format: fmt, head }),
       }, 1);
+      // İlk parça hazır olunca, metin hâlâ yazılıyorsa hemen çalmaya başla (bekleme yok)
+      for (let i = 0; i < 60 && runId.current === myRun && streamingRef.current; i++) {
+        if (st.status === "error") return;
+        if ((st.ready_chunks || []).includes(0)) break;
+        await new Promise((r) => setTimeout(r, 1500));
+        st = await api(`/tts/jobs/${st.job_id}/chunks`);
+      }
+      if (runId.current !== myRun || !streamingRef.current || !(st.ready_chunks || []).includes(0)) return;
+      if (audio.session && audio.session.collectionId !== id) return;      // başka bir şey çalıyor: dokunma
+      const res = await fetch(`${API}/tts/jobs/${st.job_id}/chunks/0`, { headers: { Authorization: "Bearer " + getToken() } });
+      if (!res.ok) return;
+      const blob = await res.blob();
+      if (blob.size < 500 || runId.current !== myRun || !streamingRef.current) return;
+      const url = URL.createObjectURL(blob);
+      const text = st.texts?.[0] || head;
+      const duration = st.durations?.["0"];
+      lsDel(POS_KEY); setResumeAt(0);                 // yeni anlatım baştan
+      const dialog = fmt === "dialog";
+      const { key, signal } = audio.play({
+        collectionId: id, title, artwork: "/icon", storageKey: POS_KEY, autoPlay: true,
+        subtitle: `Sesli özet · ${dialog ? "Sohbet" : "Tek anlatıcı"}`,
+        chunks: [{ text, url, duration }, { text: "" }], total: 2,
+      });
+      audio.update(key, { busy: false, note: "Devamı hazırlanıyor…" });
+      earlyRef.current = { key, signal, text, url, blob, duration };
     } catch { /* tam iş zaten üretecek */ }
   }
 
@@ -400,13 +429,15 @@ export default function LectureTab({ id, title, readyN, confirm, coverColor, cov
     const dialog = isDialogText(text);
     const cacheKey = keyFor(text);
     playedKey.current = cacheKey;
-    const { key, signal } = audio.play({
+    const early = earlyRef.current && audio.isCurrent(earlyRef.current.key) ? earlyRef.current : null;
+    earlyRef.current = null;
+    const { key, signal } = early ? { key: early.key, signal: early.signal } : audio.play({
       collectionId: id, title, artwork: "/icon", storageKey: POS_KEY, autoPlay: true,
       subtitle: `Sesli özet · ${dialog ? "Sohbet" : "Tek anlatıcı"}`,
     });
     setLecErr(""); setQuotaOut(false); setUseBrowserVoice(false);
     try {
-      const cached = await fromCache(cacheKey, text, key);
+      const cached = early ? null : await fromCache(cacheKey, text, key);
       if (!audio.isCurrent(key)) return;
       if (cached) { audio.update(key, { chunks: cached, total: cached.length, busy: false }); return; }
       const job: JobState = await api(`/collections/${id}/lecture/tts`, {
@@ -417,7 +448,7 @@ export default function LectureTab({ id, title, readyN, confirm, coverColor, cov
       const jh = jobHints(job);
       if (jh.length) saveHints(jh);
       if (typeof job.cost === "number") setPrepCost(job.cost);
-      await followJob(job, key, signal, cacheKey, jh);
+      await followJob(job, key, signal, cacheKey, jh, early);
     } catch (e: any) {
       if (!audio.isCurrent(key)) return;
       if (e?.quota || isUsageLimit(e) || e?.code === "AI_BUSY") setQuotaOut(true);
@@ -426,13 +457,22 @@ export default function LectureTab({ id, title, readyN, confirm, coverColor, cov
     }
   }
 
-  async function followJob(first: JobState, key: number, signal: AbortSignal, cacheKey: string, jh: ChapterHint[]) {
+  async function followJob(first: JobState, key: number, signal: AbortSignal, cacheKey: string, jh: ChapterHint[],
+                           early: { url: string; blob: Blob; text: string; duration?: number } | null = null) {
     const jid = first.job_id;
     const total = first.total || first.texts.length;
     const list: QueueChunk[] = first.texts.map((t) => ({ text: t }));
-    if (!audio.update(key, { chunks: [...list], total })) return;
     const fetched = new Set<number>();
     const blobs: (Blob | null)[] = new Array(total).fill(null);
+    // Erken çalan ilk parça aynı metinse aynı adresle kalır (çalma kesilmez)
+    if (early && list[0] && list[0].text === early.text) {
+      list[0] = { text: early.text, url: early.url, duration: early.duration };
+      fetched.add(0); blobs[0] = early.blob;
+    } else if (early) {
+      // Eşleşmedi: baştan, tam işle devam et
+      try { URL.revokeObjectURL(early.url); } catch {}
+    }
+    if (!audio.update(key, { chunks: [...list], total, ...(early ? { note: "" } : {}) })) return;
     let st: JobState = first;
 
     async function pull(n: number) {

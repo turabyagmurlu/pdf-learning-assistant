@@ -189,11 +189,13 @@ def prepare_sections(raw: str, dialog: bool) -> tuple[str, list[dict]]:
 
 
 def aligned_chunks(txt: str, starts: list[dict], dialog: bool, consumed: int = 0,
-                   first: list[str] | None = None, max_chars: int = 2600) -> tuple[list[str], list[dict]]:
+                   first: list[str] | None = None, max_chars: int = 2600,
+                   lead: list[int] | None = None) -> tuple[list[str], list[dict]]:
     """Hazir metni parcalar; her bolum basi yeni bir parcada baslar.
     `first`/`consumed`: on parca (head) kullanildiysa ilk parcalar ve metinden tukettigi karakter.
     Donus: (parcalar, [{title, chunk_index}]). On parcanin icinde baslayan bolum -> chunk_index 0."""
     chunks: list[str] = [c for c in (first or []) if c.strip()]
+    lead = list(lead or [])
     marks: list[dict] = []
     for st in starts:
         if st["start"] < consumed:
@@ -207,8 +209,35 @@ def aligned_chunks(txt: str, starts: list[dict], dialog: bool, consumed: int = 0
             continue
         if a in by_start and a >= consumed:
             marks.append({"title": by_start[a], "chunk_index": len(chunks)})
+        if lead:
+            pieces, seg = _lead_pieces(seg, dialog, lead)
+            lead = lead[len(pieces):] if seg else []
+            chunks.extend(pieces)
+            if not seg:
+                continue
         chunks.extend(c for c in split_any(seg, dialog, max_chars) if c.strip())
     return chunks, marks
+
+
+# Hizli baslangic: ilk parcalar kucuk (birkac saniyede uretilir, ses hemen baslar), sonrakiler buyur.
+LEAD_SIZES = [650, 1400]
+
+
+def _lead_pieces(seg: str, dialog: bool, sizes: list[int]) -> tuple[list[str], str]:
+    """`seg`in basindan `sizes` boylarinda parcalar keser; (parcalar, kalan) dondurur.
+    Kesim paragraf/replik sinirina duser; esleme bozulursa hic kesmez (guvenli)."""
+    out: list[str] = []
+    rest = seg
+    for n in sizes:
+        if not rest.strip() or len(rest) <= n * 1.3:
+            break
+        first = next((c for c in split_any(rest, dialog, n) if c.strip()), "")
+        r = strip_head(rest, first) if first else None
+        if r is None or not r.strip():
+            break
+        out.append(first)
+        rest = r.strip()
+    return out, rest
 
 
 def strip_head(text: str, head: str) -> str | None:
@@ -434,50 +463,80 @@ async def _synth_chunk(job: dict, i: int) -> bytes:
         _INFLIGHT.pop(ck, None)
 
 
+# Ayni anda en fazla bu kadar parca uretilir (model havuzu 429'da kendiliginden yedek modele gecer).
+PARALLEL = 3
+
+
+async def _synth_with_retry(job: dict, i: int, gate: dict) -> bytes:
+    pcm: bytes | None = None
+    for attempt in range(5):
+        # Ortak bekleme: bir parca 429 aldiysa digerleri de ayni sureyi bekler (kotayi zorlamasin)
+        delay = gate["until"] - time.time()
+        if delay > 0:
+            await asyncio.sleep(delay)
+        try:
+            pcm = await _synth_chunk(job, i)
+            break
+        except TtsQuota as q:
+            if q.daily or attempt == 4:
+                raise
+            gate["until"] = max(gate["until"], time.time() + q.retry_after)
+            job["waiting"] = int(q.retry_after)
+            job["note"] = (f"Seslendirme şu an yoğun; {int(q.retry_after)} saniye sonra "
+                           "kendiliğinden devam edecek…")
+            await _save(job)
+        except TtsBusy as b:
+            if attempt == 4:
+                raise
+            wait = b.retry_after * (attempt + 1)
+            gate["until"] = max(gate["until"], time.time() + wait)
+            job["waiting"] = wait
+            job["note"] = f"Seslendirme şu an yoğun; {wait} saniye sonra yeniden denenecek…"
+            await _save(job)
+        except Exception:  # noqa
+            if attempt >= 1:
+                raise
+            await asyncio.sleep(3)
+    if pcm is None:
+        raise AiUnavailable("Seslendirme şu an yapılamadı; biraz sonra tekrar dene ya da cihaz sesiyle dinle.")
+    return pcm
+
+
 async def _run(job: dict):
     job_id = job["id"]
     hb = asyncio.create_task(_heartbeat(job_id))
     try:
-        for i in range(job["total"]):
-            if i in job["ready"]:
-                continue
-            pcm: bytes | None = None
-            for attempt in range(5):
-                try:
-                    pcm = await _synth_chunk(job, i)
-                    break
-                except TtsQuota as q:
-                    if q.daily or attempt == 4:
-                        raise
-                    job["waiting"] = int(q.retry_after)
-                    job["note"] = (f"Seslendirme şu an yoğun; {int(q.retry_after)} saniye sonra "
-                                   "kendiliğinden devam edecek…")
-                    await _save(job)
-                    await asyncio.sleep(q.retry_after)
-                    job["waiting"], job["note"] = 0, ""
-                except TtsBusy as b:
-                    if attempt == 4:
-                        raise
-                    wait = b.retry_after * (attempt + 1)
-                    job["waiting"] = wait
-                    job["note"] = f"Seslendirme şu an yoğun; {wait} saniye sonra yeniden denenecek…"
-                    await _save(job)
-                    await asyncio.sleep(wait)
-                    job["waiting"], job["note"] = 0, ""
-                except Exception:  # noqa
-                    if attempt >= 1:
-                        raise
-                    await asyncio.sleep(4)
-            if pcm is None:
-                raise AiUnavailable("Seslendirme şu an yapılamadı; biraz sonra tekrar dene ya da cihaz sesiyle dinle.")
-            job["durations"][str(i)] = len(pcm) / 48000.0
-            job["ready"].append(i)
-            job["done"] = len(job["ready"])
-            job["note"], job["waiting"] = "", 0
-            job["at"] = time.time()
-            await _save(job)
-            if i < job["total"] - 1:
-                await asyncio.sleep(2)      # dakikalik istek sinirina nefes payi
+        todo = [i for i in range(job["total"]) if i not in job["ready"]]
+        gate = {"until": 0.0}
+        lock = asyncio.Lock()
+
+        async def worker(w: int):
+            # Kucuk gecikmeli baslangic: istekler ayni milisaniyede patlamasin
+            await asyncio.sleep(w * 0.4)
+            while True:
+                async with lock:
+                    if not todo:
+                        return
+                    i = todo.pop(0)          # sirayla: once dinlenecek parca once uretilir
+                pcm = await _synth_with_retry(job, i, gate)
+                async with lock:
+                    job["durations"][str(i)] = len(pcm) / 48000.0
+                    if i not in job["ready"]:
+                        job["ready"].append(i)
+                    job["done"] = len(job["ready"])
+                    if gate["until"] <= time.time():
+                        job["note"], job["waiting"] = "", 0
+                    job["at"] = time.time()
+                await _save(job)
+
+        n = max(1, min(PARALLEL, len(todo)))
+        tasks = [asyncio.create_task(worker(w)) for w in range(n)]
+        try:
+            await asyncio.gather(*tasks)
+        except BaseException:
+            for t in tasks:
+                t.cancel()
+            raise
         # Tamami hazir: birlesik ses onbellege (eski /tts/jobs yolu da bundan yararlanir)
         try:
             parts = []
@@ -528,12 +587,26 @@ async def create_job(user_id: str, is_owner: bool, text: str, voice: str | None,
     head = tts_prepare(strip_chapter_marks((head or "").strip()), dialog=dialog)
     rest = strip_head(txt, head) if head and len(head) <= 2600 else None
     head_only = bool(head) and rest is not None and not rest.strip()
-    if rest is not None:
-        # 1. parca tam olarak on parca: onbellek anahtari ayni -> on-uretilmis ses aninda kullanilir
-        first = [head] if not dialog else split_dialog_for_tts(head)
-        chunks, marks = aligned_chunks(txt, starts, dialog, consumed=len(txt) - len(rest), first=first)
-    else:
-        chunks, marks = aligned_chunks(txt, starts, dialog)
+    def _chunking(lead: list[int] | None):
+        if rest is not None:
+            # 1. parca tam olarak on parca: onbellek anahtari ayni -> on-uretilmis ses aninda kullanilir
+            first = [head] if not dialog else split_dialog_for_tts(head)
+            return aligned_chunks(txt, starts, dialog, consumed=len(txt) - len(rest), first=first,
+                                  lead=[LEAD_SIZES[-1]] if lead else None)
+        return aligned_chunks(txt, starts, dialog, lead=lead)
+
+    # Hizli baslangic parcalamasi; ama eski parcalamayla tamami onbellekteyse onu kullan (kota yanmasin)
+    chunks, marks = _chunking(LEAD_SIZES)
+    legacy, legacy_marks = _chunking(None)
+    if legacy and legacy != chunks:
+        probe = {"voice": voice, "style": style}
+        hits = 0
+        for c in legacy:
+            if await _pcm_get(_chunk_key(c, probe)) is None:
+                break
+            hits += 1
+        if hits == len(legacy):
+            chunks, marks = legacy, legacy_marks
     if not chunks:
         raise AiUnavailable("Seslendirilecek metin boş.")
     job = {
