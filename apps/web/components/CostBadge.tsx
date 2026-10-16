@@ -16,14 +16,14 @@ export function Cost({ n = 1, className = "" }: { n?: number; className?: string
       <span aria-hidden className={"ml-1 inline-flex items-center rounded-full px-1.5 text-xs font-medium leading-5 " + bg + className}>
         ⚡{k}
       </span>
-      <span className="sr-only"> ({k} Gemini çağrısı)</span>
+      <span className="sr-only"> ({k} kullanım)</span>
     </>
   );
 }
 
 /** Dugme title'i icin: "N Gemini çağrısı". */
 export function costTitle(n = 1) {
-  return `${Math.max(1, Math.round(n || 1))} Gemini çağrısı`;
+  return `${Math.max(1, Math.round(n || 1))} kullanım`;
 }
 
 /** Gemini doldu / yogun mu? (lib/api hata objesine `code` koyar.) */

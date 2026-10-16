@@ -12,7 +12,7 @@ import { Check, Loader2, Smartphone, Volume2 } from "lucide-react";
 import { api, API, getToken } from "@/lib/api";
 import { loadVoice, saveVoice, type VoiceOption } from "@/lib/audio";
 import Modal from "@/components/Modal";
-import { Cost } from "@/components/CostBadge";
+import { Bolt } from "@/components/audio/LecturePlayer";
 import { browserVoiceSupported } from "@/components/BrowserVoice";
 
 type Lists = { female: VoiceOption[]; male: VoiceOption[]; def: string };
@@ -105,7 +105,7 @@ export default function VoicePicker({ open, onClose }: { open: boolean; onClose:
                 title={free ? "Örnek cümleyi dinle · ücretsiz" : "Örnek cümle ilk kez üretilecek (1 kullanım); sonra herkes için ücretsiz"}
                 className="flex min-h-[44px] shrink-0 items-center gap-1 rounded-xl border px-3 text-xs hover:bg-surface-muted disabled:opacity-60">
           {sampling === v.id ? <Loader2 size={14} className="animate-spin" aria-hidden /> : <Volume2 size={14} aria-hidden />}
-          Dinle {free ? null : <Cost n={1} />}
+          Dinle {free ? null : <Bolt n={1} />}
         </button>
       </li>
     );
@@ -135,7 +135,7 @@ export default function VoicePicker({ open, onClose }: { open: boolean; onClose:
       {canSpeak && (
         <p className="mt-3 flex items-start gap-1.5 text-xs text-text-secondary">
           <Smartphone size={13} aria-hidden className="mt-0.5 shrink-0" />
-          Kota dolarsa ya da istersen oynatıcıdan “Cihaz sesi · ücretsiz” seçeneğini de kullanabilirsin.
+          Kullanım hakkın dolarsa ya da internet yoksa “Cihaz sesiyle dinle (ücretsiz)” seçeneğini kullanabilirsin.
         </p>
       )}
       <div className="mt-4 flex justify-end">

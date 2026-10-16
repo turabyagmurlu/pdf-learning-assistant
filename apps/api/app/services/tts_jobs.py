@@ -13,6 +13,8 @@ Farklari (study.py'deki eski is kuyruguna gore):
 - V3: metin `tts_prepare`'den gecer; parcalar paragraf hizali; her parcanin sonunda 500 ms
   sessizlik; yonerge Ingilizce/ayrik/parca baglamli (tekli ve sohbet ortak sablon); bolumler
   (`chapters`) paragraf bazli, kota 0.
+- P2: metindeki `## Bölüm adı` satirlari bolum isaretidir; seslendirilmez, parca sinirlari bolum
+  basina hizalanir (her bolum yeni parcada baslar). Is yanitinda `chapter_chunks: [{title, chunk_index}]`.
 """
 import asyncio
 import json
@@ -43,12 +45,48 @@ SPEAKER_B = "Kerem"       # merakli ogrenci (erkek sesi)
 
 # Erkek sesleri (3 ses) ve varsayilan: tts_service.MALE_VOICES / DEFAULT_MALE_VOICE (buradan yeniden disa verilir)
 
+MAX_JOB_CHARS = 40000     # derin podcast (~3500 kelime ≈ 25K karakter) sigsin; eskiden 12000
+
 _LINE_RE = re.compile(r"^\s*(Ayşe|Ayse|Kerem)\s*:\s*(.*)$", re.IGNORECASE)
+# Bolum isareti: satir basinda 1-3 '#', ardindan baslik (seslendirilmez)
+_CHAPTER_RE = re.compile(r"^[ \t]*#{1,3}[ \t]+(?P<t>[^\n]*?)[ \t#]*$", re.MULTILINE)
+
+
+def chapter_marks(text: str) -> list[dict]:
+    """Metindeki `## Bölüm adı` satirlari -> [{title, char_start}] (char_start: isaret satirinin metindeki yeri)."""
+    out = []
+    for m in _CHAPTER_RE.finditer(text or ""):
+        t = m.group("t").strip().strip("*_ ").rstrip(":").strip()
+        if t:
+            out.append({"title": t[:90], "char_start": m.start()})
+    return out
+
+
+def split_sections(text: str) -> list[tuple[str | None, str]]:
+    """Metni bolum isaretlerinden boler: [(baslik|None, govde)]. Isaretten onceki kisim basliksiz bolumdur.
+    Govdelerde isaret satiri yoktur (seslendirmeye girmez)."""
+    text = (text or "").replace("\r\n", "\n").replace("\r", "\n")
+    out: list[tuple[str | None, str]] = []
+    title: str | None = None
+    pos = 0
+    for m in _CHAPTER_RE.finditer(text):
+        body = text[pos:m.start()]
+        if body.strip() or title is not None:
+            out.append((title, body))
+        t = m.group("t").strip().strip("*_ ").rstrip(":").strip()
+        title = t[:90] if t else (title or "")
+        pos = m.end()
+    out.append((title, text[pos:]))
+    return [(t, b) for t, b in out if b.strip() or t]
+
+
+def strip_chapter_marks(text: str) -> str:
+    return _CHAPTER_RE.sub("", text or "")
 
 
 def is_dialog(text: str) -> bool:
-    """Metin 'Ayşe: … / Kerem: …' satirlarindan mi olusuyor?"""
-    lines = [ln for ln in (text or "").splitlines() if ln.strip()]
+    """Metin 'Ayşe: … / Kerem: …' satirlarindan mi olusuyor? (bolum isareti satirlari sayilmaz)"""
+    lines = [ln for ln in strip_chapter_marks(text).splitlines() if ln.strip()]
     if len(lines) < 4:
         return False
     hits = sum(1 for ln in lines if _LINE_RE.match(ln))
@@ -129,6 +167,48 @@ def chapters_for(chunks: list[str], dialog: bool = False) -> list[dict]:
                     out.append({"chunk": ci, "offset": pos, "title": _title_of(para)})
                 pos += len(para)
     return out[:200]
+
+
+def prepare_sections(raw: str, dialog: bool) -> tuple[str, list[dict]]:
+    """Bolum isaretli metni seslendirmeye hazirlar: her bolum govdesi ayri `tts_prepare`'den gecer,
+    isaret satirlari atilir. Donus: (hazir metin, [{title, start}] — bolumun hazir metindeki baslangici).
+    Isaretsiz metinde tek basliksiz bolum (eski davranisla ayni metin)."""
+    sep = "\n" if dialog else "\n\n"
+    out, starts, pos = [], [], 0
+    for title, body in split_sections(raw):
+        prepared = tts_prepare(body, dialog=dialog)
+        if not prepared.strip():
+            continue
+        if out:
+            pos += len(sep)
+        if title:
+            starts.append({"title": title, "start": pos})
+        out.append(prepared)
+        pos += len(prepared)
+    return sep.join(out), starts
+
+
+def aligned_chunks(txt: str, starts: list[dict], dialog: bool, consumed: int = 0,
+                   first: list[str] | None = None, max_chars: int = 2600) -> tuple[list[str], list[dict]]:
+    """Hazir metni parcalar; her bolum basi yeni bir parcada baslar.
+    `first`/`consumed`: on parca (head) kullanildiysa ilk parcalar ve metinden tukettigi karakter.
+    Donus: (parcalar, [{title, chunk_index}]). On parcanin icinde baslayan bolum -> chunk_index 0."""
+    chunks: list[str] = [c for c in (first or []) if c.strip()]
+    marks: list[dict] = []
+    for st in starts:
+        if st["start"] < consumed:
+            marks.append({"title": st["title"], "chunk_index": 0})
+    bounds = sorted({st["start"] for st in starts if st["start"] >= consumed} | {consumed})
+    bounds.append(len(txt))
+    by_start = {st["start"]: st["title"] for st in starts}
+    for a, b in zip(bounds, bounds[1:]):
+        seg = txt[a:b].strip()
+        if not seg:
+            continue
+        if a in by_start and a >= consumed:
+            marks.append({"title": by_start[a], "chunk_index": len(chunks)})
+        chunks.extend(c for c in split_any(seg, dialog, max_chars) if c.strip())
+    return chunks, marks
 
 
 def strip_head(text: str, head: str) -> str | None:
@@ -247,7 +327,10 @@ def _public(job: dict) -> dict:
         "note": job.get("note", ""), "waiting": job.get("waiting", 0),
         "mime": job.get("mime") or "audio/wav",
         "cached": job.get("cached", False), "resumed": job.get("resumed", False),
-        "chapters": chapters_for(job["chunks"], job["dialog"]),
+        # Bolum isaretli metinde bolumler parca basina hizali (offset 0); isaretsiz metinde eski paragraf bolumleri
+        "chapters": ([{"chunk": c["chunk_index"], "offset": 0, "title": c["title"]} for c in job["chapter_marks"]]
+                     if job.get("chapter_marks") else chapters_for(job["chunks"], job["dialog"])),
+        "chapter_chunks": list(job.get("chapter_marks") or []),
     }
 
 
@@ -431,34 +514,33 @@ async def create_job(user_id: str, is_owner: bool, text: str, voice: str | None,
     Metin ve on parca `tts_prepare`'den gecer (tire, atif, kisaltma, sayi, noktalama); `texts` alani
     islenmis metindir, cumle vurgusu da ayni metni gosterir. Parcalar paragraf sonuna hizalidir."""
     await _cleanup()
-    raw = (text or "").strip()[:12000]
+    raw = (text or "").strip()[:MAX_JOB_CHARS]
     if len(raw) < 2:
         raise AiUnavailable("Seslendirilecek metin boş.")
     if dialog is None:
         dialog = is_dialog(raw)
-    txt = tts_prepare(raw, dialog=dialog)
+    txt, starts = prepare_sections(raw, dialog)
     if len(txt) < 2:
         raise AiUnavailable("Seslendirilecek metin boş.")
     voice = normalize_voice(voice)
     voice2 = normalize_voice(voice2, male=True)
     style = f"sohbet|{voice2}" if dialog else ""
-    chunks: list[str] = []
-    head = tts_prepare((head or "").strip(), dialog=dialog)
+    head = tts_prepare(strip_chapter_marks((head or "").strip()), dialog=dialog)
     rest = strip_head(txt, head) if head and len(head) <= 2600 else None
     head_only = bool(head) and rest is not None and not rest.strip()
     if rest is not None:
         # 1. parca tam olarak on parca: onbellek anahtari ayni -> on-uretilmis ses aninda kullanilir
-        chunks = ([head] if not dialog else split_dialog_for_tts(head)) + (split_any(rest.strip(), dialog) if rest.strip() else [])
+        first = [head] if not dialog else split_dialog_for_tts(head)
+        chunks, marks = aligned_chunks(txt, starts, dialog, consumed=len(txt) - len(rest), first=first)
     else:
-        chunks = split_any(txt, dialog)
-    chunks = [c for c in chunks if c.strip()]
+        chunks, marks = aligned_chunks(txt, starts, dialog)
     if not chunks:
         raise AiUnavailable("Seslendirilecek metin boş.")
     job = {
         "id": str(uuid.uuid4()), "user": str(user_id), "owner": bool(is_owner),
         "status": "running", "done": 0, "total": len(chunks), "ready": [], "durations": {},
         "chunks": chunks, "voice": voice, "voice2": voice2, "dialog": dialog, "style": style,
-        "head_only": head_only,
+        "head_only": head_only, "chapter_marks": marks,
         "full_key": cache_key(txt, voice, style),
         "error": None, "quota": False, "daily": False, "note": "", "waiting": 0,
         "at": time.time(), "mime": None, "cached": False, "resumed": False, "audio": {},

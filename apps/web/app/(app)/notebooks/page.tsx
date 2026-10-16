@@ -196,7 +196,7 @@ export default function NotebooksPage() {
             ))}
           </ol>
           <p className="mt-3 text-xs leading-relaxed text-text-secondary">
-            Soru sormak gibi yapay zekâ işleri <b className="font-medium text-text-primary">⚡1</b> rozetiyle gösterilir (1 Gemini çağrısı); okuma, arama ve kayıtlı cevaplar Gemini&apos;ye gitmez.
+            Soru sormak gibi yapay zekâ işleri <b className="font-medium text-text-primary">⚡1</b> rozetiyle gösterilir (1 kullanım); okuma, arama ve kayıtlı cevaplar kullanım harcamaz.
           </p>
           <div className="mt-4 flex flex-wrap items-center gap-2">
             {!empty && (

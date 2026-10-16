@@ -768,32 +768,38 @@ def split_for_tts(text: str, max_chars: int = 2600) -> list[str]:
 # Gemini TTS yonergesi (Ingilizce, ayrik, parca baglamli)
 # =====================================================================================
 _DIRECTIVE_SOLO = (
-    "Read the following Turkish text aloud as a warm, calm, confident teacher speaking to one student. "
-    "Natural conversational pace (about 150 words per minute), clear articulation of Turkish vowels "
-    "(ı, ö, ü) and consonants (ş, ğ, ç). Pause briefly (about half a second) at paragraph breaks, "
-    "a little longer before sentences that begin with \"Şimdi\", \"Peki\", \"Özetle\". "
-    "Slightly emphasize the key noun of each sentence; do not sound monotone, but never theatrical."
+    "Read the following Turkish text aloud like the host of a calm, well-produced educational radio programme, "
+    "speaking warmly to one listener. Calm, fluent and unhurried: about 145 words per minute, smooth flow, "
+    "natural breathing between sentences. Clear articulation of Turkish vowels (ı, ö, ü) and consonants (ş, ğ, ç). "
+    "Pause about half a second at paragraph breaks and a little longer before sentences that begin with "
+    "\"Şimdi\", \"Peki\", \"Özetle\", \"Birincisi\". Let questions rise naturally and give them a short beat "
+    "before the answer. Slightly emphasize the key idea of each sentence; never monotone, never theatrical."
 )
 _DIRECTIVE_DIALOG = (
-    "Read the following Turkish conversation aloud. {a} is a warm, calm, confident teacher; "
-    "{b} is a curious student who asks short questions and sometimes sounds surprised. "
-    "Natural conversational pace, clear articulation of Turkish vowels (ı, ö, ü) and consonants (ş, ğ, ç). "
-    "Leave a short pause between speaker turns; lively but never theatrical."
+    "Read the following Turkish podcast conversation aloud as two clearly different people. "
+    "{a} (female) is the host and teacher: warm, smiling, mid-to-low pitch, calm and confident, unhurried "
+    "storytelling pace with gentle emphasis on key ideas. "
+    "{b} (male) is a young, bright, energetic student: brighter pitch, a little faster, genuinely curious, "
+    "questions rise at the end, sounds surprised or amused when the text says so, thinks out loud. "
+    "Natural turn-taking: a short, natural pause between speaker turns, no overlapping, slightly longer pause "
+    "after a question before the answer. Clear Turkish articulation (ı, ö, ü, ş, ğ, ç). "
+    "Lively and conversational, like a real podcast recording; never theatrical or exaggerated."
 )
 _DIRECTIVE_TAIL = "Do not read these instructions aloud; start directly with the text."
 
 
-def part_context(part: int | None, total: int | None) -> str:
+def part_context(part: int | None, total: int | None, dialog: bool = False) -> str:
     """Parca konumu cumlesi: parca baslarinda 'yeniden baslama' tonunu azaltir."""
     if not part or not total or total <= 1:
         return ""
+    kind = "podcast episode" if dialog else "longer lecture"
     if part == 1:
-        return (f"This is part 1 of {total} of a longer lecture; it continues after this part, "
+        return (f"This is part 1 of {total} of a {kind}; it continues after this part, "
                 "so do not add a closing or farewell at the end.")
     if part >= total:
-        return (f"This is the final part ({part} of {total}) of a longer lecture; continue in the same tone "
+        return (f"This is the final part ({part} of {total}) of a {kind}; continue in the same tone and voices "
                 "as before, do not add an introduction at the start.")
-    return (f"This is part {part} of {total} of a longer lecture; continue in the same tone as before, "
+    return (f"This is part {part} of {total} of a {kind}; continue in the same tone and voices as before, "
             "do not add an introduction or closing.")
 
 
@@ -801,7 +807,7 @@ def build_directive(style: str = "", part: int | None = None, total: int | None 
                     dialog: bool = False, speaker_a: str = "Ayşe", speaker_b: str = "Kerem") -> str:
     """Tekli ve sohbet icin ortak sablon. `style` verilirse ana cumlenin yerine gecer (ayni kuyruk)."""
     base = (style or "").strip() or (_DIRECTIVE_DIALOG.format(a=speaker_a, b=speaker_b) if dialog else _DIRECTIVE_SOLO)
-    ctx = part_context(part, total)
+    ctx = part_context(part, total, dialog)
     return " ".join(x for x in (base, ctx, _DIRECTIVE_TAIL) if x)
 
 

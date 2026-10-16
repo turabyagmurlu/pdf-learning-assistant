@@ -399,21 +399,22 @@ def feynman_review(concept: str, explanation: str, context: str) -> str:
 
 _SPOKEN_RULES = (
     "Bu metin YALNIZCA KULAKLA dinlenecek; dinleyici hiçbir şey görmüyor. Kurallar:\n"
-    "(1) Birinci tekil anlatıcı ol (\"şimdi sana şunu anlatacağım\"), dinleyiciye \"sen\" de.\n"
-    "(2) Cümleler kısa: en fazla 15–18 kelime; her cümle tek fikir.\n"
+    "(1) Dinleyiciye \"sen\" de; konuşur gibi yaz, okur gibi değil.\n"
+    "(2) Cümleler kısa: en fazla 15–18 kelime; her cümle tek fikir. Uzun bir düşünceyi iki cümleye böl.\n"
     "(3) Her bölümün başında ne anlatacağını bir cümleyle söyle; sonunda en önemli cümleyi farklı "
     "sözcüklerle tekrar et.\n"
-    "(4) Geçişlerde konuşma bağlayıcıları kullan: \"Peki bu ne demek?\", \"Şimdi ikinci noktaya geçelim\", "
-    "\"Buraya kadar özetlersek\".\n"
+    "(4) Geçişlerde konuşma bağlayıcıları kullan ve her seferinde farklısını seç: \"Peki bu ne demek?\", "
+    "\"Şimdi ikinci noktaya geçelim\", \"Buraya kadar özetlersek\", \"İşin ilginç yanı şu\".\n"
     "(5) Rakam yazma; tüm sayıları, yılları, yüzdeleri ve sıra sayılarını yazıyla yaz "
-    "(\"bin dokuz yüz yirmi üç\", \"yüzde on iki\", \"birinci\").\n"
-    "(6) Hiçbir kısaltma kullanma (vb., yy., M.Ö., Dr. gibi kısaltmaları açık yaz).\n"
+    "(\"bin dokuz yüz yirmi üç\", \"yüzde on iki\", \"birinci\"). Büyük sayıları yuvarla (\"kırk bin civarı\").\n"
+    "(6) Hiçbir kısaltma kullanma (vb., yy., M.Ö., Dr., AB gibi kısaltmaları açık yaz).\n"
     "(7) Parantez, tire, iki nokta, tırnak, madde işareti, başlık, numaralandırma kullanma; parantez "
-    "yerine ayrı cümle kur.\n"
-    "(8) Kaynak, yazar adı, yıl atıfı, sayfa, şekil, tablo, dipnot referansı verme; \"Şekil üçte\" gibi "
-    "görsel atıfları tamamen çıkar, içeriği sözle anlat.\n"
-    "(9) Yabancı ya da Latince bir terimi ilk geçtiğinde Türkçe okunuşuyla ve bir kelimelik "
-    "açıklamayla ver (\"mitokondri, yani hücrenin enerji santrali\").\n"
+    "yerine ayrı cümle kur. Listeyi konuşarak say: \"birincisi…, ikincisi…\".\n"
+    "(8) Yıl atıfı, sayfa, şekil, tablo, dipnot ve atıf numarası verme; \"Şekil üçte\" gibi görsel atıfları "
+    "tamamen çıkar, içeriği sözle anlat. Bir kaynağı anman gerekiyorsa adıyla ya da sırasıyla doğal biçimde "
+    "an (\"ikinci makalede yazar şunu söylüyor\").\n"
+    "(9) Yabancı ya da Latince bir terimi ilk geçtiğinde Türkçe okunuşuyla ve kısa bir açıklamayla ver "
+    "(\"mitokondri, yani hücrenin enerji santrali\").\n"
     "(10) Yazı dili kalıpları yasak: \"bu bağlamda\", \"söz konusu\", \"ele alınmaktadır\" ve "
     "\"-mektedir\" edilgen zinciri; konuşur gibi yaz (\"burada şunu görüyoruz\").\n"
     "(11) Noktalama ile nefes ver: önemli cümleden önce ve sonra kısa bir cümle; her paragraf 3–5 cümle; "
@@ -432,44 +433,451 @@ def warm_kwargs(fn) -> dict:
         return {}
 
 
-def lecture_prompt(context: str, title: str, dialog: bool = False) -> list[dict]:
-    """Sesli ozet istemi. dialog=True: iki kisilik sohbet (Ayse ogretmen, Kerem merakli ogrenci).
+# ---- Sesli ozet / podcast (P2) ------------------------------------------------------------
+# Istem/girdi/biçim değişince artır: önbellek anahtarı (format|length|sürüm) değişir.
+LECTURE_PROMPT_VERSION = "p2"
+LECTURE_CONTEXT_CHARS = 40000          # tüm kaynaklar için toplam bağlam bütçesi
+LECTURE_MIN_SOURCE_CHARS = 1200        # çok kaynaklı defterde kaynak başına alt sınır (bütçe aşılabilir)
 
-    Sohbet biciminde her replik ayri satirda 'Ayşe: …' / 'Kerem: …' olarak yazilir;
-    seslendirme bu etiketlere gore iki ayri sesle yapilir. Kurallar Turkce karakterli (T6).
+# Türkçe konuşma ≈ 140 kelime/dk. `chapters`: içerik bölümü sayısı (açılış, köprüler, kapanış hariç).
+LECTURE_LENGTHS = {
+    "kisa": {"label": "Kısa", "minutes": 5, "words": 700, "chapters": (2, 3), "cost": 1},
+    "standart": {"label": "Standart", "minutes": 12, "words": 1700, "chapters": (3, 5), "cost": 1},
+    "derin": {"label": "Derin", "minutes": 25, "words": 3500, "chapters": (6, 9), "cost": 3},
+}
+DEFAULT_LECTURE_LENGTH = "standart"
+_LENGTH_ALIASES = {"kısa": "kisa", "short": "kisa", "kisa": "kisa", "standart": "standart",
+                   "standard": "standart", "orta": "standart", "derin": "derin", "deep": "derin",
+                   "uzun": "derin", "long": "derin"}
+
+_BIB_SECTION = re.compile(r"kaynak[çc]a|kaynaklar\b|references|bibliyograf|bibliography|içindekiler|"
+                          r"contents|teşekkür|acknowledg|özgeçmiş|dizin\b|index\b|ekler\b|appendix",
+                          re.IGNORECASE)
+_PAGE_TAG = re.compile(r"\[s\.\s*\d+(?:\s*[-–]\s*\d+)?\]\s*")
+_WS = re.compile(r"[ \t\r\f\v]+")
+
+
+def normalize_length(length: str | None) -> str:
+    return _LENGTH_ALIASES.get((length or "").strip().lower(), DEFAULT_LECTURE_LENGTH)
+
+
+def lecture_cost(length: str | None) -> int:
+    """Metin üretimi ⚡ sayısı (ses ayrı). derin: plan + iki yazım adımı = 3."""
+    return LECTURE_LENGTHS[normalize_length(length)]["cost"]
+
+
+def lecture_options() -> list[dict]:
+    return [{"id": k, "label": v["label"], "minutes": v["minutes"], "words": v["words"], "cost": v["cost"]}
+            for k, v in LECTURE_LENGTHS.items()]
+
+
+def _clip(text: str, limit: int) -> str:
+    text = (text or "").strip()
+    if limit <= 0:
+        return ""
+    if len(text) <= limit:
+        return text
+    cut = text[:max(0, limit - 1)]
+    sp = cut.rfind(" ")
+    if sp > limit * 0.6:
+        cut = cut[:sp]
+    return cut.rstrip(" ,;:") + "…"
+
+
+def _clean_chunk(text: str) -> str:
+    text = _PAGE_TAG.sub("", text or "")
+    text = _WS.sub(" ", text)
+    return re.sub(r"\n\s*\n+", "\n", text).strip()
+
+
+def _pos_label(idx: int, total: int) -> str:
+    if total <= 1:
+        return "baş"
+    r = idx / max(1, total - 1)
+    return "baş" if r < 0.34 else ("orta" if r < 0.67 else "son")
+
+
+def _source_header(src: dict, limit: int) -> str:
+    """Kaynak başlığı + L0 + L1 + hedefler + bölüm başlıkları + kavramlar (en fazla `limit` karakter)."""
+    lines = [f"=== KAYNAK {src.get('k', '?')}: {src.get('title') or 'Adsız kaynak'} ==="]
+    if src.get("l0"):
+        lines.append("Ana fikir: " + _clip(str(src["l0"]), 400))
+    if src.get("l1"):
+        lines.append("Özet: " + _clip(str(src["l1"]), max(300, int(limit * 0.45))))
+    goals = [str(g).strip() for g in (src.get("goals") or []) if str(g).strip()][:5]
+    if goals:
+        lines.append("Öğrenme hedefleri: " + _clip(" ; ".join(goals), max(200, int(limit * 0.18))))
+    outline = [str(o).strip() for o in (src.get("outline") or []) if str(o).strip()]
+    if outline:
+        lines.append("Bölüm başlıkları: " + _clip(" · ".join(outline[:14]), max(150, int(limit * 0.12))))
+    concepts = [str(c).strip() for c in (src.get("concepts") or []) if str(c).strip()][:10]
+    if concepts:
+        lines.append("Anahtar kavramlar: " + _clip(", ".join(concepts), 300))
+    return _clip("\n".join(lines), limit) if len("\n".join(lines)) > limit else "\n".join(lines)
+
+
+def _source_need(src: dict) -> int:
+    """Kaynağın sınırsız bütçede kullanacağı yaklaşık karakter (su doldurma dağıtımı için)."""
+    n = len(src.get("title") or "") + len(src.get("l0") or "") + len(src.get("l1") or "") + 120
+    n += sum(len(str(g)) for g in (src.get("goals") or [])) + sum(len(str(o)) for o in (src.get("outline") or []))
+    n += sum(len(t or "") + len(h or "") for h, t in (src.get("note_sections") or []))
+    n += sum(len(c.get("text") or "") + 30 for c in (src.get("chunks") or []))
+    return n
+
+
+def allocate_budget(sources: list[dict], budget: int = LECTURE_CONTEXT_CHARS,
+                    floor: int = LECTURE_MIN_SOURCE_CHARS) -> list[int]:
+    """Kaynak başına bütçe: eşit pay; payından az malzemesi olanın artanı diğerlerine dağıtılır
+    (su doldurma). Böylece tek kaynağa yığılma olmaz, kısa kaynak boşa yer tutmaz."""
+    n = len(sources)
+    if not n:
+        return []
+    needs = [max(1, _source_need(s)) for s in sources]
+    alloc = [0] * n
+    open_ = set(range(n))
+    remaining = max(budget, floor * n)
+    while open_:
+        share = remaining // len(open_)
+        small = [i for i in open_ if needs[i] <= share]
+        if not small:
+            for i in open_:
+                alloc[i] = share
+            break
+        for i in small:
+            alloc[i] = needs[i]
+            remaining -= needs[i]
+            open_.discard(i)
+    return alloc
+
+
+def _pick_even(items: list, k: int) -> list:
+    """Baş, orta ve son dahil eşit aralıklı k öğe (sıra korunur)."""
+    if k >= len(items):
+        return list(items)
+    if k <= 1:
+        return [items[0]]
+    idx = sorted({round(j * (len(items) - 1) / (k - 1)) for j in range(k)})
+    return [items[i] for i in idx]
+
+
+def build_source_block(src: dict, limit: int) -> str:
+    """Bir kaynağın bağlam bloğu (en fazla ~limit karakter):
+    başlık/L0/L1/hedefler/bölümler → (varsa) L2 ders notundan bölüm özetleri → baş-orta-son temsilî parçalar."""
+    header = _source_header(src, max(600, int(limit * 0.45)))
+    parts = [header]
+    room = limit - len(header)
+    notes = [(str(h or "").strip(), _clean_chunk(str(t or ""))) for h, t in (src.get("note_sections") or [])]
+    notes = [(h, t) for h, t in notes if t and not _BIB_SECTION.search(h)]
+    if notes and room > 400:
+        note_budget = int(room * (0.6 if src.get("chunks") else 1.0))
+        picked = _pick_even(notes, max(1, min(len(notes), note_budget // 350)))
+        per = max(200, note_budget // len(picked) - 10)
+        lines = ["Ders notundan bölüm özetleri:"]
+        for h, t in picked:
+            lines.append(f"- {h}: {_clip(t, per)}" if h else f"- {_clip(t, per)}")
+        block = "\n".join(lines)
+        parts.append(block)
+        room -= len(block)
+    chunks = [c for c in (src.get("chunks") or [])
+              if (c.get("text") or "").strip() and not _BIB_SECTION.search(c.get("section") or "")]
+    if chunks and room > 300:
+        total = int(src.get("total_chunks") or 0) or (max(int(c.get("i") or 0) for c in chunks) + 1)
+        if sum(len(c["text"]) + 40 for c in chunks) <= room:
+            k = len(chunks)                       # hepsi sigiyor (kisa kaynak)
+        else:
+            k = max(1, min(len(chunks), room // 800))
+        picked = _pick_even(chunks, k)
+        per = max(220, room // len(picked) - 40)
+        lines = ["Metinden temsilî bölümler (baş, orta, son):"]
+        for c in picked:
+            sec = (c.get("section") or "").strip()
+            tag = f"[{_pos_label(int(c.get('i') or 0), total)}{' · ' + _clip(sec, 60) if sec else ''}]"
+            lines.append(f"{tag} {_clip(_clean_chunk(c['text']), per)}")
+        parts.append("\n".join(lines))
+    return "\n".join(parts)
+
+
+def build_lecture_context(sources: list[dict], budget: int = LECTURE_CONTEXT_CHARS) -> tuple[str, list[dict]]:
+    """Defterdeki HER hazır kaynaktan dengeli bağlam (toplam ~budget karakter).
+
+    sources: [{k, title, l0, l1, goals[], outline[], concepts[], note_sections[(başlık, metin)],
+               chunks[{i, section, text}] (baş-orta-son ön örnekli, sıralı), total_chunks}]
+    Dönüş: (bağlam, dağılım [{k, title, budget, chars}]) — dağılım test/log içindir.
     """
+    alloc = allocate_budget(sources, budget)
+    blocks, report = [], []
+    for src, lim in zip(sources, alloc):
+        b = build_source_block(src, lim)
+        blocks.append(b)
+        report.append({"k": src.get("k"), "title": src.get("title"), "budget": lim, "chars": len(b)})
+    return "\n\n".join(blocks), report
+
+
+def _structure_rules(length: str, dialog: bool, n_sources: int) -> str:
+    spec = LECTURE_LENGTHS[normalize_length(length)]
+    a, b = spec["chapters"]
+    short = normalize_length(length) == "kisa"
+    bridge = ("`## Köprüler ve kapanış` (kısa sürümde birleşik): önce kaynaklar arası bağ ya da çelişki, "
+              "sonra kapanış." if short else
+              "`## Kaynaklar arasında köprüler`: kaynaklar nerede birbirini destekliyor, nerede çelişiyor, "
+              "hangisi hangi soruya farklı cevap veriyor. Somut ol, iki kaynağı adıyla karşılaştır.")
+    if n_sources <= 1:
+        bridge = ("`## Köprüler ve kapanış`: kaynağın kendi içindeki gerilimler, sınırları ve açık sorular; sonra kapanış."
+                  if short else
+                  "`## Farklı açılar`: kaynağın kendi içindeki gerilimler, varsayımları, sınırları ve açık sorular.")
+    closing = ("`## Kapanış`: konuşarak üç maddelik özet (\"Birincisi…\", \"İkincisi…\", \"Üçüncüsü…\") ve "
+               "dinleyiciye iki düşündürücü soru; soruların cevabını verme, düşünmeye bırak.")
     if dialog:
-        system = (
-            "Sen bir podcast senaristisin. İki kişi konuyu sohbet ederek anlatır: "
-            "Ayşe (sakin, sıcak bir öğretmen; anlatır ve örnek verir) ve "
-            "Kerem (meraklı bir öğrenci; kısa sorular sorar, anladığını kendi cümleleriyle "
-            "tekrar eder, bazen şaşırır). BİÇİM KESİN: her replik ayrı satırda, satır 'Ayşe: ' "
-            "ya da 'Kerem: ' ile başlar; başka konuşmacı, sahne yönergesi, başlık yok. "
-            "Replikler kısa (1–3 cümle), sıralı ve doğal; Kerem'in soruları dinleyicinin "
-            "aklına gelecek sorular olsun. Kerem giriş yapar ve konuyu sorar, Ayşe anlatır. "
-            "Ayşe her yeni alt konudan önce 'Şimdi …' diye başlasın; Kerem her 3–4 replikte "
-            "anlaşılanı bir cümleyle tekrar etsin; sonda Kerem öğrendiklerini iki cümleyle toparlar. "
-            "Yaklaşık 900–1200 kelime.\n\n" + _SPOKEN_RULES
-        )
-        user = f"Konu: {title}\n\nAşağıdaki kaynaklardan yararlanarak sohbeti yaz:\n\n{context[:14000]}"
+        closing += " Özeti Ayşe yapar; düşündürücü sorulardan birini Kerem sorabilir."
+    content = (f"İçerik bölümleri ({a}–{b} adet): her biri `## Bölüm adı` satırıyla başlar ve bir kaynağa ya da "
+               "bir temaya ayrılır. Bölümün ilk cümlesi kısa bir geçiş olsun (\"Şimdi ikinci makaleye geçelim; "
+               "burada yazar…\"). Kaynağı adıyla ya da sırasıyla doğal biçimde an. Her bölümde: ana fikir → "
+               "neden ya da nasıl işlediği → somut bir örnek → bir cümlelik ara özet.")
+    if n_sources > b:
+        content += " Kaynak sayısı bölüm sayısından fazla: yakın kaynakları aynı tema bölümünde birlikte anlat, hiçbirini atlama."
+    lines = [
+        "YAPI (sırayla; her bölüm `## ` ile başlayan ayrı bir satırla işaretlenir):",
+        "1) `## Açılış`: merak uyandıran bir kanca, iki üç cümle (çarpıcı bir soru, küçük bir olay ya da "
+        "şaşırtıcı bir gözlem; \"Bu bölümde…\" diye başlama). Ardından yol haritası: \"Bugün şu … konuya "
+        "bakacağız\" deyip içerik bölümlerini adlarıyla say.",
+        "2) " + content,
+        "3) " + (bridge if not short else bridge),
+    ]
+    if not short:
+        lines.append("4) " + closing)
     else:
-        system = (
-            "Sen bir konuyu sesli anlatan öğretmensin. Sadece düz, akıcı cümleler. "
-            "Dinleyiciyi 'sen' diye kabul et. Önce konuya kısa bir giriş yap, sonra ana "
-            "fikirleri birbirine bağlayarak anlat, aralarda 'şimdi şunu düşün' gibi küçük "
-            "duraklamalar koy, sonunda kısa bir toparlama yap. Kaynakça, başlık sayfası, "
-            "içindekiler ve yazar bilgisi gibi kısımları anlatma; konunun kendisini anlat. "
-            "Paragraflar arasında boş satır bırak. Yaklaşık 900–1200 kelime.\n\n" + _SPOKEN_RULES
-        )
-        user = f"Konu: {title}\n\nAşağıdaki kaynaklardan yararlanarak dersi anlat:\n\n{context[:14000]}"
+        lines[-1] += " Kapanış kısmı: " + closing.split(":", 1)[1].strip()
+    lines.append("BÖLÜM İŞARETİ: satır yalnız `## ` ve iki ila altı kelimelik Türkçe başlıktan oluşur; seslendirilmez. "
+                 "Bu yüzden işaretten sonraki ilk cümle konuyu kendi başına tanıtmalı. `#` işaretini başka hiçbir "
+                 "yerde kullanma; başka başlık, kalın yazı ya da madde işareti yok.")
+    lines.append("KAPSAM: bağlamdaki HER kaynağa yer ver; tek kaynağa yığılma. Süreyi kaynaklara bağlamdaki "
+                 "malzemeleri oranında dağıt. Yazar, kurum, dergi, yıl, sayfa ve kaynakça gibi üst-veriyi anlatma; "
+                 "konunun kendisini anlat. Dinleyici lisans mezunu ve ileri düzey: tanımı geçip mekanizmaya, "
+                 "nedenlere ve bağlantılara odaklan; bağlamda olmayan bilgiyi uydurma.")
+    lines.append(f"UZUNLUK: yaklaşık {spec['words']} kelime (≈ {spec['minutes']} dakika dinleme).")
+    return "\n".join(lines)
+
+
+_PODCAST_ROLE = (
+    "Sen ödüllü bir Türkçe eğitim podcast'inin yazarısın. Dinleyici lisans mezunu, ileri düzeyde öğrenen bir "
+    "yetişkin; telefonundan, yürürken ya da yolda dinliyor. Yüzeysel giriş bilgisi değil, kavrayış ve bağlantı istiyor."
+)
+
+_DIALOG_CAST = (
+    "İKİ KİŞİLİK SOHBET. Ayşe: anlatıcı öğretmen; sıcak, net, konuya hâkim; benzetme ve somut örnekle anlatır, "
+    "Kerem'in itirazını ciddiye alır. Kerem: meraklı ve zeki bir öğrenci; dinleyicinin aklındaki soruyu sorar, "
+    "kendi gündelik örneğini getirir (\"Bu bana şunu hatırlattı…\"), bazen itiraz eder ya da yanlış bir tahmin "
+    "yapar ve Ayşe onu nazikçe düzeltir, iki fikri karşılaştırır, kendi cümleleriyle özetleyip sınar. "
+    "Kerem ASLA yalnızca \"evet\", \"anladım\", \"ilginç\" diye karşılık vermez; her repliği içerik taşır.\n"
+    "BİÇİM KESİN: her replik ayrı satırda ve satır 'Ayşe: ' ya da 'Kerem: ' ile başlar. Bunların dışında yalnız "
+    "`## ` bölüm işareti satırları olabilir. Sahne yönergesi, parantez içi duygu notu, başka konuşmacı yok.\n"
+    "RİTİM: replikler kısa-orta (bir ila dört cümle; Ayşe'nin anlatım repliği en fazla beş cümle). Arada küçük "
+    "bir espri ya da şaşkınlık olabilir (\"Dur bir saniye…\", \"Hiç böyle düşünmemiştim\") ama abartma. "
+    "Aynı kalıbı tekrarlama: \"Harika soru\", \"Kesinlikle\", \"Aynen öyle\", \"Çok güzel\" gibi onaylar bütün "
+    "metinde en fazla birer kez; replikleri farklı sözcüklerle başlat. Açılışta Kerem değil Ayşe kancayı atar, "
+    "Kerem hemen bir soruyla ya da kendi tahminiyle girer."
+)
+
+_SOLO_CAST = (
+    "TEK ANLATICI. Sakin, akıcı bir radyo programı sunucusu gibi tek kişi anlatır; dinleyiciye \"sen\" der, "
+    "ara ara onun aklına gelecek soruyu kendisi sorar ve cevaplar (\"Peki neden?\"). Paragraflar arasında boş satır bırak."
+)
+
+
+def _sources_line(sources: list[dict] | None) -> str:
+    if not sources:
+        return ""
+    names = "; ".join(f"{i + 1}) {s.get('title') or 'Adsız'}" for i, s in enumerate(sources))
+    return f"Kaynaklar ({len(sources)}): {names}\n"
+
+
+def lecture_prompt(context: str, title: str, dialog: bool = False, length: str | None = None,
+                   sources: list[dict] | None = None) -> list[dict]:
+    """Sesli özet (podcast) istemi — tek adım (kısa / standart; derinde plan başarısızsa yedek).
+
+    Çıktı: `## Bölüm` işaretli metin. Sohbette satırlar 'Ayşe: …' / 'Kerem: …'.
+    Bölüm satırları seslendirilmez (tts_jobs ayıklar) ama parça sınırları onlara hizalanır."""
+    length = normalize_length(length)
+    n_src = len(sources) if sources else max(1, context.count("=== KAYNAK"))
+    system = "\n\n".join([
+        _PODCAST_ROLE,
+        _DIALOG_CAST if dialog else _SOLO_CAST,
+        _structure_rules(length, dialog, n_src),
+        _SPOKEN_RULES,
+        "İSTİSNA: bu metinde yalnızca `## ` ile başlayan bölüm işareti satırlarına izin var; (7). kural onlar için geçerli değil.",
+    ])
+    what = "sohbeti" if dialog else "bölümü"
+    user = (f"Defter: {title}\n{_sources_line(sources)}\n"
+            f"Aşağıdaki bağlamdan yararlanarak podcast {what} yaz. Bağlam kaynak kaynak verilmiştir.\n\n"
+            f"BAĞLAM:\n{context[:LECTURE_CONTEXT_CHARS + 8000]}")
     return [{"role": "system", "content": system}, {"role": "user", "content": user}]
 
 
-def lecture_script(context: str, title: str, dialog: bool = False) -> str:
-    """Koleksiyon icerigini sesli dinlenebilir akici bir derse (ya da iki kisilik sohbete) cevirir (sicaklik 0.8)."""
+LECTURE_PLAN_SCHEMA = {
+    "name": "lecture_plan",
+    "strict": True,
+    "schema": {
+        "type": "object",
+        "additionalProperties": False,
+        "properties": {
+            "hook": {"type": "string"},
+            "chapters": {
+                "type": "array",
+                "items": {
+                    "type": "object", "additionalProperties": False,
+                    "properties": {
+                        "title": {"type": "string"},
+                        "sources": {"type": "array", "items": {"type": "integer"}},
+                        "points": {"type": "array", "items": {"type": "string"}},
+                    },
+                    "required": ["title", "sources", "points"],
+                },
+            },
+            "bridges": {"type": "array", "items": {"type": "string"}},
+            "summary": {"type": "array", "items": {"type": "string"}},
+            "questions": {"type": "array", "items": {"type": "string"}},
+        },
+        "required": ["hook", "chapters", "bridges", "summary", "questions"],
+    },
+}
+
+
+def lecture_plan_prompt(context: str, title: str, dialog: bool, sources: list[dict] | None) -> list[dict]:
+    spec = LECTURE_LENGTHS["derin"]
+    a, b = spec["chapters"]
+    system = (
+        _PODCAST_ROLE + "\n\nGÖREV: yaklaşık " + str(spec["minutes"]) + " dakikalık derin bir bölümün PLANINI çıkar "
+        "(metni değil). Alanlar: hook = açılış kancası fikri (bir iki cümle); chapters = " + f"{a}–{b}" + " içerik "
+        "bölümü, sırayla; title iki ila altı kelimelik Türkçe başlık; sources = bölümün dayandığı KAYNAK numaraları; "
+        "points = bölümde anlatılacak üç ila beş somut nokta (mekanizma, neden, örnek; bağlamdan). bridges = kaynaklar "
+        "arası iki ila dört bağlantı ya da çelişki; summary = üç maddelik kapanış özeti; questions = dinleyiciye iki "
+        "düşündürücü soru. Her kaynak en az bir bölümde yer almalı; tek kaynağa yığılma. Yazar, yıl, sayfa gibi "
+        "üst-veriyi plana koyma. Yalnızca Türkçe."
+    )
+    user = f"Defter: {title}\n{_sources_line(sources)}\nBAĞLAM:\n{context[:LECTURE_CONTEXT_CHARS + 8000]}"
+    return [{"role": "system", "content": system}, {"role": "user", "content": user}]
+
+
+def lecture_plan(context: str, title: str, dialog: bool = False, sources: list[dict] | None = None) -> dict:
+    """Derin sürüm adım 1 (⚡1): bölüm planı (JSON)."""
     llm = get_llm()
-    return llm.complete(lecture_prompt(context, title, dialog), model=settings.active_llm_model,
-                        **warm_kwargs(llm.complete))
+    raw = _structured(llm, lecture_plan_prompt(context, title, dialog, sources), LECTURE_PLAN_SCHEMA,
+                      temperature=0.4, max_output_tokens=4096)
+    plan = json.loads(raw)
+    chs = [c for c in (plan.get("chapters") or []) if isinstance(c, dict) and str(c.get("title") or "").strip()]
+    if len(chs) < 2:
+        raise ValueError("plan too short")
+    plan["chapters"] = chs[:LECTURE_LENGTHS["derin"]["chapters"][1] + 1]
+    return plan
+
+
+def _plan_text(plan: dict, chapters: list[dict]) -> str:
+    out = []
+    for c in chapters:
+        src = ", ".join(str(s) for s in (c.get("sources") or []))
+        pts = " | ".join(str(p) for p in (c.get("points") or []))
+        out.append(f"- {c.get('title')} (kaynak {src or '?'}): {pts}")
+    return "\n".join(out)
+
+
+def lecture_part_prompt(context: str, title: str, dialog: bool, plan: dict, part: int,
+                        sources: list[dict] | None = None, prev_tail: str = "") -> list[dict]:
+    """Derin sürüm adım 2/3 (⚡1 her biri): planın yarısını yazar.
+    part=1: açılış + ilk içerik bölümleri; part=2: kalan bölümler + köprüler + kapanış."""
+    chs = plan.get("chapters") or []
+    half = (len(chs) + 1) // 2
+    mine = chs[:half] if part == 1 else chs[half:]
+    words = LECTURE_LENGTHS["derin"]["words"] // 2
+    n_src = len(sources) if sources else max(1, context.count("=== KAYNAK"))
+    all_titles = ", ".join(str(c.get("title")) for c in chs)
+    if part == 1:
+        task = (
+            "BU ADIM: bölümün İLK YARISINI yaz.\n"
+            f"`## Açılış`: kanca ({plan.get('hook') or 'merak uyandıran bir soru ya da olay'}), iki üç cümle; "
+            f"ardından yol haritası: bugün şu konulara bakacağız: {all_titles}.\n"
+            "Sonra şu içerik bölümleri, her biri kendi `## Başlık` satırıyla ve aynı başlıkla:\n"
+            + _plan_text(plan, mine) +
+            "\nKapanış YAZMA; metin bir sonraki bölüme geçecek gibi bitsin."
+        )
+    else:
+        bridges = " | ".join(str(b) for b in (plan.get("bridges") or []))
+        summary = " | ".join(str(s) for s in (plan.get("summary") or [])[:3])
+        qs = " | ".join(str(q) for q in (plan.get("questions") or [])[:2])
+        bridge_title = "Kaynaklar arasında köprüler" if n_src > 1 else "Farklı açılar"
+        task = (
+            "BU ADIM: bölümün İKİNCİ YARISINI yaz; önceki kısım aşağıda biten yerden devam ediyor. "
+            "Selamlama, yeniden giriş ya da önceki bölümlerin tekrarı yok.\n"
+            "Şu içerik bölümleri, her biri kendi `## Başlık` satırıyla:\n" + _plan_text(plan, mine) +
+            f"\nSonra `## {bridge_title}`: {bridges or 'kaynaklar arası bağlar ve çelişkiler'}.\n"
+            f"Sonra `## Kapanış`: konuşarak üç maddelik özet ({summary or 'üç ana fikir'}) ve iki düşündürücü soru "
+            f"({qs or 'dinleyiciyi düşündüren iki soru'}); soruların cevabını verme."
+        )
+        if prev_tail:
+            task += "\n\nÖNCEKİ KISMIN SONU (yalnız bağlam; tekrar yazma):\n" + prev_tail[-1500:]
+    system = "\n\n".join([
+        _PODCAST_ROLE,
+        _DIALOG_CAST if dialog else _SOLO_CAST,
+        "BÖLÜM İŞARETİ: satır yalnız `## ` ve başlıktan oluşur; seslendirilmez. `#` başka yerde yok. "
+        "KAPSAM: her bölümde planda belirtilen kaynak(lar)a dayan; kaynağı adıyla ya da sırasıyla doğal biçimde an. "
+        "Bağlamda olmayan bilgiyi uydurma; üst-veri (yazar, yıl, sayfa) anlatma.",
+        f"UZUNLUK: bu adım için yaklaşık {words} kelime.",
+        _SPOKEN_RULES,
+        "İSTİSNA: yalnızca `## ` ile başlayan bölüm işareti satırlarına izin var; (7). kural onlar için geçerli değil.",
+        task,
+    ])
+    user = f"Defter: {title}\n{_sources_line(sources)}\nBAĞLAM:\n{context[:LECTURE_CONTEXT_CHARS + 8000]}"
+    return [{"role": "system", "content": system}, {"role": "user", "content": user}]
+
+
+_FENCE = re.compile(r"^\s*```[a-zA-Z]*\s*$", re.MULTILINE)
+_BOLD_SPEAKER = re.compile(r"^\s*[*_]{1,2}\s*(Ayşe|Ayse|Kerem)\s*[*_]{0,2}\s*:\s*[*_]{0,2}\s*", re.MULTILINE | re.IGNORECASE)
+_HEADING_ANY = re.compile(r"^[ \t]*(?:#{1,6}[ \t]*|\*\*[ \t]*)(?P<t>[^#*\n]{1,90}?)[ \t]*(?:\*\*)?[ \t#]*$", re.MULTILINE)
+
+
+def tidy_script(script: str, dialog: bool = False) -> str:
+    """Model çıktısını düzene sokar (kota 0): kod çiti, kalın konuşmacı etiketi, `###`/`**Başlık**` → `## Başlık`;
+    tekli anlatımda bölüm satırlarının çevresinde boş satır. Bölüm satırları korunur (seslendirmede ayıklanır)."""
+    s = (script or "").replace("\r\n", "\n").replace("\r", "\n")
+    s = _FENCE.sub("", s)
+    s = _BOLD_SPEAKER.sub(lambda m: ("Kerem" if m.group(1).lower().startswith("k") else "Ayşe") + ": ", s)
+
+    def _h(m):
+        t = m.group("t").strip().rstrip(":").strip()
+        if not t or re.match(r"^(Ayşe|Ayse|Kerem)\s*:", t, re.IGNORECASE):
+            return m.group(0)
+        return "## " + t
+
+    lines = []
+    for ln in s.split("\n"):
+        st = ln.strip()
+        if st.startswith("#") or (st.startswith("**") and st.endswith("**") and len(st) < 90):
+            ln = _HEADING_ANY.sub(_h, ln)
+        lines.append(ln.rstrip())
+    s = "\n".join(lines)
+    if not dialog:
+        s = re.sub(r"\n*(^## [^\n]+)\n*", r"\n\n\1\n\n", s, flags=re.MULTILINE)
+    s = re.sub(r"\n{3,}", "\n\n", s)
+    return s.strip()
+
+
+def lecture_script(context: str, title: str, dialog: bool = False, length: str | None = None,
+                   sources: list[dict] | None = None) -> str:
+    """Defter içeriğini podcast metnine çevirir (sıcaklık 0.8). Kısa/standart: ⚡1; derin: plan + iki yazım = ⚡3
+    (plan başarısızsa tek adıma düşer). Dönüş `## Bölüm` işaretli metin."""
+    llm = get_llm()
+    length = normalize_length(length)
+    if length == "derin":
+        try:
+            plan = lecture_plan(context, title, dialog, sources)
+            p1 = llm.complete(lecture_part_prompt(context, title, dialog, plan, 1, sources),
+                              model=settings.active_llm_model, **warm_kwargs(llm.complete))
+            p2 = llm.complete(lecture_part_prompt(context, title, dialog, plan, 2, sources, prev_tail=p1),
+                              model=settings.active_llm_model, **warm_kwargs(llm.complete))
+            return tidy_script(p1.strip() + "\n\n" + p2.strip(), dialog)
+        except (ValueError, json.JSONDecodeError):
+            pass
+    return tidy_script(llm.complete(lecture_prompt(context, title, dialog, length, sources),
+                                    model=settings.active_llm_model, **warm_kwargs(llm.complete)), dialog)
 
 
 def spoken_score(text: str) -> dict:

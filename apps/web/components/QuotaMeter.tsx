@@ -130,15 +130,15 @@ export default function QuotaMeter({ compact }: { compact?: boolean }) {
   const resetAt = resetHM ? atTime(resetHM) : "";
   const wait = retryMin ? `~${retryMin} dk` : state === "doldu" && resetAt ? `saat ${resetAt}` : "birkaç dk";
   /** Üst çubuk / kenar menü metni: normalde yok, yoğunken kısa uyarı. */
-  const short = !u ? "" : state === "doldu" ? `Gemini dolu, ${wait}` : state === "yogun" ? `Gemini yoğun, ${wait}` : "";
-  const spoken = !u ? "Gemini durumu" : busy ? short : "Gemini çalışıyor";
+  const short = !u ? "" : state === "doldu" ? `Yapay zekâ dolu, ${wait}` : state === "yogun" ? `Yapay zekâ yoğun, ${wait}` : "";
+  const spoken = !u ? "Yapay zekâ durumu" : busy ? short : "Yapay zekâ çalışıyor";
   const total = u ? Object.values(u.kinds || {}).reduce((a, k) => a + (k?.requests || 0), 0) : 0;
   const todayUsed = me?.used ?? total;
   const embed = u && !Array.isArray(u.embed) ? (u.embed as { model: string; status: string }) : null;
 
   const band = !u ? null
-    : state === "doldu" ? { c: "bg-danger-bg text-danger", t: `Gemini bugün doldu; ${retryMin ? `yaklaşık ${retryMin} dk sonra` : `saat ${resetAt} sonrası`} tekrar dene. Kayıtlı cevaplar, arama ve okuma çalışmaya devam ediyor.` }
-    : state === "yogun" ? { c: "bg-warning-bg text-warning", t: `Gemini şu an yoğun; cevaplar gecikebilir. ${retryMin ? `Yaklaşık ${retryMin} dk sonra` : "Birkaç dakika sonra"} tekrar dene.` }
+    : state === "doldu" ? { c: "bg-danger-bg text-danger", t: `Yapay zekâ bugünlük doldu; ${retryMin ? `yaklaşık ${retryMin} dk sonra` : `saat ${resetAt} sonrası`} tekrar dene. Kayıtlı cevaplar, arama ve okuma çalışmaya devam ediyor.` }
+    : state === "yogun" ? { c: "bg-warning-bg text-warning", t: `Yapay zekâ şu an yoğun; cevaplar gecikebilir. ${retryMin ? `Yaklaşık ${retryMin} dk sonra` : "Birkaç dakika sonra"} tekrar dene.` }
     : { c: "bg-success-bg text-success", t: "Gemini çalışıyor." };
 
   const StatusPill = ({ status }: { status: string }) => {
@@ -175,8 +175,8 @@ export default function QuotaMeter({ compact }: { compact?: boolean }) {
                 <span className="text-text-secondary">{todayUsed} çağrı{resetAt ? ` · sayaç saat ${resetAt} sıfırlanır` : ""}</span>
               </div>
               <p className="mt-2 text-xs leading-relaxed text-text-secondary">
-                <Badge tone="accent" size="xs" title="1 Gemini çağrısı" aria-label="1 Gemini çağrısı">⚡1</Badge>{" "}
-                rozetli düğmeler 1 Gemini çağrısı yapar. Kayıtlı cevaplar, arama ve okuma Gemini&apos;ye gitmez.
+                <Badge tone="accent" size="xs" title="1 kullanım" aria-label="1 kullanım">⚡1</Badge>{" "}
+                rozetli düğmeler 1 kullanım harcar. Kayıtlı cevaplar, arama ve okuma kullanım harcamaz.
               </p>
             </div>
 

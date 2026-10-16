@@ -619,7 +619,7 @@ function CollectionPage({ id }: { id: string }) {
         {/* Daha fazla ▾ → SESLİ ÖZET (Ajan V): bir kez acildiktan sonra bagli kalir (ses baska sekmede de calmaya devam eder) */}
         {visited.has("sesli") && readyN > 0 && (
           <div hidden={tab !== "sesli"}>
-            <LectureTab id={id} title={col.title} readyN={readyN} confirm={confirm} />
+            <LectureTab id={id} title={col.title} readyN={readyN} confirm={confirm} coverColor={col.cover_color} coverIcon={col.cover_icon} />
           </div>
         )}
       </div>
