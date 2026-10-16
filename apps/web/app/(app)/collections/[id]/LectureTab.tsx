@@ -58,7 +58,7 @@ function isDialogText(t: string): boolean {
   return lines.length >= 4 && hits >= 4 && hits * 2 >= lines.length;
 }
 
-/** Akan metnin başından ön parça seç: KISA tutulur (~450–700 karakter) ki ilk ses birkaç saniyede gelsin.
+/** Akan metnin başından ön parça seç: KISA tutulur (~600–900 karakter) ki ilk ses birkaç saniyede gelsin.
  *  En az 1 paragraf (sohbette 2 replik); yarım kalmış son parça asla alınmaz. */
 function pickHead(text: string, dialog: boolean): string | null {
   const parts = dialog ? text.split("\n").filter((l) => l.trim()) : text.split(/\n\s*\n/).filter((p) => p.trim());
@@ -67,9 +67,9 @@ function pickHead(text: string, dialog: boolean): string | null {
   let head = "", cnt = 0;
   for (let i = 0; i < parts.length - 1; i++) {
     const next = (head ? head + "\n" + (dialog ? "" : "\n") : "") + parts[i].trim();
-    if (next.length > 700 && cnt >= minParts) break;
+    if (next.length > 900 && cnt >= minParts) break;
     head = next; cnt++;
-    if (head.length >= 450 && cnt >= minParts) break;
+    if (head.length >= 600 && cnt >= minParts) break;
   }
   return head.length >= 300 && cnt >= minParts ? head : null;
 }

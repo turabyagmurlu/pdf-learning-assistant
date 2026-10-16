@@ -220,7 +220,7 @@ def aligned_chunks(txt: str, starts: list[dict], dialog: bool, consumed: int = 0
 
 
 # Hizli baslangic: ilk parcalar kucuk (birkac saniyede uretilir, ses hemen baslar), sonrakiler buyur.
-LEAD_SIZES = [450, 800, 1400, 2000]   # parcalar ~2 katina buyur: her parca, oncekisi calarken hazir olur
+LEAD_SIZES = [700]   # ucretsiz katman gunde ~10 ses istegi: yalniz ilk parca kucuk, gerisi buyuk (az istek)
 
 
 def _lead_pieces(seg: str, dialog: bool, sizes: list[int]) -> tuple[list[str], str]:
@@ -592,7 +592,7 @@ async def create_job(user_id: str, is_owner: bool, text: str, voice: str | None,
             # 1. parca tam olarak on parca: onbellek anahtari ayni -> on-uretilmis ses aninda kullanilir
             first = [head] if not dialog else split_dialog_for_tts(head)
             return aligned_chunks(txt, starts, dialog, consumed=len(txt) - len(rest), first=first,
-                                  lead=lead[1:] if lead else None)
+                                  lead=None)
         return aligned_chunks(txt, starts, dialog, lead=lead)
 
     # Hizli baslangic parcalamasi; ama eski parcalamayla tamami onbellekteyse onu kullan (kota yanmasin)
