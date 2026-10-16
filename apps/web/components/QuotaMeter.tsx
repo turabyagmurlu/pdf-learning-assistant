@@ -139,7 +139,7 @@ export default function QuotaMeter({ compact }: { compact?: boolean }) {
   const band = !u ? null
     : state === "doldu" ? { c: "bg-danger-bg text-danger", t: `Yapay zekâ bugünlük doldu; ${retryMin ? `yaklaşık ${retryMin} dk sonra` : `saat ${resetAt} sonrası`} tekrar dene. Kayıtlı cevaplar, arama ve okuma çalışmaya devam ediyor.` }
     : state === "yogun" ? { c: "bg-warning-bg text-warning", t: `Yapay zekâ şu an yoğun; cevaplar gecikebilir. ${retryMin ? `Yaklaşık ${retryMin} dk sonra` : "Birkaç dakika sonra"} tekrar dene.` }
-    : { c: "bg-success-bg text-success", t: "Gemini çalışıyor." };
+    : { c: "bg-success-bg text-success", t: "Yapay zekâ çalışıyor." };
 
   const StatusPill = ({ status }: { status: string }) => {
     const s = ST[status];
@@ -159,12 +159,12 @@ export default function QuotaMeter({ compact }: { compact?: boolean }) {
                 className="flex min-h-[40px] items-center gap-2 rounded-md px-3 py-2 text-left text-text-secondary hover:bg-surface-hover">
           <span className={"h-2.5 w-2.5 shrink-0 rounded-full " + dot} aria-hidden="true" />
           <span className={"min-w-0 flex-1 truncate text-small " + (busy ? "text-text-primary" : "")}>
-            {busy ? short : "Gemini"}
+            {busy ? short : "Yapay zekâ"}
           </span>
         </button>
       )}
 
-      <Modal open={open} onClose={() => setOpen(false)} title="Gemini kullanımı" size="md">
+      <Modal open={open} onClose={() => setOpen(false)} title="Yapay zekâ kullanımı" size="md">
         {!u ? <p className="text-sm text-text-secondary" role="status">Yükleniyor…</p> : (
           <>
             {band && <p className={"rounded-xl px-3 py-2 text-sm " + band.c} role="status">{band.t}</p>}
