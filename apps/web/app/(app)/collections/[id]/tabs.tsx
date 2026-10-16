@@ -8,7 +8,8 @@
  * - Az kaynakta sekmeler gizlenmez: kilitli ama görünür, açıklamalı (dokununca/odaklanınca).
  * - role=tablist/tab + aria-selected, ok tuşlarıyla gezinme.
  */
-import { KeyboardEvent, ReactNode, useEffect, useRef, useState } from "react";
+import { KeyboardEvent, ReactNode, useEffect, useLayoutEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { FileText, MessageSquare, PenLine, BookMarked, Headphones, Lock, Plus, ChevronDown } from "lucide-react";
 import { Cost, costTitle } from "@/components/CostBadge";
 
@@ -78,9 +79,30 @@ function MoreMenu({ tab, onTab, readyN, processing, actions, compact }: {
   const wrap = useRef<HTMLDivElement>(null);
   const btn = useRef<HTMLButtonElement>(null);
   const list = useRef<HTMLDivElement>(null);
+  // Menü yatay kayan sekme şeridinin (overflow) içinde kırpılmasın: body'ye taşınır, düğmeye göre sabit konumlanır.
+  const [pos, setPos] = useState<{ top: number; left: number; maxH: number } | null>(null);
+  useLayoutEffect(() => {
+    if (!open) { setPos(null); return; }
+    const place = () => {
+      const r = btn.current?.getBoundingClientRect();
+      if (!r) return;
+      const vw = window.innerWidth, vh = window.visualViewport?.height ?? window.innerHeight;
+      const w = Math.min(288, vw - 16);
+      const left = Math.max(8, Math.min(compact ? r.right - w : r.left, vw - w - 8));
+      const top = r.bottom + 4;
+      setPos({ top, left, maxH: Math.max(160, vh - top - 12) });
+    };
+    place();
+    window.addEventListener("resize", place);
+    window.addEventListener("scroll", place, true);
+    return () => { window.removeEventListener("resize", place); window.removeEventListener("scroll", place, true); };
+  }, [open, compact]);
   useEffect(() => {
     if (!open) return;
-    const onDown = (e: PointerEvent) => { if (!wrap.current?.contains(e.target as Node)) setOpen(false); };
+    const onDown = (e: PointerEvent) => {
+      const t = e.target as Node;
+      if (!wrap.current?.contains(t) && !list.current?.contains(t)) setOpen(false);
+    };
     const onKey = (e: globalThis.KeyboardEvent) => { if (e.key === "Escape") { e.stopPropagation(); setOpen(false); btn.current?.focus(); } };
     document.addEventListener("pointerdown", onDown);
     document.addEventListener("keydown", onKey, true);
@@ -105,9 +127,10 @@ function MoreMenu({ tab, onTab, readyN, processing, actions, compact }: {
                 on ? "bg-surface font-semibold text-text-primary shadow-soft" : "text-text-secondary hover:text-text-primary")}>
         {on ? tabLabel(tab) : "Daha fazla"} <ChevronDown size={14} aria-hidden className={cx("transition", open && "rotate-180")} />
       </button>
-      {open && (
+      {open && pos && typeof document !== "undefined" && createPortal(
         <div ref={list} role="menu" aria-label="Daha fazla" onKeyDown={onListKey}
-             className={cx("absolute z-40 mt-1 w-[min(18rem,calc(100vw-2rem))] rounded-xl border bg-surface p-1 text-text-primary shadow-xl", compact ? "right-0" : "left-0")}>
+             style={{ position: "fixed", top: pos.top, left: pos.left, width: Math.min(288, window.innerWidth - 16), maxHeight: pos.maxH }}
+             className="z-[90] overflow-y-auto overscroll-contain rounded-xl border bg-surface p-1 text-text-primary shadow-xl">
           {MORE_VIEWS.map(([k, label, Icon]) => {
             const why = lockReason(k, readyN, processing);
             return (
@@ -132,7 +155,8 @@ function MoreMenu({ tab, onTab, readyN, processing, actions, compact }: {
               {a.cost ? <Cost n={a.cost} /> : null}
             </button>
           ))}
-        </div>
+        </div>,
+        document.body,
       )}
     </div>
   );
