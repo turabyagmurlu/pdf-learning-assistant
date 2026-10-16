@@ -58,19 +58,20 @@ function isDialogText(t: string): boolean {
   return lines.length >= 4 && hits >= 4 && hits * 2 >= lines.length;
 }
 
-/** Akan metnin başından ön parça seç: en az 2 paragraf (sohbette 4 replik), 500–2000 karakter, sınırda biter. */
+/** Akan metnin başından ön parça seç: KISA tutulur (~450–700 karakter) ki ilk ses birkaç saniyede gelsin.
+ *  En az 1 paragraf (sohbette 2 replik); yarım kalmış son parça asla alınmaz. */
 function pickHead(text: string, dialog: boolean): string | null {
   const parts = dialog ? text.split("\n").filter((l) => l.trim()) : text.split(/\n\s*\n/).filter((p) => p.trim());
-  const minParts = dialog ? 4 : 2;
+  const minParts = dialog ? 2 : 1;
   if (parts.length <= minParts) return null;
-  let head = "";
+  let head = "", cnt = 0;
   for (let i = 0; i < parts.length - 1; i++) {
     const next = (head ? head + "\n" + (dialog ? "" : "\n") : "") + parts[i].trim();
-    if (next.length > 2000) break;
-    head = next;
+    if (next.length > 700 && cnt >= minParts) break;
+    head = next; cnt++;
+    if (head.length >= 450 && cnt >= minParts) break;
   }
-  const cnt = head ? (dialog ? head.split("\n").length : head.split(/\n\s*\n/).length) : 0;
-  return head.length >= 500 && cnt >= minParts ? head : null;
+  return head.length >= 300 && cnt >= minParts ? head : null;
 }
 
 /** P2: SSE `chapters [{title, char_start}]` → metin oranı (eski sunucunun paragraf işaretleri kullanılmaz). */
