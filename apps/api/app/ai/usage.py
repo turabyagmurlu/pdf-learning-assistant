@@ -98,6 +98,8 @@ def service_state() -> dict:
     sts = [status(m) for m in models]
     if any(s == "aktif" for s in sts):
         return {"state": "aktif", "retry_min": None}
+    if _backup_on():
+        return {"state": "aktif", "retry_min": None, "backup": True}
     now = time.time()
     if all(s in ("gunluk_doldu", "yok") for s in sts):
         state = "doldu"
@@ -108,6 +110,15 @@ def service_state() -> dict:
         until = min(waits) if waits else now + 60
     retry_min = max(1, int((until - now + 59) // 60))
     return {"state": state, "retry_min": retry_min}
+
+
+def _backup_on() -> bool:
+    """ChatGPT yedegi tanimli mi (Gemini dolsa da yapay zeka/ses calismaya devam eder)."""
+    try:
+        from app.ai import openai_fallback
+        return openai_fallback.enabled()
+    except Exception:  # noqa
+        return False
 
 
 def _pool_state(models: list[str]) -> dict:
@@ -135,7 +146,10 @@ def tts_state() -> dict:
     """
     try:
         from app.services.tts_service import _tts_models
-        return _pool_state(_tts_models())
+        st = _pool_state(_tts_models())
+        if st["state"] != "aktif" and _backup_on():
+            return {"state": "aktif", "retry_min": None, "backup": True}
+        return st
     except Exception:  # noqa - bilinmiyorsa aktif varsay
         return {"state": "aktif", "retry_min": None}
 

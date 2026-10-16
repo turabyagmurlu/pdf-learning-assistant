@@ -896,7 +896,23 @@ def synthesize_pcm(text: str, voice: str = DEFAULT_VOICE, style: str = "",
             },
         },
     }
-    return with_tail_silence(gemini_audio(payload, len(text)))
+    try:
+        pcm = gemini_audio(payload, len(text))
+    except TtsQuota as q:
+        if not openai_tts_ok(q):
+            raise
+        from app.ai import openai_fallback as OA
+        pcm = OA.tts_solo(text)
+    return with_tail_silence(pcm)
+
+
+def openai_tts_ok(q: "TtsQuota") -> bool:
+    """Gemini ses kotasi doldu: gunlukse ya da uzun bekleme gerekiyorsa ChatGPT sesine gec."""
+    try:
+        from app.ai import openai_fallback as OA
+        return OA.enabled() and (bool(getattr(q, "daily", False)) or float(getattr(q, "retry_after", 0) or 0) > 20)
+    except Exception:  # noqa
+        return False
 
 
 def synthesize_pcm_retry(text: str, voice: str = DEFAULT_VOICE, style: str = "") -> bytes:

@@ -27,6 +27,13 @@ class Settings(BaseSettings):
     llm_model: str = "gpt-4o-mini"
     llm_model_advanced: str = "gpt-4o"
     openai_embed_model: str = "text-embedding-3-small"
+    # ChatGPT yedegi: OPENAI_API_KEY tanimliysa Gemini dolunca/yanit veremeyince devreye girer.
+    openai_model: str = "gpt-4o-mini"                 # kisa isler, niyet, normal cevaplar
+    openai_model_strong: str = "gpt-4.1-mini"         # ayrintili cevap, podcast metni, calisma notu
+    openai_model_pool: str = "gpt-4.1-mini,gpt-4o-mini"
+    openai_tts_model: str = "gpt-4o-mini-tts"
+    openai_tts_voice: str = "coral"                   # tek anlatici + Ayşe
+    openai_tts_voice_b: str = "ash"                   # Kerem
 
     # Embedding boyutu: gemini text-embedding-004 -> 768, openai small -> 1536
     embedding_dim: int = 768

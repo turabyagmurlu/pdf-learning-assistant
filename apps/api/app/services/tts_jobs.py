@@ -280,7 +280,16 @@ def synthesize_pcm_dialog(text: str, voice_a: str = DEFAULT_VOICE, voice_b: str 
             },
         },
     }
-    return with_tail_silence(T.gemini_audio(payload, len(text)))
+    try:
+        pcm = T.gemini_audio(payload, len(text))
+    except TtsQuota as q:
+        if not T.openai_tts_ok(q):
+            raise
+        from app.ai import openai_fallback as OA
+        lines = [(ln.startswith(SPEAKER_B + ":"), ln.split(":", 1)[1].strip() if ":" in ln else ln)
+                 for ln in _norm_dialog_lines(text)]
+        pcm = OA.tts_dialog(lines)
+    return with_tail_silence(pcm)
 
 
 def _encode(pcm: bytes) -> tuple[bytes, str]:

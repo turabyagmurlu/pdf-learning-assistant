@@ -3,7 +3,8 @@ from typing import AsyncIterator, Sequence
 import httpx
 from app.config import settings
 from app.ai.provider import EmbeddingProvider, LLMProvider
-from app.core.errors import AiUnavailable, AiBusy
+from app.core.errors import AiUnavailable, AiBusy, UsageLimit
+from app.ai import openai_fallback as OA
 from app.ai import usage
 
 BASE = "https://generativelanguage.googleapis.com/v1beta"
@@ -203,13 +204,15 @@ class GeminiLLM(LLMProvider):
             # hepsi dolu/yogun: dakikalik bekleme varsa kisa bekle, gunlukse birak
             if not tried and all(usage.status(m) in ("gunluk_doldu", "yok") for m in pool_models(base_model)):
                 break
+            if OA.enabled():
+                break       # ChatGPT yedegi var: beklemek yerine ona gec
             time.sleep(self._WAITS[min(round_, len(self._WAITS) - 1)] * 2)
         if last_status == 0 and not last_text:
             last_status, last_text = 429, "PerDay"
         raise self._friendly(last_status or 503, last_text)
 
-    async def stream_chat(self, messages, model=None, *, temperature=None, max_output_tokens=None,
-                          kind="metin") -> AsyncIterator[str]:
+    async def _stream_gemini(self, messages, model=None, *, temperature=None, max_output_tokens=None,
+                             kind="metin") -> AsyncIterator[str]:
         import asyncio
         usage.check_user()
         model = model or settings.active_llm_model
@@ -260,10 +263,12 @@ class GeminiLLM(LLMProvider):
                     continue
             if all(usage.status(m) in ("gunluk_doldu", "yok") for m in pool_models(model)):
                 break
+            if OA.enabled():
+                break
             await asyncio.sleep(self._WAITS[min(round_, len(self._WAITS) - 1)] * 2)
         raise self._friendly(last_status or 503, last_text)
 
-    def complete(self, messages, model=None, *, temperature=None, max_output_tokens=None, kind="metin") -> str:
+    def _complete_gemini(self, messages, model=None, *, temperature=None, max_output_tokens=None, kind="metin") -> str:
         model = model or settings.active_llm_model
         system, contents = _to_gemini(messages)
         body = {"contents": contents, "generationConfig": self._gen_config(temperature, max_output_tokens)}
@@ -276,8 +281,8 @@ class GeminiLLM(LLMProvider):
         except Exception as e:  # noqa
             raise AiUnavailable(detail=str(e))
 
-    def structured(self, messages, schema, model=None, *, temperature=None, max_output_tokens=None,
-                   kind="metin") -> str:
+    def _structured_gemini(self, messages, schema, model=None, *, temperature=None, max_output_tokens=None,
+                           kind="metin") -> str:
         """Gemini'de JSON modu: responseMimeType=application/json.
         schema OpenAI formatında geldiği için sadece JSON iste ve prompt'a şema ipucu ekle."""
         model = model or settings.active_llm_model
@@ -296,3 +301,63 @@ class GeminiLLM(LLMProvider):
             raise
         except Exception as e:  # noqa
             raise AiUnavailable(detail=str(e))
+
+
+    # ---- ChatGPT yedegi: Gemini dolunca / yanit veremeyince ayni istek OpenAI'ye gider ----
+    @staticmethod
+    def _strong(model: str | None) -> bool:
+        return bool(model) and model in (settings.gemini_model_strong, settings.active_llm_model_strong)
+
+    @staticmethod
+    def _fallback_ok(e: Exception) -> bool:
+        return OA.enabled() and isinstance(e, AiUnavailable) and not isinstance(e, UsageLimit)
+
+    async def stream_chat(self, messages, model=None, *, temperature=None, max_output_tokens=None,
+                          kind="metin") -> AsyncIterator[str]:
+        yielded = False
+        try:
+            async for t in self._stream_gemini(messages, model, temperature=temperature,
+                                               max_output_tokens=max_output_tokens, kind=kind):
+                yielded = True
+                yield t
+            return
+        except Exception as e:  # noqa
+            if yielded or not self._fallback_ok(e):
+                raise
+            log_fallback("metin-akis", e)
+        async for t in OA.stream(messages, strong=self._strong(model), temperature=temperature,
+                                 max_output_tokens=max_output_tokens, kind=kind):
+            yield t
+
+    def complete(self, messages, model=None, *, temperature=None, max_output_tokens=None, kind="metin") -> str:
+        try:
+            return self._complete_gemini(messages, model, temperature=temperature,
+                                         max_output_tokens=max_output_tokens, kind=kind)
+        except Exception as e:  # noqa
+            if not self._fallback_ok(e):
+                raise
+            log_fallback("metin", e)
+            return OA.complete(messages, strong=self._strong(model), temperature=temperature,
+                               max_output_tokens=max_output_tokens, kind=kind)
+
+    def structured(self, messages, schema, model=None, *, temperature=None, max_output_tokens=None,
+                   kind="metin") -> str:
+        try:
+            return self._structured_gemini(messages, schema, model, temperature=temperature,
+                                           max_output_tokens=max_output_tokens, kind=kind)
+        except Exception as e:  # noqa
+            if not self._fallback_ok(e):
+                raise
+            log_fallback("json", e)
+            hint = ("\n\nSADECE geçerli JSON döndür. Beklenen alanlar: "
+                    + json.dumps(schema.get("schema", schema), ensure_ascii=False)[:1500])
+            msgs = [dict(m) for m in messages]
+            if msgs:
+                msgs[-1]["content"] = (msgs[-1].get("content") or "") + hint
+            return OA.complete(msgs, strong=self._strong(model), temperature=temperature,
+                               max_output_tokens=max_output_tokens, json_mode=True, kind=kind)
+
+
+def log_fallback(what: str, e: Exception):
+    import logging
+    logging.getLogger(__name__).info("gemini -> chatgpt yedegi (%s): %s", what, str(getattr(e, "detail", "") or e)[:160])
