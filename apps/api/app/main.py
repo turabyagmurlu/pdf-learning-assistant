@@ -526,6 +526,24 @@ async def backup_status(user=Depends(current_user)):
     return {"last_backup": t.isoformat() if t else None}
 
 
+_CLIENT_LOG: list = []
+
+
+@app.post("/client-log")
+async def client_log(body: dict, user=Depends(current_user)):
+    """Istemci hata kaydi (ornegin iPad'de PDF acilamadi): son 50 kayit bellekte tutulur."""
+    import time as _t
+    _CLIENT_LOG.append({"at": _t.strftime("%Y-%m-%d %H:%M:%S"), "user": str(user.get("id")),
+                        **{k: str(v)[:600] for k, v in (body or {}).items()}})
+    del _CLIENT_LOG[:-50]
+    return {"ok": True}
+
+
+@app.get("/client-log")
+async def client_log_list(user=Depends(current_user)):
+    return _CLIENT_LOG if user.get("is_owner") else []
+
+
 @app.get("/usage")
 async def usage_status(user=Depends(current_user)):
     """Yapay zeka kullanim gostergesi. Herkes: kendi kullanimi (me) ve yenilenme saati.

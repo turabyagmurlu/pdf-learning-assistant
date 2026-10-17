@@ -10,10 +10,22 @@ import {
   type InkPoint, type InkStroke, type Span, type Pt, packStroke, strokePath, rectsFromStroke, strokeBoxRect, pathLength,
 } from "@/lib/ink";
 import { StickyNote, MessageSquare, PenLine, Underline } from "lucide-react";
+import { API } from "@/lib/api";
 
 // Worker paketten sunulur (TK-6): scripts/copy-worker.mjs pdfjs-dist worker'ini public/'e kopyalar
 // (package.json postinstall). Service worker (public/sw.js) onbellege alir; ikinci acilista ag gerekmez.
 pdfjs.GlobalWorkerOptions.workerSrc = "/pdf.worker.min.mjs";
+/** Hata kaydini sunucuya gonder (teshis icin; sessiz). */
+function reportClient(body: Record<string, string>) {
+  try {
+    const tok = typeof localStorage !== "undefined" ? localStorage.getItem("token") : null;
+    void fetch(`${API}/client-log`, {
+      method: "POST", headers: { "Content-Type": "application/json", ...(tok ? { Authorization: "Bearer " + tok } : {}) },
+      body: JSON.stringify({ ...body, ua: typeof navigator !== "undefined" ? navigator.userAgent : "",
+                             build: "pdfdiag-2" }),
+    }).catch(() => {});
+  } catch { /* yok say */ }
+}
 // Eski iPadOS/Safari (< 17.4) icin: pdf.js Promise.withResolvers kullanir
 if (typeof (Promise as any).withResolvers !== "function") {
   (Promise as any).withResolvers = function () {
@@ -130,14 +142,27 @@ export default function PdfReader(props: Props) {
   const [src, setSrc] = useState<string | { data: Uint8Array }>(fileUrl);
   const [loadErr, setLoadErr] = useState("");
   const triedData = useRef(false);
-  useEffect(() => { setSrc(fileUrl); setLoadErr(""); triedData.current = false; }, [fileUrl]);
+  useEffect(() => {
+    setSrc(fileUrl); setLoadErr(""); triedData.current = false;
+    if (fileUrl) reportClient({ where: "pdf-open" });      // gecici teshis: yeni surum cihaza ulasti mi
+  }, [fileUrl]);
   const onLoadError = useCallback((e: any) => {
-    const msg = String(e?.message || e || "").slice(0, 160);
+    const msg = String(e?.name || "") + ": " + String(e?.message || e || "").slice(0, 200);
+    reportClient({ where: "pdf-load", msg, stage: triedData.current ? "data" : "url",
+                   url: String(fileUrl).slice(0, 90) });
     if (!triedData.current && typeof fileUrl === "string" && fileUrl) {
       triedData.current = true;
-      fetch(fileUrl).then((r) => { if (!r.ok) throw new Error("dosya " + r.status); return r.arrayBuffer(); })
+      setLoadErr(msg + " · ikinci deneme…");
+      const ac = new AbortController();
+      const t = setTimeout(() => ac.abort(), 25000);
+      fetch(fileUrl, { signal: ac.signal })
+        .then((r) => { if (!r.ok) throw new Error("dosya " + r.status); return r.arrayBuffer(); })
         .then((b) => setSrc({ data: new Uint8Array(b) }))
-        .catch((e2) => setLoadErr(msg + " · " + String(e2?.message || e2).slice(0, 80)));
+        .catch((e2) => {
+          const m2 = msg + " · " + String(e2?.message || e2).slice(0, 80);
+          setLoadErr(m2); reportClient({ where: "pdf-fetch", msg: m2 });
+        })
+        .finally(() => clearTimeout(t));
       return;
     }
     setLoadErr(msg);
