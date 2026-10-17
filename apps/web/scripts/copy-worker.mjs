@@ -41,7 +41,11 @@ if (!build) {
 }
 
 const candidates = ["pdf.worker.min.mjs", "pdf.worker.mjs", "pdf.worker.min.js", "pdf.worker.js"];
-const src = candidates.map((n) => join(build, n)).find((p) => existsSync(p));
+// Once "legacy" yapi: eski iPadOS/Safari (< 17.4) icin gerekli yeni JS ozelliklerini kendi icinde tasir.
+// Ayni paket surumu oldugundan ana kutuphaneyle uyumludur; yoksa normal yapiya dusulur.
+const legacy = join(dirname(build), "legacy", "build");
+const src = [...candidates.map((n) => join(legacy, n)), ...candidates.map((n) => join(build, n))]
+  .find((p) => existsSync(p));
 if (!src) {
   console.warn(`[copy-worker] ${build} içinde worker dosyası yok: ${readdirSync(build).join(", ")}`);
   process.exit(0);
