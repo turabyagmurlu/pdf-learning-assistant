@@ -196,8 +196,16 @@ async def lifespan(app: FastAPI):
             await ensure_auth_schema(conn)
     except Exception as e:  # noqa - ilk auth isteginde yeniden denenir
         print("auth migrasyonu basarisiz:", repr(e))
-    # Model havuzu: bu anahtarda olmayan modelleri bastan ele (bos istek harcamasin)
+    # Guvenlik (Supabase uyarisi rls_disabled_in_public): public semadaki tum tablolarda RLS acik olsun.
+    # Uygulama veritabanina dogrudan, tablo sahibi olarak baglanir -> RLS onu etkilemez; yalniz Supabase'in
+    # disariya acik REST/anon erisimi kapanir. Sonradan (ilk istekte) olusan tablolar icin bir kez daha calisir.
     import asyncio as _asyncio
+    await _enable_rls()
+    async def _rls_later():
+        await _asyncio.sleep(120)
+        await _enable_rls()
+    _asyncio.create_task(_rls_later())
+    # Model havuzu: bu anahtarda olmayan modelleri bastan ele (bos istek harcamasin)
     try:
         from app.ai.gemini_provider import refresh_pool
         await _asyncio.to_thread(refresh_pool)
@@ -230,6 +238,27 @@ async def lifespan(app: FastAPI):
     except Exception:  # noqa
         pass
     await close_pool()
+
+
+async def _enable_rls():
+    try:
+        from app.db.session import get_pool
+        pool = await get_pool()
+        async with pool.acquire() as conn:
+            rows = await conn.fetch(
+                "SELECT c.relname FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace "
+                "WHERE n.nspname = 'public' AND c.relkind IN ('r','p') AND NOT c.relrowsecurity "
+                "AND pg_get_userbyid(c.relowner) = current_user")
+            for r in rows:
+                name = r["relname"].replace('"', '""')
+                try:
+                    await conn.execute(f'ALTER TABLE public."{name}" ENABLE ROW LEVEL SECURITY')
+                except Exception as e:  # noqa
+                    print("RLS acilamadi:", name, repr(e)[:120])
+            if rows:
+                print("RLS acildi:", ", ".join(r["relname"] for r in rows))
+    except Exception as e:  # noqa
+        print("RLS kontrolu basarisiz:", repr(e)[:160])
 
 
 async def _migrate_document_collections(conn):
