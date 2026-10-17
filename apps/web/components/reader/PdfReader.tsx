@@ -14,6 +14,14 @@ import { StickyNote, MessageSquare, PenLine, Underline } from "lucide-react";
 // Worker paketten sunulur (TK-6): scripts/copy-worker.mjs pdfjs-dist worker'ini public/'e kopyalar
 // (package.json postinstall). Service worker (public/sw.js) onbellege alir; ikinci acilista ag gerekmez.
 pdfjs.GlobalWorkerOptions.workerSrc = "/pdf.worker.min.mjs";
+// Eski iPadOS/Safari (< 17.4) icin: pdf.js Promise.withResolvers kullanir
+if (typeof (Promise as any).withResolvers !== "function") {
+  (Promise as any).withResolvers = function () {
+    let resolve: any, reject: any;
+    const promise = new Promise((a, b) => { resolve = a; reject = b; });
+    return { promise, resolve, reject };
+  };
+}
 
 type NewHighlight = {
   page: number; rects: Rect[]; text: string; color: string;
@@ -118,6 +126,22 @@ export default function PdfReader(props: Props) {
   // kalem / fare ile cizen araclar (parmak kaydirir: avuc ici reddi)
   const drawTool = selTool || tool === "ink";
   const [numPages, setNumPages] = useState(0);
+  // PDF kaynagi: once adres; acilamazsa dosya bir kez tamamen indirilip bellekten acilir (iPad Safari yedegi)
+  const [src, setSrc] = useState<string | { data: Uint8Array }>(fileUrl);
+  const [loadErr, setLoadErr] = useState("");
+  const triedData = useRef(false);
+  useEffect(() => { setSrc(fileUrl); setLoadErr(""); triedData.current = false; }, [fileUrl]);
+  const onLoadError = useCallback((e: any) => {
+    const msg = String(e?.message || e || "").slice(0, 160);
+    if (!triedData.current && typeof fileUrl === "string" && fileUrl) {
+      triedData.current = true;
+      fetch(fileUrl).then((r) => { if (!r.ok) throw new Error("dosya " + r.status); return r.arrayBuffer(); })
+        .then((b) => setSrc({ data: new Uint8Array(b) }))
+        .catch((e2) => setLoadErr(msg + " · " + String(e2?.message || e2).slice(0, 80)));
+      return;
+    }
+    setLoadErr(msg);
+  }, [fileUrl]);
   const scrollRef = useRef<HTMLDivElement>(null);
   const bubbleDownAt = useRef(0);
   const [sel, setSel] = useState<Sel | null>(null);
@@ -654,8 +678,9 @@ export default function PdfReader(props: Props) {
          style={{ cursor: tool === "note" || drawTool ? "crosshair" : tool === "eraser" ? "cell" : "auto" }}>
       {/* H-4: Document "w-max min-w-full" — sayfa kaptan genisleyince kap da genisler, sol kenar kaydirilabilir */}
       <Document
-        file={fileUrl}
+        file={src}
         onLoadSuccess={onLoad}
+        onLoadError={onLoadError}
         loading={<Centered>Sayfa hazırlanıyor…</Centered>}
         error={
           <Centered>
@@ -663,6 +688,7 @@ export default function PdfReader(props: Props) {
               {offline ? "İnternet bağlantın yok. Bağlanınca sayfayı yenile."
                        : "PDF açılamadı. Birkaç saniye sonra tekrar dene."}
             </span>
+            {loadErr && <span className="mt-2 block max-w-xs break-words text-center text-[11px] opacity-60">Ayrıntı: {loadErr}</span>}
             <button type="button" onClick={() => window.location.reload()}
                     className="mt-3 min-h-[44px] rounded-lg border px-4 text-sm" style={{ color: "var(--paper-surround-ink, var(--r-ink))" }}>
               Tekrar dene
