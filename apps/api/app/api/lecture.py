@@ -69,13 +69,35 @@ async def _ensure_schema(conn):
     try:
         await conn.execute("ALTER TABLE collections ADD COLUMN IF NOT EXISTS lecture_variants jsonb")
         await conn.execute("ALTER TABLE documents ADD COLUMN IF NOT EXISTS learn_goals jsonb")
+        await conn.execute("ALTER TABLE documents ADD COLUMN IF NOT EXISTS lecture_variants jsonb")
         _SCHEMA_OK = True
     except Exception:  # noqa - bir sonraki istekte yeniden denenir
         pass
 
 
-async def _col(conn, cid: str, uid) -> dict:
+DOC_MISSING = "Kaynak bulunamadı; silinmiş olabilir."
+DOC_NOT_READY = "Bu kaynak henüz hazırlanıyor; işlenince sesli özetini dinleyebilirsin."
+
+
+async def _col(conn, cid: str, uid, doc: bool = False) -> dict:
     await _ensure_schema(conn)
+    if doc:
+        # Tek kaynak: ayni akis, kaynak satirindan (varyantlar documents.lecture_variants'ta)
+        try:
+            row = await conn.fetchrow(
+                "SELECT id, title, NULL::text AS lecture, NULL::timestamptz AS lecture_at, lecture_variants "
+                "FROM documents WHERE id=$1 AND user_id=$2 AND deleted_at IS NULL", cid, uid)
+        except Exception:  # noqa
+            row = await conn.fetchrow(
+                "SELECT id, title, NULL::text AS lecture, NULL::timestamptz AS lecture_at, NULL::jsonb AS lecture_variants "
+                "FROM documents WHERE id=$1 AND user_id=$2", cid, uid)
+        if not row:
+            raise NotFound(DOC_MISSING)
+        out = dict(row)
+        out["title"] = out.get("title") or "Kaynak"
+        v = _j(out.get("lecture_variants"))
+        out["lecture_variants"] = v if isinstance(v, dict) else {}
+        return out
     try:
         col = await conn.fetchrow(
             "SELECT id, title, lecture, lecture_at, lecture_variants FROM collections WHERE id=$1 AND user_id=$2",
@@ -91,14 +113,23 @@ async def _col(conn, cid: str, uid) -> dict:
     return out
 
 
-async def _ready_count(conn, cid: str, uid) -> int:
+async def _ready_count(conn, cid: str, uid, doc: bool = False) -> int:
+    if doc:
+        return await conn.fetchval("SELECT count(*) FROM documents WHERE id=$1 AND user_id=$2 AND status='ready'", cid, uid)
     return await conn.fetchval(
         "SELECT count(*) FROM documents d JOIN document_collections l ON l.document_id = d.id "
         "WHERE d.user_id=$1 AND l.collection_id=$2 AND status='ready'", uid, cid)
 
 
-async def _source_rows(conn, cid: str, uid) -> list:
-    """Hazir kaynaklar (eklenme sirasi) + varsa L2 ders notu. Eski semada (learn_goals/deleted_at yok) dar sorguya duser."""
+async def _source_rows(conn, cid: str, uid, doc: bool = False) -> list:
+    """Hazir kaynaklar (eklenme sirasi) + varsa L2 ders notu. Eski semada (learn_goals/deleted_at yok) dar sorguya duser.
+    doc=True: yalniz o kaynak."""
+    if doc:
+        return await conn.fetch(
+            """SELECT d.id, d.title, d.text_md5, d.short_summary, d.detailed_summary, d.learn_goals, d.outline,
+                      d.key_concepts, e.payload AS note
+               FROM documents d LEFT JOIN doc_extracts e ON e.document_id = d.id AND e.kind='study_note'
+               WHERE d.user_id=$1 AND d.id=$2 AND d.status='ready' AND d.deleted_at IS NULL""", uid, cid)
     try:
         return await conn.fetch(
             """SELECT d.id, d.title, d.text_md5, d.short_summary, d.detailed_summary, d.learn_goals, d.outline,
@@ -115,12 +146,12 @@ async def _source_rows(conn, cid: str, uid) -> list:
                WHERE d.user_id=$1 AND l.collection_id=$2 AND d.status='ready' ORDER BY d.id""", uid, cid)
 
 
-async def _sources(conn, cid: str, uid) -> tuple[list[dict], str]:
+async def _sources(conn, cid: str, uid, doc: bool = False) -> tuple[list[dict], str]:
     """Kaynak basina malzeme (L0, L1, hedefler, bolum basliklari, kavramlar, L2 bolumleri, bas-orta-son parcalar).
     Donus: (kaynaklar, kaynak_ozeti_hash) — hash, onbellekteki metnin bayatladigini anlamak icin."""
-    docs = await _source_rows(conn, cid, uid)
+    docs = await _source_rows(conn, cid, uid, doc)
     if not docs:
-        raise AppError(NO_READY)
+        raise AppError(DOC_NOT_READY if doc else NO_READY)
     ids = [str(d["id"]) for d in docs]
     per_doc = max(6, min(24, 400 // max(1, len(ids))))     # SQL tarafinda bas-orta-son on ornekleme
     rows = await conn.fetch(
@@ -172,17 +203,17 @@ def _rows_hash(docs) -> str:
     return hashlib.sha256("\x00".join(sorted(sig)).encode("utf-8")).hexdigest()[:16]
 
 
-async def _current_hash(conn, cid: str, uid) -> str | None:
+async def _current_hash(conn, cid: str, uid, doc: bool = False) -> str | None:
     """Onbellekteki metnin bayatligini anlamak icin kaynak imzasi (kota 0, tek hafif sorgu)."""
     try:
-        docs = await _source_rows(conn, cid, uid)
+        docs = await _source_rows(conn, cid, uid, doc)
         return _rows_hash(docs) if docs else None
     except Exception:  # noqa
         return None
 
 
-async def _context(conn, cid: str, uid) -> tuple[str, list[dict], str]:
-    sources, h = await _sources(conn, cid, uid)
+async def _context(conn, cid: str, uid, doc: bool = False) -> tuple[str, list[dict], str]:
+    sources, h = await _sources(conn, cid, uid, doc)
     context, _alloc = build_lecture_context(sources)
     if len(context) < 200:
         raise AppError(TOO_SHORT)
@@ -219,10 +250,15 @@ def _cached(col: dict, dialog: bool, length: str, length_given: bool) -> dict | 
     return None
 
 
-async def _store(conn, cid: str, dialog: bool, length: str, script: str, h: str, cost: int):
+async def _store(conn, cid: str, dialog: bool, length: str, script: str, h: str, cost: int, doc: bool = False):
     from datetime import datetime, timezone
     at = datetime.now(timezone.utc).isoformat()
     entry = {"script": script, "at": at, "hash": h, "cost": cost, "words": _words(script)}
+    if doc:
+        await conn.execute(
+            "UPDATE documents SET lecture_variants = COALESCE(lecture_variants, '{}'::jsonb) || $2::jsonb WHERE id=$1",
+            cid, {_vkey(dialog, length): entry})
+        return
     try:
         await conn.execute(
             "UPDATE collections SET lecture=$1, lecture_at=now(), "
@@ -259,16 +295,16 @@ def _params(body: LectureIn | None, format: str | None, length: str | None, refr
 
 
 @router.get("/collections/{cid}/lecture/options")
-async def lecture_opts(cid: str, conn=Depends(db), user=Depends(current_user)):
+async def lecture_opts(cid: str, conn=Depends(db), user=Depends(current_user), _doc: bool = False):
     """Sure secenekleri ve ⚡ maliyeti; onbellekte hazir olan surumler icin maliyet 0 (format bazinda)."""
-    col = await _col(conn, cid, user["id"])
+    col = await _col(conn, cid, user["id"], _doc)
     out = []
     for o in lecture_options():
         cached = {f: bool((col["lecture_variants"].get(_vkey(f == "dialog", o["id"])) or {}).get("script"))
                   for f in ("solo", "dialog")}
         out.append({**o, "cached": cached})
     return {"lengths": out, "default": "standart", "version": LECTURE_PROMPT_VERSION,
-            "documents": await _ready_count(conn, cid, user["id"])}
+            "documents": await _ready_count(conn, cid, user["id"], _doc)}
 
 
 @router.post("/collections/{cid}/lecture")
@@ -316,7 +352,7 @@ class _ChapterScanner:
 
 @router.post("/collections/{cid}/lecture/stream")
 async def lecture_stream(cid: str, body: LectureIn | None = None, refresh: bool = False, format: str | None = None,
-                         length: str | None = None, user=Depends(current_user)):
+                         length: str | None = None, user=Depends(current_user), _doc: bool = False):
     """Metni akisla gonderir. Olaylar:
     meta {cached, format, length, minutes, target_words, cost, version, sources[], (onbellekte: chapters)}
     plan {chapters:[baslik]}           (yalniz derin; plan adimi bitince)
@@ -336,17 +372,17 @@ async def lecture_stream(cid: str, body: LectureIn | None = None, refresh: bool 
         usage.set_user(str(uid), is_owner)
         async with pool.acquire() as conn:
             try:
-                col = await _col(conn, cid, uid)
+                col = await _col(conn, cid, uid, _doc)
                 c = None if refresh else _cached(col, dialog, length, given)
                 if c:
                     txt = c["script"]
-                    payload = _cached_payload(c, dialog, length, await _current_hash(conn, cid, uid))
+                    payload = _cached_payload(c, dialog, length, await _current_hash(conn, cid, uid, _doc))
                     yield _sse("meta", {k: v for k, v in payload.items() if k != "script"})
                     for i in range(0, len(txt), 400):
                         yield _sse("token", {"text": txt[i:i + 400]})
                     yield _sse("done", payload)
                     return
-                context, sources, h = await _context(conn, cid, uid)
+                context, sources, h = await _context(conn, cid, uid, _doc)
             except AppError as e:
                 yield _sse("error", {"code": e.code, "message": e.user_message}); return
             llm = get_llm()
@@ -409,7 +445,7 @@ async def lecture_stream(cid: str, body: LectureIn | None = None, refresh: bool 
             if len(script) < 100:
                 yield _sse("error", {"code": "AI_UNAVAILABLE", "message": FAILED}); return
             try:
-                await _store(conn, cid, dialog, length, script, h, calls)
+                await _store(conn, cid, dialog, length, script, h, calls, _doc)
             except Exception:  # noqa
                 pass
             yield _sse("done", {**_meta_common(dialog, length), "script": script, "cached": False, "cost": calls,
@@ -443,16 +479,33 @@ class LectureTtsIn(BaseModel):
 
 
 @router.post("/collections/{cid}/lecture/tts")
-async def lecture_tts(cid: str, body: LectureTtsIn, conn=Depends(db), user=Depends(current_user)):
+async def lecture_tts(cid: str, body: LectureTtsIn, conn=Depends(db), user=Depends(current_user), _doc: bool = False):
     """Parcali seslendirme isi. Yanit: durum (ready_chunks, durations, texts, total, chapters, chapter_chunks...).
 
     `## Bölüm` satirlari seslendirilmez; her bolum yeni parcada baslar (`chapter_chunks: [{title, chunk_index}]`).
     Parcalar hazir oldukca GET /tts/jobs/{id}/chunks/{n} ile alinir; tamami onbellekteyse aninda hazir (ucretsiz).
     """
-    await _col(conn, cid, user["id"])
+    await _col(conn, cid, user["id"], _doc)
     txt = (body.text or "").strip()
     if len(txt) < 2:
         raise AppError("Seslendirilecek metin boş.")
     dialog = _fmt(body.format) if body.format else None
     return await tts_jobs.create_job(str(user["id"]), bool(user.get("is_owner")), txt,
                                      body.voice, body.voice2, dialog=dialog, head=body.head)
+
+
+# ---- Tek kaynagin sesli ozeti (okuyucu / defter kaynak karti): ayni akis, kaynak kapsaminda ----
+@router.get("/documents/{did}/lecture/options")
+async def doc_lecture_opts(did: str, conn=Depends(db), user=Depends(current_user)):
+    return await lecture_opts(did, conn=conn, user=user, _doc=True)
+
+
+@router.post("/documents/{did}/lecture/stream")
+async def doc_lecture_stream(did: str, body: LectureIn | None = None, refresh: bool = False, format: str | None = None,
+                             length: str | None = None, user=Depends(current_user)):
+    return await lecture_stream(did, body=body, refresh=refresh, format=format, length=length, user=user, _doc=True)
+
+
+@router.post("/documents/{did}/lecture/tts")
+async def doc_lecture_tts(did: str, body: LectureTtsIn, conn=Depends(db), user=Depends(current_user)):
+    return await lecture_tts(did, body, conn=conn, user=user, _doc=True)

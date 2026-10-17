@@ -22,7 +22,7 @@ import { ChatPanel } from "@/components/chat/ChatPanel";
 import Modal from "@/components/Modal";
 import { toast as notify } from "@/components/Toast";
 import { useRouter } from "next/navigation";
-import { X, Sparkles, BookOpen, Pin, PinOff, PenLine } from "lucide-react";
+import { X, Sparkles, BookOpen, Pin, PinOff, PenLine, Headphones } from "lucide-react";
 
 /** El yazisi: bu kadar sure yeni darbe gelmezse darbeler tek not olarak kaydedilir */
 const INK_IDLE_MS = 1200;
@@ -43,18 +43,21 @@ const TextReader = dynamic(() => import("@/components/reader/TextReader"), { ssr
 // Özet sekmesi (Ajan T6): StudyNote'un belge üst kısmı (kısa özet + hedefler/süre/zorluk + "Bölüm bölüm özet çıkar ⚡");
 // "Biriktirdiklerin" editörü burada yok (variant="summary").
 const StudyNote = dynamic<StudyNoteProps>(() => import("@/components/studynote/StudyNote"), { ssr: false });
+// Tek kaynağın sesli özeti (podcast): defterdeki "Dinle" ile aynı oynatıcı, kaynak kapsamında
+const LectureTab = dynamic(() => import("@/app/(app)/collections/[id]/LectureTab"), { ssr: false });
 
 // Ajan T6 (iPad sadeleştirme): 3 yan panel — Notlarım (kendi vurgu/notların) · Özet · Sor.
 // "Çalışma notu" ve "Bağlantılar" kalktı; eski kayıtlı tercihler aşağıdaki gibi eşlenir.
-type RightTab = "notes" | "summary" | "ai";
+type RightTab = "notes" | "summary" | "ai" | "listen";
 const RIGHT_TABS: { key: RightTab; label: string; hint: string; Icon: typeof Sparkles }[] = [
   { key: "notes", label: "Notlarım", hint: "Bu PDF'te vurguladıkların ve notların, sayfa sırasıyla", Icon: PenLine },
   { key: "summary", label: "Özet", hint: "Bu kaynağın kısa özeti; istersen bölüm bölüm özet", Icon: BookOpen },
   { key: "ai", label: "Sor", hint: "Bu kaynağa sor; “Bu sayfayı anlat” hazır sorusu burada", Icon: Sparkles },
+  { key: "listen", label: "Dinle", hint: "Bu kaynağın sesli özeti (podcast)", Icon: Headphones },
 ];
 const RIGHT_TAB_KEY = "reader.rightTab";
 const LEGACY_RIGHT: Record<string, RightTab> = { note: "notes", draft: "notes", notes: "notes", links: "summary", explain: "ai" };
-const PANEL_LABEL = "Notlarım, Özet ve Sor";
+const PANEL_LABEL = "Notlarım, Özet, Sor ve Dinle";
 /** Not balonu ("✎ Not") bu kadar görünür kalır, sonra solar */
 const POP_MS = 3000;
 /**
@@ -505,7 +508,10 @@ export default function DocumentPage({ params }: { params: { id: string } }) {
     if (!numPages || restored) return;
     try {
       // URL'de ?page=N varsa (sozluk / baglanti / kaynak tiklamasi) o sayfaya git
-      const want = parseInt(new URLSearchParams(window.location.search).get("page") || "", 10);
+      const qs = new URLSearchParams(window.location.search);
+      const pnl = (qs.get("panel") || "").toLowerCase();
+      if (pnl) setTimeout(() => window.dispatchEvent(new CustomEvent("typdf:open-panel", { detail: { panel: pnl } })), 0);
+      const want = parseInt(qs.get("page") || "", 10);
       if (!isNaN(want) && want >= 1 && want <= numPages) {
         setPage(want);
       } else {
@@ -552,7 +558,8 @@ export default function DocumentPage({ params }: { params: { id: string } }) {
   chooseTabRef.current = chooseTab;
   useEffect(() => {
     const PANEL: Record<string, RightTab> = { sor: "ai", ai: "ai", note: "notes", not: "notes", notes: "notes", notlar: "notes",
-                                              ozet: "summary", summary: "summary", links: "summary", baglantilar: "summary" };
+                                              ozet: "summary", summary: "summary", links: "summary", baglantilar: "summary",
+                                              dinle: "listen", listen: "listen", sesli: "listen", podcast: "listen" };
     const onOpen = (e: Event) => {
       const d = (e as CustomEvent).detail || {};
       const key = PANEL[String(d.panel || "")] || "notes";
@@ -833,6 +840,13 @@ export default function DocumentPage({ params }: { params: { id: string } }) {
                  onOpen={openFromList}
                  onSaveNote={(a, text) => { void patch(a.id, { note_content: text }); }}
                  onDelete={(a) => { void deleteWithUndo(a); }} />
+      ) : rightTab === "listen" ? (
+        <div className="h-full min-h-0 overflow-y-auto p-3">
+          <LectureTab id={`doc-${id}`} title={doc.title || "Kaynak"} readyN={1} scope="kaynak"
+                      apiBase={`/documents/${id}`} href={`/documents/${id}?panel=dinle`}
+                      confirm={async (o: { title: string; description?: string }) =>
+                        typeof window !== "undefined" && window.confirm([o.title, o.description].filter(Boolean).join("\n\n"))} />
+        </div>
       ) : rightTab === "summary" ? (
         <div className="h-full min-h-0 overflow-y-auto">
           <StudyNote scope={{ kind: "document", id }} compact variant="summary"

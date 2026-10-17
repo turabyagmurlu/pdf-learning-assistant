@@ -18,7 +18,7 @@
  * Yeni sürümde VERSION'ı artır: eski kabuk/statik önbellekleri activate'te silinir.
  * "typdf-audio" (defterdeki sesli özet önbelleği) ASLA silinmez.
  */
-const VERSION = "v6";
+const VERSION = "v7";
 const STATIC = `typdf-static-${VERSION}`;
 const PAGES = `typdf-pages-${VERSION}`;
 const CDN = "typdf-cdn-v1";            // sürümlü üçüncü taraf dosyalar (pdf.js worker)

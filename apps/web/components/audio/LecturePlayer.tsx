@@ -53,6 +53,8 @@ export function Bolt({ n, onAccent = false }: { n: number; onAccent?: boolean })
 type Row = { title: string; start: number; dur: number; ready: boolean };
 
 type Props = {
+  /** Dar panel (okuyucu yan paneli): iki sutun yok */
+  narrow?: boolean;
   live: boolean;
   stale?: boolean;                 // çalan oturum eski sesle: ▶ yeni sesle başlatır
   title: string;
@@ -207,9 +209,9 @@ export default function LecturePlayer(p: Props) {
   const ctl = "flex min-h-[44px] items-center justify-center gap-1.5 rounded-xl border px-3 text-sm text-text-secondary hover:border-accent-purple/50 hover:bg-surface-muted disabled:opacity-40";
 
   return (
-    <div className="md:grid md:grid-cols-[minmax(0,5fr)_minmax(0,6fr)] md:items-start md:gap-6">
+    <div className={p.narrow ? "" : "md:grid md:grid-cols-[minmax(0,5fr)_minmax(0,6fr)] md:items-start md:gap-6"}>
       {/* SOL: oynatıcı kartı */}
-      <div className="md:sticky md:top-20">
+      <div className={p.narrow ? "" : "md:sticky md:top-20"}>
         <section aria-label="Sesli özet oynatıcı" className="rounded-3xl border bg-surface p-4 shadow-soft sm:p-5">
           <div className="flex items-center gap-3">
             <CoverBadge id={p.cover.id} color={p.cover.color} icon={p.cover.icon} size={56} />
@@ -325,7 +327,7 @@ export default function LecturePlayer(p: Props) {
       </div>
 
       {/* SAĞ: bölümler + metin */}
-      <div className="mt-4 space-y-4 md:mt-0">
+      <div className={`mt-4 space-y-4 ${p.narrow ? "" : "md:mt-0"}`}>
         {rows.length > 0 && (
           <section aria-label="Bölümler" className="rounded-3xl border bg-surface p-2 sm:p-3">
             <h3 className="px-2 pb-1 pt-1 text-sm font-semibold">Bölümler <span className="font-normal text-text-secondary">· {rows.length}</span></h3>

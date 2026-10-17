@@ -116,8 +116,13 @@ function Choice<T extends string>({ label, value, options, onChange, disabled }:
   );
 }
 
-export default function LectureTab({ id, title, readyN, confirm, coverColor, coverIcon }: {
+export default function LectureTab({ id, title, readyN, confirm, coverColor, coverIcon, apiBase, href, scope = "defter" }: {
   id: string; title: string; readyN: number;
+  /** Uc kok yolu (varsayilan /collections/{id}); tek kaynak icin /documents/{docId} */
+  apiBase?: string;
+  /** Mini oynaticidan donulecek sayfa */
+  href?: string;
+  scope?: "defter" | "kaynak";
   confirm: (o: ConfirmOptions) => Promise<boolean>;
   coverColor?: string | null; coverIcon?: string | null;
 }) {
@@ -283,7 +288,7 @@ export default function LectureTab({ id, title, readyN, confirm, coverColor, cov
     let full = "", finalText = "";
     let newHints: ChapterHint[] = [];
     try {
-      const res = await fetch(`${API}/collections/${id}/lecture/stream?format=${fmt}${refresh ? "&refresh=1" : ""}`, {
+      const res = await fetch(`${API}${apiBase || `/collections/${id}`}/lecture/stream?format=${fmt}${refresh ? "&refresh=1" : ""}`, {
         method: "POST", signal: ac.signal,
         headers: { "Content-Type": "application/json", Authorization: "Bearer " + getToken() },
         body: JSON.stringify({ length: len, format: fmt }),
@@ -359,7 +364,7 @@ export default function LectureTab({ id, title, readyN, confirm, coverColor, cov
   /** Ön parça: ilk kısmın sesi metin yazılırken sunucuda hazırlanır; tam iş onu aynen kullanır. */
   async function startHeadJob(head: string, myRun: number) {
     try {
-      let st: JobState = await api(`/collections/${id}/lecture/tts`, {
+      let st: JobState = await api(`${apiBase || `/collections/${id}`}/lecture/tts`, {
         method: "POST", body: JSON.stringify({ text: head, voice: voice || undefined, voice2: voice2 || undefined, format: fmt, head }),
       }, 1);
       // İlk parça hazır olunca, metin hâlâ yazılıyorsa hemen çalmaya başla (bekleme yok)
@@ -381,7 +386,7 @@ export default function LectureTab({ id, title, readyN, confirm, coverColor, cov
       lsDel(POS_KEY); setResumeAt(0);                 // yeni anlatım baştan
       const dialog = fmt === "dialog";
       const { key, signal } = audio.play({
-        collectionId: id, title, artwork: "/icon", storageKey: POS_KEY, autoPlay: true,
+        collectionId: id, title, artwork: "/icon", storageKey: POS_KEY, autoPlay: true, href,
         subtitle: `Sesli özet · ${dialog ? "Sohbet" : "Tek anlatıcı"}`,
         chunks: [{ text, url, duration }, { text: "" }], total: 2,
       });
@@ -433,7 +438,7 @@ export default function LectureTab({ id, title, readyN, confirm, coverColor, cov
     const early = earlyRef.current && audio.isCurrent(earlyRef.current.key) ? earlyRef.current : null;
     earlyRef.current = null;
     const { key, signal } = early ? { key: early.key, signal: early.signal } : audio.play({
-      collectionId: id, title, artwork: "/icon", storageKey: POS_KEY, autoPlay: true,
+      collectionId: id, title, artwork: "/icon", storageKey: POS_KEY, autoPlay: true, href,
       subtitle: `Sesli özet · ${dialog ? "Sohbet" : "Tek anlatıcı"}`,
     });
     setLecErr(""); setQuotaOut(false); setUseBrowserVoice(false);
@@ -441,7 +446,7 @@ export default function LectureTab({ id, title, readyN, confirm, coverColor, cov
       const cached = early ? null : await fromCache(cacheKey, text, key);
       if (!audio.isCurrent(key)) return;
       if (cached) { audio.update(key, { chunks: cached, total: cached.length, busy: false }); return; }
-      const job: JobState = await api(`/collections/${id}/lecture/tts`, {
+      const job: JobState = await api(`${apiBase || `/collections/${id}`}/lecture/tts`, {
         method: "POST",
         body: JSON.stringify({ text: text.slice(0, TEXT_CAP), voice: voice || undefined, voice2: voice2 || undefined,
                                format: dialog ? "dialog" : "solo", head: head || undefined }),
@@ -634,8 +639,8 @@ export default function LectureTab({ id, title, readyN, confirm, coverColor, cov
           <div className="flex items-center gap-3">
             <CoverBadge id={id} color={coverColor} icon={coverIcon} size={56} />
             <div className="min-w-0">
-              <h2 className="font-heading text-xl leading-tight">Bu defterin sesli özetini hazırla</h2>
-              <p className="mt-0.5 text-sm text-text-secondary">{readyN} kaynağı dinlenebilir bir anlatıma çeviririm; yolda dinlersin.</p>
+              <h2 className="font-heading text-xl leading-tight">{scope === "kaynak" ? "Bu kaynağın sesli özetini hazırla" : "Bu defterin sesli özetini hazırla"}</h2>
+              <p className="mt-0.5 text-sm text-text-secondary">{scope === "kaynak" ? "Bu kaynağı dinlenebilir bir anlatıma çeviririm; yolda dinlersin." : `${readyN} kaynağı dinlenebilir bir anlatıma çeviririm; yolda dinlersin.`}</p>
             </div>
           </div>
           <div className="mt-5 space-y-4">
@@ -737,6 +742,7 @@ export default function LectureTab({ id, title, readyN, confirm, coverColor, cov
   return (
     <div className="max-w-5xl">
       <LecturePlayer
+        narrow={scope === "kaynak"}
         live={live} stale={stale}
         title={title}
         subtitle={`Sesli özet · ${lectureIsDialog ? "Sohbet" : "Tek anlatıcı"}`}

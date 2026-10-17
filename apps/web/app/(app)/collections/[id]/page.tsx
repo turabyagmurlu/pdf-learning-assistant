@@ -380,6 +380,13 @@ function CollectionPage({ id }: { id: string }) {
             <p className="mt-1 line-clamp-2 text-xs text-text-secondary">{d.short_summary}</p>
           ) : null}
           {w && <p className="mt-1.5 text-xs text-text-secondary">{w.label}{w.eta ? ` · ${w.eta}` : ""}</p>}
+          {d.status === "ready" && (
+            <button type="button" onClick={() => router.push(docHref(d.id, { from: id }) + (docHref(d.id, { from: id }).includes("?") ? "&" : "?") + "panel=dinle")}
+                    aria-label={`“${d.title}” kaynağının sesli özetini dinle`} title="Bu kaynağın sesli özeti (podcast)"
+                    className="pointer-events-auto relative z-10 mt-2 flex min-h-[36px] w-fit items-center gap-1.5 rounded-full border px-3 text-xs font-medium text-accent-purple hover:bg-accent-purple/10">
+              <Headphones size={13} aria-hidden /> Dinle
+            </button>
+          )}
           {d.status === "failed" && (
             <div className="mt-1.5 text-xs text-red-800 dark:text-red-300">
               <p className="line-clamp-2">{d.error_message || "Bu kaynak hazırlanamadı."}</p>

@@ -10,13 +10,14 @@
  * Tum hedefler en az 44 px; her dugmenin gorunen metni ya da aria-label'i var.
  */
 import { useCallback, useEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import type { PenTool, PaperChoice, PaperTone } from "@/lib/reader";
 import { PAPER_CHOICES, PAPER_LABEL, loadPaper, savePaper, resolvePaper } from "@/lib/reader";
 import { requestVoicePicker } from "@/lib/audio";
 import {
   ChevronLeft, ChevronRight, Minus, Plus, Highlighter,
   FileText, AlignLeft, Maximize2, Minimize2, PanelRight,
-  MoreHorizontal, Check, ListTree, Volume2, Keyboard,
+  MoreHorizontal, Check, ListTree, Volume2, Keyboard, Headphones,
 } from "lucide-react";
 
 export type Theme = "light" | "sepia" | "dark";
@@ -220,10 +221,29 @@ export function ReaderMoreMenu(p: ToolbarProps & { variant: "wide" | "narrow" })
   const wrap = useRef<HTMLDivElement>(null);
   const btnRef = useRef<HTMLButtonElement>(null);
   const listRef = useRef<HTMLDivElement>(null);
+  const menuRef = useRef<HTMLDivElement>(null);
+  // Menü body'ye taşınır (portal): üst çubuğun kırpması / PDF katmanı altında kalması olmasın (iPad'de açılmıyordu)
+  const [pos, setPos] = useState<{ top: number; right: number; maxH: number } | null>(null);
+  useEffect(() => {
+    if (!open) return;
+    const place = () => {
+      const r = btnRef.current?.getBoundingClientRect();
+      if (!r) return;
+      const vh = window.visualViewport?.height || window.innerHeight;
+      setPos({ top: r.bottom + 6, right: Math.max(8, window.innerWidth - r.right), maxH: Math.max(200, vh - r.bottom - 16) });
+    };
+    place();
+    window.addEventListener("resize", place);
+    window.visualViewport?.addEventListener("resize", place);
+    return () => { window.removeEventListener("resize", place); window.visualViewport?.removeEventListener("resize", place); };
+  }, [open]);
 
   useEffect(() => {
     if (!open) return;
-    const onDown = (e: PointerEvent) => { if (!wrap.current?.contains(e.target as Node)) setOpen(false); };
+    const onDown = (e: PointerEvent) => {
+      const t = e.target as Node;
+      if (!wrap.current?.contains(t) && !menuRef.current?.contains(t)) setOpen(false);
+    };
     const onKey = (e: KeyboardEvent) => {
       if (e.key === "Escape") { e.stopPropagation(); setOpen(false); btnRef.current?.focus(); }
     };
@@ -247,6 +267,8 @@ export function ReaderMoreMenu(p: ToolbarProps & { variant: "wide" | "narrow" })
                  checked: p.focus, onSelect: () => p.setFocus(!p.focus) });
   }
   items.push(
+    { key: "listen", label: "Sesli özet (podcast) dinle", icon: <Headphones size={17} />,
+      onSelect: () => window.dispatchEvent(new CustomEvent("typdf:open-panel", { detail: { panel: "dinle" } })) },
     { key: "voice", label: "Ses seçimi", icon: <Volume2 size={17} />, onSelect: openVoicePicker },
     { key: "keys", label: "Kısayollar", icon: <Keyboard size={17} />, onSelect: openShortcuts },
   );
@@ -271,8 +293,9 @@ export function ReaderMoreMenu(p: ToolbarProps & { variant: "wide" | "narrow" })
               className="flex h-11 w-11 items-center justify-center rounded-lg hover:bg-surface-hover">
         <MoreHorizontal size={19} />
       </button>
-      {open && (
-        <div className="absolute right-0 top-full z-50 mt-1 max-h-[calc(100dvh-80px)] w-72 overflow-y-auto rounded-xl border bg-surface p-1 text-text-primary shadow-xl">
+      {open && pos && typeof document !== "undefined" && createPortal(
+        <div ref={menuRef} style={{ position: "fixed", top: pos.top, right: pos.right, maxHeight: pos.maxH, zIndex: 95 }}
+             className="w-72 overflow-y-auto overscroll-contain rounded-xl border bg-surface p-1 text-text-primary shadow-xl">
         <div ref={listRef} role="menu" aria-label="Okuyucu araçları" onKeyDown={onListKey}>
           {items.map((it) => (
             <button key={it.key} type="button" disabled={it.disabled}
@@ -310,7 +333,8 @@ export function ReaderMoreMenu(p: ToolbarProps & { variant: "wide" | "narrow" })
             <PaperPicker value={p.paper || "auto"} tone={p.paperTone || "white"} onChange={p.setPaper} />
           </div>
         )}
-        </div>
+        </div>,
+        document.body,
       )}
     </div>
   );
