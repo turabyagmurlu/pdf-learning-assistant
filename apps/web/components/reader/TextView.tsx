@@ -18,17 +18,15 @@
  * - Sinir: tablo, formul ve iki sutunlu duzen bozulabilir; her sayfada "Aslını gör" var.
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { pdfjs } from "react-pdf";
+import { pdfjs, ensureWorker } from "@/lib/pdfjs";
 import { MessageSquare, PenLine, Copy, Minus, Plus, FileText } from "lucide-react";
 import { api } from "@/lib/api";
 import type { MapMark, PaperTone } from "@/lib/reader";
 import HighlightMap from "@/components/reader/HighlightMap";
 import { DropCap, Folio } from "@/components/art";
 
-// Worker: PdfReader ile ayni adres (biri once yuklenmisse dokunma).
-if (!pdfjs.GlobalWorkerOptions.workerSrc) {
-  pdfjs.GlobalWorkerOptions.workerSrc = `https://unpkg.com/pdfjs-dist@${pdfjs.version}/build/pdf.worker.min.mjs`;
-}
+// Worker adresi lib/pdfjs.ts'te kosulsuz ayarlanir.
+ensureWorker();
 
 export type TextViewTheme = "light" | "sepia" | "dark";
 export interface TextViewProps {
@@ -169,6 +167,7 @@ const CACHE = new Map<string, Entry>();
 function entryFor(url: string): Entry {
   const hit = CACHE.get(url);
   if (hit) { CACHE.delete(url); CACHE.set(url, hit); return hit; }     // LRU: sona al
+  ensureWorker();
   const doc = pdfjs.getDocument({ url, withCredentials: false }).promise;
   const e: Entry = { doc, pages: new Map(), numPages: 0 };
   doc.then((d: any) => { e.numPages = d.numPages; }).catch(() => {});

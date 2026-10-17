@@ -31,8 +31,8 @@ export function usePageText(fileUrl: string, docId: string, page: number, enable
       let text = "";
       try {
         if (!docRef.current || docRef.current.url !== fileUrl) {
-          const { pdfjs } = await import("react-pdf");
-          if (!pdfjs.GlobalWorkerOptions.workerSrc) pdfjs.GlobalWorkerOptions.workerSrc = "/pdf.worker.min.mjs";
+          const { pdfjs, ensureWorker } = await import("@/lib/pdfjs");
+          ensureWorker();
           docRef.current = { url: fileUrl, doc: pdfjs.getDocument({ url: fileUrl, withCredentials: false }).promise };
         }
         const d = await docRef.current.doc;

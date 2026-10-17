@@ -1,6 +1,7 @@
 "use client";
 import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import { Document, Page, pdfjs } from "react-pdf";
+import { Document, Page } from "react-pdf";
+import { pdfjs, ensureWorker } from "@/lib/pdfjs";
 import "react-pdf/dist/Page/TextLayer.css";
 import "react-pdf/dist/Page/AnnotationLayer.css";
 import "@/styles/reader.css";
@@ -14,7 +15,8 @@ import { API } from "@/lib/api";
 
 // Worker paketten sunulur (TK-6): scripts/copy-worker.mjs pdfjs-dist worker'ini public/'e kopyalar
 // (package.json postinstall). Service worker (public/sw.js) onbellege alir; ikinci acilista ag gerekmez.
-pdfjs.GlobalWorkerOptions.workerSrc = "/pdf.worker.min.mjs";
+ensureWorker();
+void pdfjs;
 /** Hata kaydini sunucuya gonder (teshis icin; sessiz). */
 function reportClient(body: Record<string, string>) {
   try {
@@ -25,14 +27,6 @@ function reportClient(body: Record<string, string>) {
                              build: "pdfdiag-2" }),
     }).catch(() => {});
   } catch { /* yok say */ }
-}
-// Eski iPadOS/Safari (< 17.4) icin: pdf.js Promise.withResolvers kullanir
-if (typeof (Promise as any).withResolvers !== "function") {
-  (Promise as any).withResolvers = function () {
-    let resolve: any, reject: any;
-    const promise = new Promise((a, b) => { resolve = a; reject = b; });
-    return { promise, resolve, reject };
-  };
 }
 
 type NewHighlight = {
@@ -144,7 +138,7 @@ export default function PdfReader(props: Props) {
   const triedData = useRef(false);
   useEffect(() => {
     setSrc(fileUrl); setLoadErr(""); triedData.current = false;
-    if (fileUrl) reportClient({ where: "pdf-open" });      // gecici teshis: yeni surum cihaza ulasti mi
+    ensureWorker();
   }, [fileUrl]);
   const onLoadError = useCallback((e: any) => {
     const msg = String(e?.name || "") + ": " + String(e?.message || e || "").slice(0, 200);
@@ -152,6 +146,7 @@ export default function PdfReader(props: Props) {
                    url: String(fileUrl).slice(0, 90) });
     if (!triedData.current && typeof fileUrl === "string" && fileUrl) {
       triedData.current = true;
+      ensureWorker();
       setLoadErr(msg + " · ikinci deneme…");
       const ac = new AbortController();
       const t = setTimeout(() => ac.abort(), 25000);
