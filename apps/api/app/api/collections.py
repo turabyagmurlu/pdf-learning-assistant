@@ -128,22 +128,70 @@ async def list_collections(conn=Depends(db), user=Depends(current_user)):
     return out
 
 
+_SHELF_OK = False
+
+
+async def _ensure_shelf(conn):
+    """Idempotent: defter ici raf (document_collections.shelf). Kaynak her defterde ayri rafta durabilir."""
+    global _SHELF_OK
+    if _SHELF_OK:
+        return
+    try:
+        await conn.execute("ALTER TABLE document_collections ADD COLUMN IF NOT EXISTS shelf text")
+        _SHELF_OK = True
+    except Exception:  # noqa
+        pass
+
+
+class ShelvesIn(BaseModel):
+    assign: dict[str, str | None] | None = None     # {document_id: raf adi | None (raftan cikar)}
+    rename: dict[str, str] | None = None            # {"from": eski, "to": yeni}
+    remove: str | None = None                        # rafi kaldir (kaynaklar rafsiz kalir)
+
+
+@router.post("/collections/{cid}/shelves")
+async def set_shelves(cid: str, body: ShelvesIn, conn=Depends(db), user=Depends(current_user)):
+    """Defter ici raflar (klasorler): kaynaklari rafa yerlestir, rafi yeniden adlandir ya da kaldir. Ucretsiz."""
+    ok = await conn.fetchval("SELECT 1 FROM collections WHERE id=$1 AND user_id=$2 AND deleted_at IS NULL", cid, user["id"])
+    if not ok:
+        raise NotFound(COL_MISSING)
+    await _ensure_shelf(conn)
+    n = 0
+    if body.assign:
+        for did, name in body.assign.items():
+            nm = (name or "").strip()[:80] or None
+            r = await conn.execute("UPDATE document_collections SET shelf=$3 WHERE collection_id=$1 AND document_id=$2::uuid",
+                                   cid, did, nm)
+            n += int((r or "0").split()[-1] or 0)
+    if body.rename and (body.rename.get("from") or "").strip():
+        to = (body.rename.get("to") or "").strip()[:80] or None
+        r = await conn.execute("UPDATE document_collections SET shelf=$3 WHERE collection_id=$1 AND shelf=$2",
+                               cid, body.rename["from"].strip(), to)
+        n += int((r or "0").split()[-1] or 0)
+    if body.remove and body.remove.strip():
+        r = await conn.execute("UPDATE document_collections SET shelf=NULL WHERE collection_id=$1 AND shelf=$2",
+                               cid, body.remove.strip())
+        n += int((r or "0").split()[-1] or 0)
+    return {"ok": True, "changed": n}
+
+
 @router.get("/collections/{cid}")
 async def get_collection(cid: str, conn=Depends(db), user=Depends(current_user)):
     """Defter: bilgiler, kaynaklar, notlar ve studyo durumu."""
+    await _ensure_shelf(conn)
     col = await conn.fetchrow("SELECT * FROM collections WHERE id=$1 AND user_id=$2 AND deleted_at IS NULL", cid, user["id"])
     if not col:
         raise NotFound(COL_MISSING)
     docs = await conn.fetch(
         """SELECT d.id, d.title, d.status, d.page_count, d.short_summary, d.category, d.tags,
-                  d.is_favorite, d.difficulty_level, d.created_at, l.added_at,
+                  d.is_favorite, d.difficulty_level, d.created_at, l.added_at, {shelf_col},
                   d.processing_stage, d.progress_done, d.progress_total, d.error_message,
                   d.source_type, d.source_url, d.media,
                   COALESCE((SELECT array_agg(l2.collection_id::text ORDER BY l2.added_at, l2.collection_id)
                             FROM document_collections l2 WHERE l2.document_id = d.id), ARRAY[]::text[]) AS collection_ids
            FROM documents d JOIN document_collections l ON l.document_id = d.id
            WHERE d.user_id=$1 AND l.collection_id=$2
-           ORDER BY l.added_at DESC, d.created_at DESC""",
+           ORDER BY l.added_at DESC, d.created_at DESC""".replace("{shelf_col}", "l.shelf" if _SHELF_OK else "NULL::text AS shelf"),
         user["id"], cid)
     docs = [dict(d) for d in docs]
     for d in docs:

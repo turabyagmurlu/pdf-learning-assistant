@@ -13,7 +13,7 @@ import Link from "next/link";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import {
   BookOpen, Loader2, Pencil, Check, Plus, X, Trash2, Download, Palette,
-  RefreshCw, Tags, Link2, MessageSquare, StickyNote, Library, Headphones,
+  RefreshCw, Tags, Link2, MessageSquare, StickyNote, Library, Headphones, FolderInput,
 } from "lucide-react";
 import { api, errorMessage } from "@/lib/api";
 import { docHref } from "@/lib/links";
@@ -36,6 +36,7 @@ import { GlossaryTab } from "./ExtractTabs";
 import LectureTab from "./LectureTab";
 import { useUploader } from "./useUploader";
 import { waitInfo } from "./stage";
+import { autoShelves, shelfSections, ShelfHeader, ShelfPicker, ShelfRename, AutoShelfButton, useClosedShelves } from "./Shelves";
 
 const Loading = () => <Skeleton className="h-64 w-full rounded-2xl" />;
 // Çalışma notu (Ajan N): <StudyNote scope={{kind:"collection", id}} />
@@ -46,6 +47,7 @@ type Doc = {
   short_summary?: string | null; category?: string | null; source_type?: string | null;
   processing_stage?: string | null; progress_done?: number | null; progress_total?: number | null;
   error_message?: string | null;
+  shelf?: string | null;
 };
 type Prog = { page: number; numPages: number; pct: number };
 
@@ -146,6 +148,31 @@ function CollectionPage({ id }: { id: string }) {
   const readyN = docs.filter((d) => d.status === "ready").length;
   const processingN = docs.filter(isProc).length;
   const readyKey = docs.filter((d) => d.status === "ready").map((d) => d.id).sort().join(",");
+
+  /* ---------- raflar (defter ici klasorler) ---------- */
+  const [shelfFor, setShelfFor] = useState<Doc | null>(null);
+  const [shelfRenaming, setShelfRenaming] = useState<string | null>(null);
+  const [shelfBusy, setShelfBusy] = useState(false);
+  const shelfOpen = useClosedShelves(id);
+  const shelfNames = Array.from(new Set(docs.map((d) => (d.shelf || "").trim()).filter(Boolean)));
+  const hasShelves = shelfNames.length > 0;
+  const autoPlan = (() => { const m = autoShelves(docs.filter((d) => !d.shelf)); return m; })();
+  const autoCount = Object.keys(autoPlan).length;
+  async function saveShelves(body: Record<string, unknown>, okMsg?: string, undo?: Record<string, unknown>) {
+    setShelfBusy(true);
+    try {
+      await api(`/collections/${id}/shelves`, { method: "POST", body: JSON.stringify(body) }, 1);
+      await load().catch(() => {});
+      if (okMsg) toast(okMsg, undo ? { action: { label: "Geri al", run: () => { void saveShelves(undo); } } } : undefined);
+    } catch (e: any) { toast.error(e?.message || "Raf kaydedilemedi; tekrar dene."); }
+    finally { setShelfBusy(false); }
+  }
+  function runAutoShelves() {
+    if (!autoCount) { toast.info("Ortak başlıklı kaynak bulunamadı; kartlardaki “Raf” ile elle yerleştirebilirsin."); return; }
+    const undo: Record<string, null> = {}; Object.keys(autoPlan).forEach((k) => { undo[k] = null; });
+    const n = new Set(Object.values(autoPlan)).size;
+    void saveShelves({ assign: autoPlan }, `${autoCount} kaynak ${n} rafa yerleşti`, { assign: undo });
+  }
 
   // Islenen kaynak varken durum yoklamasi (sekme gizliyken/cevrimdisiyken durur, aralik uzar)
   usePoll(async () => {
@@ -387,6 +414,11 @@ function CollectionPage({ id }: { id: string }) {
               <Headphones size={13} aria-hidden /> Dinle
             </button>
           )}
+          <button type="button" onClick={() => setShelfFor(d)}
+                  aria-label={`“${d.title}” kaynağını rafa yerleştir${d.shelf ? ` (şu an: ${d.shelf})` : ""}`} title={d.shelf ? `Raf: ${d.shelf}` : "Rafa yerleştir"}
+                  className="pointer-events-auto absolute bottom-2 right-2 z-10 flex h-9 w-9 items-center justify-center rounded-lg text-text-secondary hover:bg-surface-muted hover:text-accent-purple">
+            <FolderInput size={15} aria-hidden />
+          </button>
           {d.status === "failed" && (
             <div className="mt-1.5 text-xs text-red-800 dark:text-red-300">
               <p className="line-clamp-2">{d.error_message || "Bu kaynak hazırlanamadı."}</p>
@@ -396,7 +428,7 @@ function CollectionPage({ id }: { id: string }) {
               </button>
             </div>
           )}
-          <div className="mt-auto pt-2.5">
+          <div className="mt-auto pr-9 pt-2.5">
             <div className="h-1 w-full overflow-hidden rounded-full bg-surface-muted">
               <div className={cx("h-full rounded-full transition-all", w ? "bg-accent-purple/60" : tp ? topicColor(tp.i).bar : "bg-accent-purple")}
                    style={{ width: (w ? (w.pct ?? 15) : (p?.pct || 0)) + "%" }} />
@@ -548,11 +580,14 @@ function CollectionPage({ id }: { id: string }) {
             ) : (
               <div className="rounded-2xl border bg-surface-muted/40 p-4">
                 <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
-                  <p className="text-sm text-text-secondary">{docs.length} kaynak{uploader.busy ? ` · yükleniyor ${uploader.busy.done}/${uploader.busy.total}` : ""}</p>
+                  <p className="text-sm text-text-secondary">{docs.length} kaynak{hasShelves ? ` · ${shelfNames.length} raf` : ""}{uploader.busy ? ` · yükleniyor ${uploader.busy.done}/${uploader.busy.total}` : ""}</p>
+                  <div className="flex flex-wrap items-center gap-2">
+                  {docs.length >= 2 && (autoCount > 0 || !hasShelves) && <AutoShelfButton count={autoCount} onRun={runAutoShelves} busy={shelfBusy} />}
                   <button onClick={() => openAdd("dosya")}
                           className="inline-flex min-h-[40px] items-center gap-1.5 rounded-lg border bg-surface px-3 text-sm font-medium text-text-primary hover:border-accent-purple/50">
                     <Plus size={15} className="text-accent-purple" /> Kaynak ekle
                   </button>
+                  </div>
                 </div>
                 {uploader.error && (
                   <div className="mb-3 flex flex-wrap items-center gap-2 rounded-xl border border-danger/30 bg-danger/5 px-3 py-2 text-sm">
@@ -571,6 +606,27 @@ function CollectionPage({ id }: { id: string }) {
                   </div>
                 )}
                 {(() => {
+                  if ((!grouped || !topics?.groups?.length) && hasShelves) {
+                    const secs = shelfSections(docs);
+                    return (
+                      <div className="space-y-4">
+                        {secs.map((g) => {
+                          const open = shelfOpen.isOpen(g.name);
+                          return (
+                            <section key={g.name || "__none__"} aria-label={g.name || "Rafsız kaynaklar"}
+                                     className="rounded-xl border bg-surface/60 p-2 sm:p-3">
+                              <ShelfHeader cid={id} name={g.name} count={g.list.length} open={open}
+                                           onToggle={() => shelfOpen.toggle(g.name)}
+                                           onRename={() => setShelfRenaming(g.name)}
+                                           onRemove={() => g.name && void saveShelves({ remove: g.name }, `“${g.name}” rafı kaldırıldı; kaynaklar rafsız`,
+                                             { assign: Object.fromEntries(g.list.map((x) => [x.id, g.name])) })} />
+                              {open && grid(g.list)}
+                            </section>
+                          );
+                        })}
+                      </div>
+                    );
+                  }
                   if (!grouped || !topics?.groups?.length) {
                     return <>{grouped && topicsBusy && <p className="mb-2 text-xs text-text-secondary">Kaynaklar konulara ayrılıyor…</p>}{grid(docs)}</>;
                   }
@@ -645,6 +701,10 @@ function CollectionPage({ id }: { id: string }) {
                        onAdded={async () => { await load().catch(() => {}); }}
                        onUpload={uploader.upload} upBusy={uploader.busy} />
       {confirmDialog}
+      <ShelfPicker doc={shelfFor} shelves={shelfNames} onClose={() => setShelfFor(null)}
+                   onPick={(sh) => { const d = shelfFor; setShelfFor(null); if (d) void saveShelves({ assign: { [d.id]: sh } }, sh ? `“${sh}” rafına yerleşti` : "Raftan çıkarıldı"); }} />
+      <ShelfRename from={shelfRenaming} onClose={() => setShelfRenaming(null)}
+                   onSave={(to) => { const f = shelfRenaming; setShelfRenaming(null); if (f && to !== f) void saveShelves({ rename: { from: f, to } }, "Raf adı değişti", { rename: { from: to, to: f } }); }} />
     </div>
   );
 }
