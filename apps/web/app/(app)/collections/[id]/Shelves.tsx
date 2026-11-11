@@ -168,3 +168,89 @@ export function AutoShelfButton({ count, onRun, busy }: { count: number; onRun: 
     </button>
   );
 }
+
+/**
+ * "Raflar" yönetim penceresi (her zaman görünen düğmeden açılır):
+ * - Otomatik ayır · yeni raf aç
+ * - Raf listesi: yeniden adlandır / kaldır
+ * - Her kaynak için raf seçimi (açılır liste)
+ */
+export function ShelfManager({ open, onClose, docs, onAssign, onRename, onRemove, onAuto, autoCount, busy }: {
+  open: boolean; onClose: () => void;
+  docs: ShelfDoc[];
+  onAssign: (docId: string, shelf: string | null) => void;
+  onRename: (from: string) => void;
+  onRemove: (name: string) => void;
+  onAuto: () => void; autoCount: number; busy?: boolean;
+}) {
+  const [extra, setExtra] = useState<string[]>([]);       // henüz kaynağı olmayan yeni raflar (bu pencere açıkken)
+  const [name, setName] = useState("");
+  const used = useMemo(() => Array.from(new Set(docs.map((d) => (d.shelf || "").trim()).filter(Boolean))), [docs]);
+  const all = useMemo(() => Array.from(new Set([...used, ...extra])).sort(natCmp), [used, extra]);
+  const count = (s: string) => docs.filter((d) => (d.shelf || "").trim() === s).length;
+  const sortedDocs = useMemo(() => [...docs].sort((a, b) => natCmp(a.title, b.title)), [docs]);
+  if (!open) return null;
+  return (
+    <Modal open={open} onClose={onClose} title="Raflar" size="lg">
+      <p className="mb-3 text-sm text-text-secondary">
+        Kaynaklarını raflara (klasörlere) ayır. Raflar yalnız bu defterde geçerli; kaynaklar silinmez.
+      </p>
+      <div className="mb-4 flex flex-wrap items-center gap-2">
+        <button type="button" onClick={onAuto} disabled={busy || autoCount === 0}
+                className="inline-flex min-h-[44px] items-center gap-1.5 rounded-lg bg-accent-purple px-3 text-sm font-medium text-white disabled:opacity-40">
+          <Wand2 size={15} aria-hidden /> Otomatik ayır{autoCount ? ` (${autoCount} kaynak)` : ""}
+        </button>
+        <form className="flex min-w-0 flex-1 gap-2" onSubmit={(e) => {
+          e.preventDefault(); const n = name.trim(); if (!n) return;
+          setExtra((x) => (x.includes(n) ? x : [...x, n])); setName("");
+        }}>
+          <input value={name} onChange={(e) => setName(e.target.value)} placeholder="Yeni raf adı" aria-label="Yeni raf adı" maxLength={80}
+                 className="min-h-[44px] min-w-0 flex-1 rounded-lg border bg-surface px-3 text-sm" />
+          <button type="submit" disabled={!name.trim()}
+                  className="inline-flex min-h-[44px] items-center gap-1.5 rounded-lg border px-3 text-sm font-medium disabled:opacity-40">
+            <FolderPlus size={15} aria-hidden /> Raf aç
+          </button>
+        </form>
+      </div>
+
+      {all.length > 0 && (
+        <div className="mb-4">
+          <h3 className="mb-1.5 text-xs font-semibold uppercase tracking-wide text-text-secondary">Raflar</h3>
+          <ul className="space-y-1">
+            {all.map((s) => (
+              <li key={s} className="flex items-center gap-1 rounded-lg border px-2">
+                <span className="min-w-0 flex-1 truncate py-2 text-sm font-medium">{s}</span>
+                <span className="shrink-0 text-xs text-text-secondary">{count(s)} kaynak</span>
+                {count(s) > 0 ? (
+                  <>
+                    <button type="button" onClick={() => onRename(s)} aria-label={`“${s}” rafını yeniden adlandır`} title="Yeniden adlandır"
+                            className="flex h-10 w-10 items-center justify-center rounded-lg text-text-secondary hover:bg-surface-muted"><Pencil size={15} /></button>
+                    <button type="button" onClick={() => onRemove(s)} aria-label={`“${s}” rafını kaldır`} title="Rafı kaldır (kaynaklar silinmez)"
+                            className="flex h-10 w-10 items-center justify-center rounded-lg text-text-secondary hover:bg-surface-muted hover:text-danger"><Trash2 size={15} /></button>
+                  </>
+                ) : (
+                  <span className="px-2 text-xs text-text-secondary">boş · aşağıdan kaynak seç</span>
+                )}
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+
+      <h3 className="mb-1.5 text-xs font-semibold uppercase tracking-wide text-text-secondary">Kaynaklar</h3>
+      <ul className="max-h-[50vh] space-y-1 overflow-y-auto pr-1">
+        {sortedDocs.map((d) => (
+          <li key={d.id} className="flex items-center gap-2 rounded-lg px-1 py-1 hover:bg-surface-muted/60">
+            <span className="min-w-0 flex-1 truncate text-sm" title={d.title}>{d.title}</span>
+            <select value={(d.shelf || "").trim()} onChange={(e) => onAssign(d.id, e.target.value || null)}
+                    aria-label={`“${d.title}” için raf`} disabled={busy}
+                    className="min-h-[40px] w-40 shrink-0 rounded-lg border bg-surface px-2 text-sm sm:w-56">
+              <option value="">— Rafsız —</option>
+              {all.map((s) => <option key={s} value={s}>{s}</option>)}
+            </select>
+          </li>
+        ))}
+      </ul>
+    </Modal>
+  );
+}

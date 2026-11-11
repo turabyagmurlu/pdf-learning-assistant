@@ -36,7 +36,7 @@ import { GlossaryTab } from "./ExtractTabs";
 import LectureTab from "./LectureTab";
 import { useUploader } from "./useUploader";
 import { waitInfo } from "./stage";
-import { autoShelves, shelfSections, ShelfHeader, ShelfPicker, ShelfRename, AutoShelfButton, useClosedShelves } from "./Shelves";
+import { autoShelves, shelfSections, ShelfHeader, ShelfPicker, ShelfRename, ShelfManager, useClosedShelves } from "./Shelves";
 
 const Loading = () => <Skeleton className="h-64 w-full rounded-2xl" />;
 // Çalışma notu (Ajan N): <StudyNote scope={{kind:"collection", id}} />
@@ -153,6 +153,7 @@ function CollectionPage({ id }: { id: string }) {
   const [shelfFor, setShelfFor] = useState<Doc | null>(null);
   const [shelfRenaming, setShelfRenaming] = useState<string | null>(null);
   const [shelfBusy, setShelfBusy] = useState(false);
+  const [shelfMgr, setShelfMgr] = useState(false);
   const shelfOpen = useClosedShelves(id);
   const shelfNames = Array.from(new Set(docs.map((d) => (d.shelf || "").trim()).filter(Boolean)));
   const hasShelves = shelfNames.length > 0;
@@ -416,8 +417,8 @@ function CollectionPage({ id }: { id: string }) {
           )}
           <button type="button" onClick={() => setShelfFor(d)}
                   aria-label={`“${d.title}” kaynağını rafa yerleştir${d.shelf ? ` (şu an: ${d.shelf})` : ""}`} title={d.shelf ? `Raf: ${d.shelf}` : "Rafa yerleştir"}
-                  className="pointer-events-auto absolute bottom-2 right-2 z-10 flex h-9 w-9 items-center justify-center rounded-lg text-text-secondary hover:bg-surface-muted hover:text-accent-purple">
-            <FolderInput size={15} aria-hidden />
+                  className="pointer-events-auto relative z-10 mt-2 flex min-h-[36px] w-fit max-w-full items-center gap-1.5 rounded-full border px-3 text-xs text-text-secondary hover:border-accent-purple/50 hover:text-accent-purple">
+            <FolderInput size={13} aria-hidden /> <span className="truncate">{d.shelf ? d.shelf : "Rafa koy"}</span>
           </button>
           {d.status === "failed" && (
             <div className="mt-1.5 text-xs text-red-800 dark:text-red-300">
@@ -428,7 +429,7 @@ function CollectionPage({ id }: { id: string }) {
               </button>
             </div>
           )}
-          <div className="mt-auto pr-9 pt-2.5">
+          <div className="mt-auto pt-2.5">
             <div className="h-1 w-full overflow-hidden rounded-full bg-surface-muted">
               <div className={cx("h-full rounded-full transition-all", w ? "bg-accent-purple/60" : tp ? topicColor(tp.i).bar : "bg-accent-purple")}
                    style={{ width: (w ? (w.pct ?? 15) : (p?.pct || 0)) + "%" }} />
@@ -582,7 +583,12 @@ function CollectionPage({ id }: { id: string }) {
                 <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
                   <p className="text-sm text-text-secondary">{docs.length} kaynak{hasShelves ? ` · ${shelfNames.length} raf` : ""}{uploader.busy ? ` · yükleniyor ${uploader.busy.done}/${uploader.busy.total}` : ""}</p>
                   <div className="flex flex-wrap items-center gap-2">
-                  {docs.length >= 2 && (autoCount > 0 || !hasShelves) && <AutoShelfButton count={autoCount} onRun={runAutoShelves} busy={shelfBusy} />}
+                  {docs.length >= 1 && (
+                    <button type="button" onClick={() => setShelfMgr(true)}
+                            className="inline-flex min-h-[40px] items-center gap-1.5 rounded-lg border bg-surface px-3 text-sm font-medium text-text-primary hover:border-accent-purple/50">
+                      <FolderInput size={15} className="text-accent-purple" aria-hidden /> Raflar{hasShelves ? ` (${shelfNames.length})` : ""}
+                    </button>
+                  )}
                   <button onClick={() => openAdd("dosya")}
                           className="inline-flex min-h-[40px] items-center gap-1.5 rounded-lg border bg-surface px-3 text-sm font-medium text-text-primary hover:border-accent-purple/50">
                     <Plus size={15} className="text-accent-purple" /> Kaynak ekle
@@ -703,6 +709,12 @@ function CollectionPage({ id }: { id: string }) {
       {confirmDialog}
       <ShelfPicker doc={shelfFor} shelves={shelfNames} onClose={() => setShelfFor(null)}
                    onPick={(sh) => { const d = shelfFor; setShelfFor(null); if (d) void saveShelves({ assign: { [d.id]: sh } }, sh ? `“${sh}” rafına yerleşti` : "Raftan çıkarıldı"); }} />
+      <ShelfManager open={shelfMgr} onClose={() => setShelfMgr(false)} docs={docs} busy={shelfBusy}
+                    autoCount={autoCount} onAuto={runAutoShelves}
+                    onAssign={(docId, sh) => void saveShelves({ assign: { [docId]: sh } })}
+                    onRename={(f) => setShelfRenaming(f)}
+                    onRemove={(nm) => void saveShelves({ remove: nm }, `“${nm}” rafı kaldırıldı; kaynaklar rafsız`,
+                      { assign: Object.fromEntries(docs.filter((x) => (x.shelf || "").trim() === nm).map((x) => [x.id, nm])) })} />
       <ShelfRename from={shelfRenaming} onClose={() => setShelfRenaming(null)}
                    onSave={(to) => { const f = shelfRenaming; setShelfRenaming(null); if (f && to !== f) void saveShelves({ rename: { from: f, to } }, "Raf adı değişti", { rename: { from: to, to: f } }); }} />
     </div>
